@@ -121,23 +121,30 @@ func buildTimelinePageResponse(
 		return timelinePageResponse{}, errors.New("invalid limit")
 	}
 	hasMore := len(rows) > limit
-	visibleRows := rows
+	scannedRows := rows
 	if hasMore {
-		visibleRows = rows[:limit]
+		scannedRows = rows[:limit]
 	}
-	items := make([]timelineItem, 0, len(visibleRows))
-	for _, row := range visibleRows {
+	items := make([]timelineItem, 0, len(scannedRows))
+	for _, row := range scannedRows {
 		activityType := timelineActivityType(row.ActivityType)
-		if timelineActivityRank(row.ActivityType) == 0 || row.ActivityAt.IsZero() || row.SourceID == 0 {
+		if timelineActivityRank(row.ActivityType) == 0 || row.ActivityAt.IsZero() || row.SourceID == 0 || row.PostID == 0 || row.ActorID == 0 {
 			return timelinePageResponse{}, errors.New("invalid timeline activity")
 		}
 		post, ok := postsByID[row.PostID]
 		if !ok {
-			return timelinePageResponse{}, errors.New("timeline post could not be found")
+			// Eligibility can disappear between the candidate and detail queries.
+			continue
+		}
+		if post.ID != row.PostID {
+			return timelinePageResponse{}, errors.New("invalid timeline post identity")
 		}
 		actor, ok := actorsByID[row.ActorID]
 		if !ok {
-			return timelinePageResponse{}, errors.New("timeline activity actor could not be found")
+			continue
+		}
+		if actor.ID != row.ActorID {
+			return timelinePageResponse{}, errors.New("invalid timeline actor identity")
 		}
 		items = append(items, timelineItem{
 			ActivityType: activityType,
@@ -152,7 +159,9 @@ func buildTimelinePageResponse(
 	if !hasMore {
 		return response, nil
 	}
-	last := visibleRows[len(visibleRows)-1]
+	// Advance past every consumed candidate, even if the last one disappeared
+	// or the entire page is empty. Leave the lookahead for the next request.
+	last := scannedRows[len(scannedRows)-1]
 	nextCursor, err := encodeTimelineCursor(timelineCursor{
 		ActivityAt:   last.ActivityAt,
 		ActivityType: last.ActivityType,

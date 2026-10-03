@@ -346,8 +346,15 @@ export const useAuthStore = defineStore('auth', () => {
       }
 
       try {
+        // Persist before sending so a lost response or a suspended tab retries
+        // the same rotation, including after this store is recreated.
+        const requestID = latest.refreshRequestID ?? createTokenRevision();
+        if (!latest.refreshRequestID) {
+          writePersistedAuthSession({ ...latest, refreshRequestID: requestID });
+        }
         const response = await authClient.post<AuthResponse>('/auth/refresh', {
           refresh_token: refreshTokenAtStart,
+          request_id: requestID,
         });
 
         if (

@@ -53,6 +53,14 @@ var loadPostDetailCache = func(ctx context.Context, key string, loader func() (p
 	return loadJSONCacheWithContext(ctx, key, loader)
 }
 
+var validatePostDetailPublic = func(db *gorm.DB, id uint) error {
+	if db == nil {
+		return errors.New("database is not initialized")
+	}
+	var post models.Post
+	return publicPostScope(db.Model(&models.Post{}).Select("posts.id").Where("posts.id = ?", id), time.Now().UTC()).Take(&post).Error
+}
+
 func loadPostDetail(ctx context.Context, id string) (postResponse, error) {
 	db := global.APIDb
 	if db != nil {
@@ -81,6 +89,19 @@ func loadPostDetail(ctx context.Context, id string) (postResponse, error) {
 	if err != nil {
 		return postResponse{}, err
 	}
+	requestedID, parseErr := strconv.ParseUint(id, 10, 64)
+	if parseErr != nil || requestedID == 0 || requestedID != uint64(response.ID) || !isPublicPostResponseAt(response, time.Now().UTC()) {
+		_ = invalidatePostDetailCacheKey(key)
+		return postResponse{}, gorm.ErrRecordNotFound
+	}
+	// A cache hit or a late cache fill is not evidence of current visibility.
+	// Validate on the primary database after loading, before exposing any body.
+	if err := validatePostDetailPublic(db, response.ID); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			_ = invalidatePostDetailCacheKey(key)
+		}
+		return postResponse{}, err
+	}
 	ensurePostResponseMedia(&response)
 	if db != nil {
 		responses := []postResponse{response}
@@ -94,11 +115,7 @@ func loadPostDetail(ctx context.Context, id string) (postResponse, error) {
 	if err := hydratePostResponseReferencesFromDB(db, &response, time.Now().UTC()); err != nil {
 		return postResponse{}, err
 	}
-	if isPublicPostResponseAt(response, time.Now().UTC()) {
-		return response, nil
-	}
-	_ = invalidatePostDetailCacheKey(key)
-	return postResponse{}, gorm.ErrRecordNotFound
+	return response, nil
 }
 
 func loadPublicPost(db *gorm.DB, rawID string, now time.Time) (models.Post, error) {

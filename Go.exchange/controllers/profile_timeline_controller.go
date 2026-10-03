@@ -133,7 +133,7 @@ LIMIT ?
 
 	postsByID := make(map[uint]postResponse, len(postIDs))
 	if len(postIDs) > 0 {
-		postResponses, err := loadPostResponses(publicPostScope(
+		postResponses, err := loadTimelinePostResponses(publicPostScope(
 			db.Model(&models.Post{}).
 				Select(publicPostSelectColumns).
 				Where("posts.id IN ?", postIDs),

@@ -20,7 +20,7 @@ type TokenPair struct {
 type TokenService interface {
 	AccessTokenVerifier
 	IssuePair(ctx context.Context, userID uint) (TokenPair, error)
-	RotateRefresh(ctx context.Context, rawRefreshToken string) (TokenPair, error)
+	RotateRefresh(ctx context.Context, rawRefreshToken, requestID string) (TokenPair, error)
 }
 
 type Manager struct {
@@ -80,26 +80,47 @@ func (m *Manager) IssuePair(ctx context.Context, userID uint) (TokenPair, error)
 	}, nil
 }
 
-func (m *Manager) RotateRefresh(ctx context.Context, rawRefreshToken string) (TokenPair, error) {
+func (m *Manager) RotateRefresh(ctx context.Context, rawRefreshToken, requestID string) (TokenPair, error) {
 	parsed, err := parseRefreshToken(rawRefreshToken)
 	if err != nil {
 		return TokenPair{}, err
+	}
+	if requestID != "" {
+		id, err := uuid.Parse(requestID)
+		if err != nil || id.Version() != 4 || id.Variant() != uuid.RFC4122 || id.String() != requestID {
+			return TokenPair{}, ErrRefreshInvalid
+		}
 	}
 	newSecret, err := newRefreshSecret()
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("generate refresh token: %w", err)
 	}
 	now := m.now().UTC()
-	userID, effectiveTTL, err := m.store.Rotate(
+	expectedHash := hashRefreshSecret(parsed.secret)
+	recovery := RefreshRecovery{RequestID: requestID}
+	if requestID != "" {
+		recovery.SealedSecret, err = sealRefreshSecret(parsed.secret, parsed.sessionID, expectedHash, requestID, newSecret)
+		if err != nil {
+			return TokenPair{}, err
+		}
+	}
+	userID, effectiveTTL, sealedSecret, err := m.store.Rotate(
 		ctx,
 		parsed.sessionID,
-		hashRefreshSecret(parsed.secret),
+		expectedHash,
 		hashRefreshSecret(newSecret),
 		now,
 		m.config.RefreshIdleTTL,
+		recovery,
 	)
 	if err != nil {
 		return TokenPair{}, err
+	}
+	if requestID != "" {
+		newSecret, err = openRefreshSecret(parsed.secret, parsed.sessionID, expectedHash, requestID, sealedSecret)
+		if err != nil {
+			return TokenPair{}, err
+		}
 	}
 	accessToken, err := m.signAccessToken(userID, parsed.sessionID, now)
 	if err != nil {

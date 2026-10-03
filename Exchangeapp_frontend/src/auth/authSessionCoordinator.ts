@@ -14,6 +14,7 @@ export type PersistedAuthSession = {
   userId: number;
   accessToken: string;
   refreshToken: string;
+  refreshRequestID?: string;
 };
 
 export class AuthRefreshCoordinationUnavailableError extends Error {
@@ -50,6 +51,10 @@ const validateSession = (value: unknown): PersistedAuthSession | null => {
     || !isNonEmptyString(candidate.accessToken)
     || /^Bearer\s/i.test(candidate.accessToken.trim())
     || !isNonEmptyString(candidate.refreshToken)
+    || (candidate.refreshRequestID !== undefined && (
+      typeof candidate.refreshRequestID !== 'string'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(candidate.refreshRequestID)
+    ))
   ) {
     return null;
   }
@@ -70,6 +75,7 @@ const validateSession = (value: unknown): PersistedAuthSession | null => {
     userId: metadata.userId,
     accessToken: candidate.accessToken.trim(),
     refreshToken: candidate.refreshToken.trim(),
+    ...(candidate.refreshRequestID !== undefined ? { refreshRequestID: candidate.refreshRequestID as string } : {}),
   };
 };
 

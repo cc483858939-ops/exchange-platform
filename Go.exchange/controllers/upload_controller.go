@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"strings"
 	"time"
@@ -34,6 +35,8 @@ const (
 	postMediaUploadCleanupTimeout = 5 * time.Second
 	profileAvatarObjectPrefix     = "profile-avatars/"
 	maxProfileAvatarImageSize     = 2 << 20
+	// Allow MIME headers, boundaries, and small fields beyond the image budget.
+	uploadMultipartOverhead = 64 << 10
 )
 
 type postMediaUploadResponse struct {
@@ -112,6 +115,36 @@ var statProfileCoverObject = func(ctx context.Context, objectKey string) (stored
 	return storedObjectInfo{Size: info.Size, ContentType: info.ContentType}, true, nil
 }
 
+func uploadImageFile(ctx *gin.Context, maxImageBytes int64) (*multipart.FileHeader, bool) {
+	maxRequestBytes := maxImageBytes + uploadMultipartOverhead
+	if ctx.Request.ContentLength > maxRequestBytes {
+		ctx.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "upload request is too large"})
+		return nil, false
+	}
+	ctx.Request.Body = http.MaxBytesReader(ctx.Writer, ctx.Request.Body, maxRequestBytes)
+	form, err := ctx.MultipartForm()
+	if err == nil {
+		// Multipart parsing may stop at the closing boundary. Count trailing bytes
+		// too, including when Content-Length is unknown (chunked uploads).
+		_, err = io.Copy(io.Discard, ctx.Request.Body)
+	}
+	if err != nil {
+		var sizeError *http.MaxBytesError
+		if errors.As(err, &sizeError) {
+			ctx.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "upload request is too large"})
+		} else {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file is required"})
+		}
+		return nil, false
+	}
+	files := form.File["image"]
+	if len(files) == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file is required"})
+		return nil, false
+	}
+	return files[0], true
+}
+
 func UploadPostMedia(ctx *gin.Context) {
 	// Every user upload is registered before object storage side effects begin.
 	// A successful upload remains reusable until create-post consumes its lease.
@@ -120,9 +153,8 @@ func UploadPostMedia(ctx *gin.Context) {
 		return
 	}
 
-	fileHeader, err := ctx.FormFile("image")
-	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file is required"})
+	fileHeader, ok := uploadImageFile(ctx, maxPostMediaImageSize)
+	if !ok {
 		return
 	}
 	if fileHeader.Size > maxPostMediaImageSize {
@@ -275,9 +307,8 @@ func UploadProfileAvatar(ctx *gin.Context) {
 		return
 	}
 
-	fileHeader, err := ctx.FormFile("image")
-	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file is required"})
+	fileHeader, ok := uploadImageFile(ctx, maxProfileAvatarImageSize)
+	if !ok {
 		return
 	}
 	if fileHeader.Size <= 0 || fileHeader.Size > maxProfileAvatarImageSize {
@@ -333,9 +364,8 @@ func UploadProfileCover(ctx *gin.Context) {
 		return
 	}
 
-	fileHeader, err := ctx.FormFile("image")
-	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file is required"})
+	fileHeader, ok := uploadImageFile(ctx, profilecoverimage.MaxSourceBytes)
+	if !ok {
 		return
 	}
 	if fileHeader.Size <= 0 || fileHeader.Size > profilecoverimage.MaxSourceBytes {

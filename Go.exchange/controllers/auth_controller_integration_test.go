@@ -42,7 +42,7 @@ func (stubTokenService) IssuePair(_ context.Context, userID uint) (auth.TokenPai
 	}, nil
 }
 
-func (stubTokenService) RotateRefresh(_ context.Context, _ string) (auth.TokenPair, error) {
+func (stubTokenService) RotateRefresh(_ context.Context, _, _ string) (auth.TokenPair, error) {
 	return auth.TokenPair{}, auth.ErrRefreshInvalid
 }
 
@@ -54,7 +54,7 @@ func (service refreshTokenService) IssuePair(_ context.Context, userID uint) (au
 	return stubTokenService{}.IssuePair(context.Background(), userID)
 }
 
-func (service refreshTokenService) RotateRefresh(_ context.Context, _ string) (auth.TokenPair, error) {
+func (service refreshTokenService) RotateRefresh(_ context.Context, _, _ string) (auth.TokenPair, error) {
 	return auth.TokenPair{
 		UserID:           service.userID,
 		AccessToken:      "rotated-access-token",

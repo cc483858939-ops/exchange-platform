@@ -273,17 +273,27 @@ func TestHydratePostResponseAuthorsRejectsMissingAuthor(t *testing.T) {
 	}
 }
 
-func TestLoadPostDetailCacheHitReturnsCachedAuthorWithoutDatabaseOrHydration(t *testing.T) {
+func TestLoadPostDetailCacheHitPreservesCachedAuthorAfterVisibilityCheck(t *testing.T) {
 	originalCacheLoader := loadPostDetailCache
+	originalValidator := validatePostDetailPublic
 	originalAuthorLoader := loadPublicAuthorsByIDs
 	originalDB := global.APIDb
 	t.Cleanup(func() {
 		loadPostDetailCache = originalCacheLoader
+		validatePostDetailPublic = originalValidator
 		loadPublicAuthorsByIDs = originalAuthorLoader
 		global.APIDb = originalDB
 	})
 
 	global.APIDb = nil
+	var checks int
+	validatePostDetailPublic = func(_ *gorm.DB, id uint) error {
+		if id != 123 {
+			t.Fatalf("checked post=%d", id)
+		}
+		checks++
+		return nil
+	}
 	loadPublicAuthorsByIDs = func(context.Context, []uint) (map[uint]publicAuthorResponse, error) {
 		t.Fatal("cache hit must not hydrate post authors")
 		return nil, nil
@@ -318,6 +328,9 @@ func TestLoadPostDetailCacheHitReturnsCachedAuthorWithoutDatabaseOrHydration(t *
 	}
 	if returned.Author != cached.Author {
 		t.Fatalf("cached author changed: got=%+v want=%+v", returned.Author, cached.Author)
+	}
+	if checks != 1 {
+		t.Fatalf("visibility checks=%d", checks)
 	}
 }
 
@@ -426,8 +439,8 @@ func TestLoadPostDetailCacheMissLoadsAndCachesAuthorSummaryIntegration(t *testin
 			mediaQueries++
 		}
 	}
-	if postQueries != 1 || userQueries != 1 || mediaQueries != 1 {
-		t.Fatalf("expected one post query, one author preload query, and one media query, got posts=%d users=%d media=%d queries=%v", postQueries, userQueries, mediaQueries, queries)
+	if postQueries != 3 || userQueries != 1 || mediaQueries != 1 {
+		t.Fatalf("expected one post load plus two visibility checks, one author preload, and one media query, got posts=%d users=%d media=%d queries=%v", postQueries, userQueries, mediaQueries, queries)
 	}
 	if !selectedAuthorQuery {
 		t.Fatalf("author preload selected more than the public summary fields: %v", queries)

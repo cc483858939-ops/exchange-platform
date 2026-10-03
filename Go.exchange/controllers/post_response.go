@@ -309,6 +309,14 @@ func preloadPostAuthor(query *gorm.DB) *gorm.DB {
 }
 
 func loadPostResponses(query *gorm.DB) ([]postResponse, error) {
+	return loadPostResponsesWithAuthorPolicy(query, false)
+}
+
+func loadTimelinePostResponses(query *gorm.DB) ([]postResponse, error) {
+	return loadPostResponsesWithAuthorPolicy(query, true)
+}
+
+func loadPostResponsesWithAuthorPolicy(query *gorm.DB, skipMissingAuthors bool) ([]postResponse, error) {
 	if query == nil {
 		return nil, errors.New("database query is nil")
 	}
@@ -318,6 +326,12 @@ func loadPostResponses(query *gorm.DB) ([]postResponse, error) {
 	}
 	responses := make([]postResponse, 0, len(posts))
 	for _, post := range posts {
+		// Timeline eligibility was checked in the Post query, but the separate
+		// author preload may observe a subsequent deletion. Invalid identities
+		// and actual query failures still follow the strict response contract.
+		if skipMissingAuthors && post.AuthorID != 0 && post.Author.ID == 0 {
+			continue
+		}
 		response, err := postResponseFromModel(post)
 		if err != nil {
 			return nil, err

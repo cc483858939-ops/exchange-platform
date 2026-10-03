@@ -28,6 +28,7 @@ type loginRequest struct {
 
 type refreshRequest struct {
 	RefreshToken string `json:"refresh_token" binding:"required"`
+	RequestID    string `json:"request_id"`
 }
 
 type authUserResponse struct {
@@ -156,7 +157,7 @@ func (c *AuthController) Refresh(ctx *gin.Context) {
 		return
 	}
 
-	pair, err := c.tokens.RotateRefresh(ctx.Request.Context(), request.RefreshToken)
+	pair, err := c.tokens.RotateRefresh(ctx.Request.Context(), request.RefreshToken, request.RequestID)
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrRefreshExpired):
@@ -176,7 +177,11 @@ func (c *AuthController) Refresh(ctx *gin.Context) {
 		if handleRequestDBError(ctx, err) {
 			return
 		}
-		writeAuthError(ctx, http.StatusUnauthorized, "AUTH_REFRESH_INVALID", "Authentication failed")
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			writeAuthError(ctx, http.StatusUnauthorized, "AUTH_REFRESH_INVALID", "Authentication failed")
+		} else {
+			writeAuthError(ctx, http.StatusInternalServerError, "AUTH_INTERNAL", "Authentication failed")
+		}
 		return
 	}
 	writeAuthResponse(ctx, pair, user)

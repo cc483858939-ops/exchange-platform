@@ -31,8 +31,9 @@ func (spy *authLimiterSpy) Allow(_ context.Context, input auth.AttemptInput) (au
 }
 
 type authTokenServiceSpy struct {
-	issueCalls  int
-	rotateCalls int
+	issueCalls        int
+	rotateCalls       int
+	refreshRequestIDs []string
 }
 
 func (spy *authTokenServiceSpy) IssuePair(_ context.Context, userID uint) (auth.TokenPair, error) {
@@ -47,8 +48,9 @@ func (spy *authTokenServiceSpy) IssuePair(_ context.Context, userID uint) (auth.
 	}, nil
 }
 
-func (spy *authTokenServiceSpy) RotateRefresh(_ context.Context, _ string) (auth.TokenPair, error) {
+func (spy *authTokenServiceSpy) RotateRefresh(_ context.Context, _ string, requestID string) (auth.TokenPair, error) {
 	spy.rotateCalls++
+	spy.refreshRequestIDs = append(spy.refreshRequestIDs, requestID)
 	return auth.TokenPair{
 		UserID:           42,
 		AccessToken:      "access-token",

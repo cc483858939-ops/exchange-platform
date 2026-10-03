@@ -92,7 +92,7 @@ func TestRedisRefreshRotationAllowsExactlyOneConcurrentWinnerIntegration(t *test
 		go func() {
 			defer wait.Done()
 			<-start
-			_, rotateErr := manager.RotateRefresh(context.Background(), pair.RefreshToken)
+			_, rotateErr := manager.RotateRefresh(context.Background(), pair.RefreshToken, "")
 			if rotateErr == nil {
 				successes.Add(1)
 				return

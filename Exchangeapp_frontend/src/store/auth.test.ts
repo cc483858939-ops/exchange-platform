@@ -388,6 +388,53 @@ describe('auth store cross-tab session coordination', () => {
     }
   });
 
+  it('persists the same refresh request across failures and store recreation', async () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    const timeout = Object.assign(new Error('Response lost'), { isAxiosError: true, code: 'ECONNABORTED' });
+    mocks.post.mockImplementationOnce(async (_url, body) => {
+      expect(readStoredSession()?.refreshRequestID).toBe(body.request_id);
+      throw timeout;
+    });
+    await expect(store.refreshAccessToken()).rejects.toBe(timeout);
+    const pending = readStoredSession();
+    expect(pending?.refreshRequestID).toMatch(/^[0-9a-f-]{36}$/);
+    const recreated = createAuthStore();
+    mocks.post.mockResolvedValueOnce({ data: authResponse(fullIdentity, 'recovered-access', 'recovered-refresh') });
+    await expect(recreated.refreshAccessToken()).resolves.toBe(bearerFor('recovered-access'));
+    expect(mocks.post.mock.calls[1]?.[1]).toEqual(mocks.post.mock.calls[0]?.[1]);
+    expect(readStoredSession()?.refreshToken).toBe('recovered-refresh');
+    expect(readStoredSession()?.refreshRequestID).toBeUndefined();
+  });
+
+  it('does not rotate when the durable request ID cannot be saved', async () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    const saved = readStoredSession();
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => { throw new Error('Quota exceeded'); });
+    await expect(store.refreshAccessToken()).rejects.toThrow('Quota exceeded');
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(readStoredSession()).toEqual(saved);
+    expect(store.isAuthenticated).toBe(true);
+  });
+
+  it('recovers with the durable request ID after saving the successor fails', async () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    mocks.post.mockImplementationOnce(async () => {
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => { throw new Error('Storage unavailable'); });
+      return { data: authResponse(fullIdentity, 'recovered-access', 'recovered-refresh') };
+    });
+    await expect(store.refreshAccessToken()).rejects.toThrow('Storage unavailable');
+    const firstRequest = mocks.post.mock.calls[0]?.[1];
+    expect(readStoredSession()?.refreshToken).toBe('alice-refresh');
+    expect(readStoredSession()?.refreshRequestID).toBe(firstRequest.request_id);
+    mocks.post.mockResolvedValueOnce({ data: authResponse(fullIdentity, 'recovered-access', 'recovered-refresh') });
+    await expect(store.refreshAccessToken()).resolves.toBe(bearerFor('recovered-access'));
+    expect(mocks.post.mock.calls[1]?.[1]).toEqual(firstRequest);
+    expect(readStoredSession()?.refreshRequestID).toBeUndefined();
+  });
+
   it.each([
     'AUTH_REFRESH_INVALID',
     'AUTH_REFRESH_EXPIRED',

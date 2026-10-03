@@ -18,10 +18,18 @@ import (
 type memoryRefreshStore struct {
 	mu       sync.Mutex
 	sessions map[string]RefreshSession
+	used     map[string]memoryRefreshRecovery
+}
+
+type memoryRefreshRecovery struct {
+	requestID    string
+	nextHash     string
+	sealedSecret string
+	expiresAt    time.Time
 }
 
 func newMemoryRefreshStore() *memoryRefreshStore {
-	return &memoryRefreshStore{sessions: make(map[string]RefreshSession)}
+	return &memoryRefreshStore{sessions: make(map[string]RefreshSession), used: make(map[string]memoryRefreshRecovery)}
 }
 
 func (s *memoryRefreshStore) Create(_ context.Context, session RefreshSession) error {
@@ -41,26 +49,45 @@ func (s *memoryRefreshStore) Rotate(
 	newSecretHash string,
 	now time.Time,
 	idleTTL time.Duration,
-) (uint, time.Duration, error) {
+	recovery RefreshRecovery,
+) (uint, time.Duration, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	session, exists := s.sessions[sessionID]
+	usedKey := usedRefreshKey(sessionID, expectedSecretHash)
+	previous, used := s.used[usedKey]
 	if !exists {
-		return 0, 0, ErrRefreshInvalid
+		if used {
+			return 0, 0, "", ErrRefreshReused
+		}
+		return 0, 0, "", ErrRefreshInvalid
 	}
 	if session.SecretHash != expectedSecretHash {
-		return 0, 0, ErrRefreshReused
+		if used && recovery.RequestID != "" && previous.requestID == recovery.RequestID &&
+			previous.nextHash == session.SecretHash && now.Before(previous.expiresAt) &&
+			now.Before(session.LastRotatedAt.Add(session.TTL)) {
+			return session.UserID, session.LastRotatedAt.Add(session.TTL).Sub(now), previous.sealedSecret, nil
+		}
+		if used {
+			delete(s.sessions, sessionID)
+			return 0, 0, "", ErrRefreshReused
+		}
+		return 0, 0, "", ErrRefreshInvalid
 	}
 	if !now.Before(session.AbsoluteExpiresAt) {
 		delete(s.sessions, sessionID)
-		return 0, 0, ErrRefreshExpired
+		return 0, 0, "", ErrRefreshExpired
 	}
 	ttl := minDuration(idleTTL, session.AbsoluteExpiresAt.Sub(now))
 	session.SecretHash = newSecretHash
 	session.LastRotatedAt = now
 	session.TTL = ttl
 	s.sessions[sessionID] = session
-	return session.UserID, ttl, nil
+	s.used[usedKey] = memoryRefreshRecovery{
+		requestID: recovery.RequestID, nextHash: newSecretHash,
+		sealedSecret: recovery.SealedSecret, expiresAt: now.Add(minDuration(refreshRecoveryTTL, ttl)),
+	}
+	return session.UserID, ttl, recovery.SealedSecret, nil
 }
 
 func testManager(t *testing.T) (*Manager, *memoryRefreshStore, ed25519.PrivateKey) {
@@ -220,7 +247,7 @@ func TestRefreshRotationAllowsExactlyOneConcurrentWinner(t *testing.T) {
 		go func() {
 			defer wait.Done()
 			<-start
-			_, rotateErr := manager.RotateRefresh(context.Background(), pair.RefreshToken)
+			_, rotateErr := manager.RotateRefresh(context.Background(), pair.RefreshToken, "")
 			if rotateErr == nil {
 				successes.Add(1)
 				return

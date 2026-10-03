@@ -59,6 +59,12 @@ beforeEach(() => {
 });
 
 describe('auth session persistence', () => {
+  it('preserves a valid pending refresh request in the credential snapshot', () => {
+    const session = sessionFor({ refreshRequestID: '550e8400-e29b-41d4-a716-446655440000' });
+    writePersistedAuthSession(session);
+    expect(readPersistedAuthSession()).toEqual(session);
+  });
+
   it('reads an atomically persisted credential pair with matching JWT metadata', () => {
     const session = sessionFor();
     localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(session));
@@ -73,6 +79,7 @@ describe('auth session persistence', () => {
     ['sid mismatch', JSON.stringify(sessionFor({ sessionId: 'sid-other' }))],
     ['sub mismatch', JSON.stringify(sessionFor({ userId: 8 }))],
     ['missing revision', JSON.stringify(sessionFor({ tokenRevision: '' }))],
+    ['invalid refresh request', JSON.stringify(sessionFor({ refreshRequestID: 'not-a-request-id' }))],
   ])('rejects persisted state with %s', (_name, raw) => {
     localStorage.setItem(AUTH_SESSION_STORAGE_KEY, raw);
 

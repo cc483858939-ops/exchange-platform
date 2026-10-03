@@ -10,18 +10,22 @@ import (
 	"Go.exchange/global"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type requestContextTestKey struct{}
 
 func TestGetPostByIDPassesRequestContextToDetailLoader(t *testing.T) {
 	originalCacheLoader := loadPostDetailCache
+	originalValidator := validatePostDetailPublic
 	originalDB := global.APIDb
 	t.Cleanup(func() {
 		loadPostDetailCache = originalCacheLoader
+		validatePostDetailPublic = originalValidator
 		global.APIDb = originalDB
 	})
 	global.APIDb = nil
+	validatePostDetailPublic = func(*gorm.DB, uint) error { return nil }
 
 	var receivedContext context.Context
 	publishedAt := time.Now().UTC()
