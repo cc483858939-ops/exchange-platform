@@ -28,6 +28,7 @@ type RefreshSession struct {
 
 type RefreshStore interface {
 	Create(ctx context.Context, session RefreshSession) error
+	Revoke(ctx context.Context, sessionID, expectedSecretHash string) error
 	Rotate(
 		ctx context.Context,
 		sessionID string,

@@ -16,11 +16,13 @@ import {
   applyFeedBookmarkStateUpdate,
   applyFeedRepostStateUpdate,
   postToFeedPost,
+  invalidateFeedPostReferences,
   setFeedPostLikeUnavailable,
   setFeedPostBookmarkUnavailable,
   setFeedPostRepostUnavailable,
 } from '../utils/feedPost';
 import { useAuthStore } from './auth';
+import { useFeedStore } from './feed';
 import {
   registerHistorySessionSync,
   markOwnProfileTimelineStale,
@@ -67,6 +69,7 @@ const getErrorStatus = (error: unknown) =>
 
 export const useHistorySessionStore = defineStore('historySession', () => {
   const authStore = useAuthStore();
+  const feedStore = useFeedStore();
 
   const viewerID = ref<number | null>(null);
   const viewerGeneration = ref(0);
@@ -202,14 +205,14 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     const additions: FeedPost[] = [];
     posts.forEach((post) => {
       if (
-        deletedPostIDs.has(post.id)
+        (deletedPostIDs.has(post.id) || feedStore.isPostDeleted(post.id))
         || loadedPostIDs.has(post.id)
         || removedSnapshots.has(post.id)
       ) {
         return;
       }
       loadedPostIDs.add(post.id);
-      additions.push(postToFeedPost(post));
+      additions.push(postToFeedPost(post, {}, id => deletedPostIDs.has(id) || feedStore.isPostDeleted(id)));
     });
     if (additions.length > 0) {
       items.value = [...items.value, ...additions];
@@ -577,10 +580,10 @@ export const useHistorySessionStore = defineStore('historySession', () => {
           return;
         }
         freshIDs.add(post.id);
-        if (deletedPostIDs.has(post.id) || removedSnapshots.has(post.id)) {
+        if ((deletedPostIDs.has(post.id) || feedStore.isPostDeleted(post.id)) || removedSnapshots.has(post.id)) {
           return;
         }
-        const freshPost = postToFeedPost(post);
+        const freshPost = postToFeedPost(post, {}, id => deletedPostIDs.has(id) || feedStore.isPostDeleted(id));
         const oldPost = oldByID.get(post.id);
         freshPosts.push(oldPost
           ? {
@@ -606,7 +609,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
       });
 
       const cachedTail = oldItems.filter(post => (
-        !deletedPostIDs.has(post.id) && !freshIDs.has(post.id)
+        !(deletedPostIDs.has(post.id) || feedStore.isPostDeleted(post.id)) && !freshIDs.has(post.id)
       ));
       items.value = [...freshPosts, ...cachedTail];
       loadedPostIDs.clear();
@@ -938,8 +941,10 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     const hadItem = Boolean(findPost(postID) || removedSnapshots.has(postID));
     deletedPostIDs.add(postID);
     items.value = items.value.filter(post => post.id !== postID);
+    items.value.forEach(post => invalidateFeedPostReferences(post, postID));
     loadedPostIDs.delete(postID);
     removedSnapshots.delete(postID);
+    removedSnapshots.forEach(snapshot => invalidateFeedPostReferences(snapshot.post, postID));
     engagementMutations.invalidatePost(postID);
     mutationErrors.value.delete(postID);
     return hadItem;

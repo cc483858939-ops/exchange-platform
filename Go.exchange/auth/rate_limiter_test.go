@@ -47,6 +47,7 @@ func TestAttemptLimiterUsesExactSubjectPolicies(t *testing.T) {
 		{action: AttemptLogin, limit: 5},
 		{action: AttemptRegister, limit: 3},
 		{action: AttemptRefresh, limit: 20},
+		{action: AttemptLogout, limit: 20},
 	} {
 		t.Run(string(test.action), func(t *testing.T) {
 			fake := &attemptScriptFake{}
@@ -77,6 +78,7 @@ func TestAttemptLimiterRejectsWhenIPBucketExceeds(t *testing.T) {
 		{action: AttemptLogin, limit: 30},
 		{action: AttemptRegister, limit: 10},
 		{action: AttemptRefresh, limit: 60},
+		{action: AttemptLogout, limit: 60},
 	} {
 		t.Run(string(test.action), func(t *testing.T) {
 			fake := &attemptScriptFake{}
@@ -197,7 +199,7 @@ func TestAttemptLimiterUsesOneAtomicScriptCallAndWindowTTL(t *testing.T) {
 func TestAttemptLimiterRejectsUnsupportedActionAndInvalidIP(t *testing.T) {
 	fake := &attemptScriptFake{}
 	limiter := newTestAttemptLimiter(time.Now, fake)
-	if _, err := limiter.Allow(context.Background(), AttemptInput{Action: "logout", ClientIP: "192.0.2.1"}); err == nil {
+	if _, err := limiter.Allow(context.Background(), AttemptInput{Action: "unsupported-action", ClientIP: "192.0.2.1"}); err == nil {
 		t.Fatal("unsupported action unexpectedly succeeded")
 	}
 	if _, err := limiter.Allow(context.Background(), AttemptInput{Action: AttemptLogin, ClientIP: "not-an-ip"}); err == nil {

@@ -162,6 +162,7 @@ describe('quotesSession store', () => {
       applyExternalRepostStateLocal: expect.any(Function),
       applyExternalBookmarkStateLocal: expect.any(Function),
       applyQuoteCountUpdateLocal: expect.any(Function),
+      removePostLocal: expect.any(Function),
     });
     const sync = mocks.registerQuotesSessionSync.mock.calls[0][0];
     expect(sync.applyQuoteCountUpdateLocal({ postId: 1, quoteCount: 7 })).toBe(true);

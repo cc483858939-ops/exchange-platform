@@ -256,7 +256,7 @@ func TestRuntimeSchemaCanariesUseStableGORMRegistry(t *testing.T) {
 	apiTables := canaryTableSet(api)
 	workerTables := canaryTableSet(worker)
 	for _, required := range []string{
-		"users", "post_media", "post_media_uploads", "post_embeddings", "embedding_serving_state", "post_behaviors", "user_post_reco_states",
+		"users", "post_media", "post_media_uploads", "post_media_cleanup", "post_embeddings", "embedding_serving_state", "post_behaviors", "user_post_reco_states",
 		"user_reco_profiles", "user_author_affinities", "user_reco_profile_dirty", "exchange_rates", "runtime_schema_state",
 	} {
 		if !apiTables[required] {
@@ -311,11 +311,11 @@ func TestPublishedSchemaVersionContractIsIndependentAndValid(t *testing.T) {
 	if err := validatePublishedSchemaVersions(); err != nil {
 		t.Fatalf("published schema version contract is invalid: %v", err)
 	}
-	if PublishedSchemaCurrentVersion != 14 || PublishedSchemaCompatibilityFloor != 14 || RequiredSchemaVersion != 14 {
+	if PublishedSchemaCurrentVersion != 15 || PublishedSchemaCompatibilityFloor != 14 || RequiredSchemaVersion != 15 {
 		t.Fatalf("unexpected initial published schema interval: current=%d floor=%d required=%d", PublishedSchemaCurrentVersion, PublishedSchemaCompatibilityFloor, RequiredSchemaVersion)
 	}
-	if !runtimeSchemaVersionsCompatible(14, 14, 14) || runtimeSchemaVersionsCompatible(14, 14, 13) {
-		t.Fatal("schema 14 must accept schema 14 and reject schema-13 binaries")
+	if !runtimeSchemaVersionsCompatible(15, 14, 15) || !runtimeSchemaVersionsCompatible(15, 14, 14) || runtimeSchemaVersionsCompatible(15, 14, 13) {
+		t.Fatal("schema 15 must accept schema 14/15 and reject schema-13 binaries")
 	}
 }
 

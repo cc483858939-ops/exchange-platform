@@ -5,3 +5,8 @@ GRANT CONNECT ON DATABASE goexchange TO post_media_gc;
 GRANT USAGE ON SCHEMA public TO post_media_gc;
 REVOKE ALL PRIVILEGES ON TABLE public.post_media_uploads FROM post_media_gc;
 GRANT SELECT, UPDATE, DELETE ON TABLE public.post_media_uploads TO post_media_gc;
+REVOKE ALL PRIVILEGES ON TABLE public.post_media_cleanup FROM post_media_gc;
+GRANT SELECT, UPDATE, DELETE ON TABLE public.post_media_cleanup TO post_media_gc;
+-- Only the columns needed to retain media still referenced by a live Post.
+GRANT SELECT (post_id, url, large_url) ON public.post_media TO post_media_gc;
+GRANT SELECT (id, deleted_at) ON public.posts TO post_media_gc;

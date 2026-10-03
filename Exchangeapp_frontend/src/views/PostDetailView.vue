@@ -661,6 +661,7 @@ import type { PublicAuthor } from '../types/User';
 import { formatAccessibleEngagementCount, formatCompactEngagementCount } from '../utils/engagementCount';
 import { formatPostDetailTimestamp } from '../utils/time';
 import { normalizePostQuoteCountUpdate } from '../utils/quoteCount';
+import { invalidateFeedPostReferences, normalizePostReferences } from '../utils/feedPost';
 import {
   getPreferredTranslationLanguage,
   isPostTranslationAvailable,
@@ -1178,10 +1179,11 @@ const canDeletePost = computed(() => Boolean(
 const mergeReplies = (items: Post[]) => {
   const seen = new Set<number>();
   return items.filter(reply => {
-    if (seen.has(reply.id)) {
+    if (seen.has(reply.id) || feedStore.isPostDeleted(reply.id)) {
       return false;
     }
     seen.add(reply.id);
+    normalizePostReferences(reply, feedStore.isPostDeleted);
     return true;
   });
 };
@@ -1888,6 +1890,15 @@ const applyQuoteCountUpdateLocal = (update: PostQuoteCountUpdate) => {
   return true;
 };
 
+const removePostLocal = (postID: number) => {
+  if (post.value) normalizePostReferences(post.value, id => id === postID);
+  if (handoffPost.value) invalidateFeedPostReferences(handoffPost.value, postID);
+  replies.value = replies.value.filter(reply => reply.id !== postID);
+  replies.value.forEach(reply => normalizePostReferences(reply, id => id === postID));
+  replyBookmarkMutations.invalidatePost(postID);
+  delete replyBookmarkStates[postID];
+};
+
 const loadInitialReplies = async (id: string, detailVersion: number) => {
   const requestVersion = ++repliesRequestVersion;
   repliesInitialLoading.value = true;
@@ -2173,10 +2184,12 @@ const confirmDeleteReply = async () => {
     if (
       detailVersion !== detailRequestVersion
       || requestVersion !== replyDeleteRequestVersion
+      || currentViewerID.value !== viewerID
     ) {
       return;
     }
 
+    feedStore.markPostDeleted(replyID, viewerID);
     replies.value = replies.value.filter(reply => reply.id !== replyID);
     delete replyBookmarkStates[replyID];
     replyBookmarkMutations.invalidate('bookmark', replyID);
@@ -2297,6 +2310,12 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
   }
 
   handoffPost.value = postDetailHandoff.consume(Number(id));
+  if (handoffPost.value) {
+    const quotedID = handoffPost.value.quotePost?.id;
+    const replyID = handoffPost.value.replyToPost?.id;
+    if (quotedID && feedStore.isPostDeleted(quotedID)) invalidateFeedPostReferences(handoffPost.value, quotedID);
+    if (replyID && feedStore.isPostDeleted(replyID)) invalidateFeedPostReferences(handoffPost.value, replyID);
+  }
   postLoading.value = true;
 
   try {
@@ -2309,7 +2328,7 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
     }
 
     handoffPost.value = null;
-    post.value = loadedPost;
+    post.value = normalizePostReferences(loadedPost, feedStore.isPostDeleted);
     likeCount.value = clampCount(loadedPost.like_count);
     repostCount.value = clampCount(loadedPost.repost_count);
     quoteCount.value = clampCount(loadedPost.quote_count);
@@ -2558,7 +2577,7 @@ onBeforeRouteLeave(async to => {
 });
 
 onMounted(() => {
-  registerPostDetailSessionSync({ applyExternalBookmarkStateLocal, applyQuoteCountUpdateLocal });
+  registerPostDetailSessionSync({ applyExternalBookmarkStateLocal, applyQuoteCountUpdateLocal, removePostLocal });
   document.addEventListener('visibilitychange', handleVisibilityChange);
   window.addEventListener('scroll', handleReadScroll, { passive: true });
   window.addEventListener('resize', updateReadGeometry);

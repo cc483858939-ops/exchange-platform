@@ -153,8 +153,21 @@ Public endpoints:
 - `POST /api/auth/login`
 - `POST /api/auth/register`
 - `POST /api/auth/refresh`
+- `POST /api/auth/logout`
 - `GET /api/exchangeRates`
 - `GET /api/files/*objectKey`
+
+`POST /api/auth/logout` accepts `{"refresh_token":"rt1.…"}` and returns `204`
+when that single refresh family is revoked or already absent. It also accepts a
+consumed secret from the same family, so concurrent rotation cannot defeat
+logout. It requires no Access JWT and never revokes other devices or a later
+login. Already-issued Access JWTs remain valid until expiry plus configured clock
+skew (defaults: 15 minutes and 30 seconds); replay detection has the same access
+boundary. Access verification adds no Redis or database lookup. The browser
+clears local credentials immediately; a network or server failure explicitly
+reports that server sign-out is unconfirmed. No offline revocation guarantee is
+provided. Used-secret and sealed recovery records expire under their existing
+TTLs and cannot refresh an absent family.
 
 Authenticated endpoints:
 

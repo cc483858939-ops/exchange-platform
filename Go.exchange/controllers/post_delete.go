@@ -6,10 +6,12 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"Go.exchange/global"
 	"Go.exchange/likes"
 	"Go.exchange/models"
+	"Go.exchange/postmediacleanup"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -120,7 +122,7 @@ func deletePostInTransactionFromDB(ctx context.Context, postID, viewerID uint) (
 		if result.RowsAffected != 1 {
 			return errPostDeleteConsistency
 		}
-		return nil
+		return postmediacleanup.EnqueueDeletedPost(tx, postID, viewerID, time.Now())
 	})
 	if err != nil {
 		return postDeleteResult{}, err

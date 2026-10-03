@@ -62,6 +62,7 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 		authRoutes.POST("/login", authController.Login)
 		authRoutes.POST("/register", authController.Register)
 		authRoutes.POST("/refresh", authController.Refresh)
+		authRoutes.POST("/logout", authController.Logout)
 	}
 
 	api := router.Group("/api")

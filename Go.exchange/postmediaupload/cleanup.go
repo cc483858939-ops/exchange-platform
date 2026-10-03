@@ -23,6 +23,7 @@ const (
 var ErrStaleCleanupClaim = errors.New("post media cleanup claim is stale")
 
 type CleanupClaim struct {
+	Published         bool
 	MediaID           string
 	OwnerID           uint
 	OriginalObjectKey string

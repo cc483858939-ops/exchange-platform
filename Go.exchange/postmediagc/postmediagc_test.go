@@ -19,13 +19,19 @@ type retryCall struct {
 }
 
 type fakeStore struct {
-	batches     [][]postmediaupload.CleanupClaim
-	claimCalls  int
-	limits      []int
-	completed   []postmediaupload.CleanupClaim
-	retries     []retryCall
-	completeErr error
-	retryErr    error
+	retainPublished bool
+	checkErr        error
+	batches         [][]postmediaupload.CleanupClaim
+	claimCalls      int
+	limits          []int
+	completed       []postmediaupload.CleanupClaim
+	retries         []retryCall
+	completeErr     error
+	retryErr        error
+}
+
+func (store *fakeStore) CanDelete(_ context.Context, claim postmediaupload.CleanupClaim) (bool, error) {
+	return !claim.Published || !store.retainPublished, store.checkErr
 }
 
 func (store *fakeStore) ClaimCleanupBatch(_ context.Context, _ time.Time, _ time.Duration, limit int) ([]postmediaupload.CleanupClaim, error) {

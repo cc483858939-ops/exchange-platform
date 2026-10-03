@@ -102,8 +102,8 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	if err := tx.Where("id = ?", runtimeSchemaStateID).Take(&publishedState).Error; err != nil {
 		t.Fatalf("load published runtime schema state: %v", err)
 	}
-	if publishedState.CurrentVersion != 14 || publishedState.CompatibilityFloor != 14 {
-		t.Fatalf("published schema contract=%d/%d want=14/14", publishedState.CurrentVersion, publishedState.CompatibilityFloor)
+	if publishedState.CurrentVersion != 15 || publishedState.CompatibilityFloor != 14 {
+		t.Fatalf("published schema contract=%d/%d want=15/14", publishedState.CurrentVersion, publishedState.CompatibilityFloor)
 	}
 	if err := applyPostSchemaConstraints(tx); err != nil {
 		t.Fatalf("apply Post schema constraints: %v", err)
@@ -113,6 +113,9 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	}
 	if err := applyPostMediaUploadConstraints(tx); err != nil {
 		t.Fatalf("apply PostMedia upload constraints: %v", err)
+	}
+	if err := applyPostMediaDeletionSchema(tx, 15); err != nil {
+		t.Fatalf("apply PostMedia deletion schema: %v", err)
 	}
 	if err := applyPostEmbeddingConstraints(tx); err != nil {
 		t.Fatalf("apply PostEmbedding constraints: %v", err)

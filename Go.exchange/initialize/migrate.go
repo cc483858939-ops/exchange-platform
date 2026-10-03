@@ -44,6 +44,7 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 			&models.Post{},
 			&models.PostMedia{},
 			&models.PostMediaUpload{},
+			&models.PostMediaCleanup{},
 			&models.PostRepost{},
 			&models.PostBookmark{},
 			&models.PostEmbedding{},
@@ -86,6 +87,9 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 			return err
 		}
 		if err := applyPostMediaUploadConstraints(tx); err != nil {
+			return err
+		}
+		if err := applyPostMediaDeletionSchema(tx, previousSchemaVersion); err != nil {
 			return err
 		}
 		if err := applyPostEmbeddingConstraints(tx); err != nil {

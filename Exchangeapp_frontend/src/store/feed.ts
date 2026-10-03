@@ -14,6 +14,7 @@ import {
   applyFeedLikeStateUpdate,
   applyFeedRepostStateUpdate,
   postToFeedPost,
+  invalidateFeedPostReferences,
 } from '../utils/feedPost';
 
 const maxRecentlyPublishedPosts = 5;
@@ -66,7 +67,7 @@ export const useFeedStore = defineStore('feed', () => {
       return false;
     }
 
-    const feedPost = postToFeedPost(post);
+    const feedPost = postToFeedPost(post, {}, isPostDeleted);
     recentlyPublishedPosts.value = [
       feedPost,
       ...recentlyPublishedPosts.value.filter((item) => item.id !== feedPost.id),
@@ -92,6 +93,7 @@ export const useFeedStore = defineStore('feed', () => {
     recentlyPublishedPosts.value = recentlyPublishedPosts.value.filter(
       (post) => post.id !== normalizedPostID,
     );
+    recentlyPublishedPosts.value.forEach(post => invalidateFeedPostReferences(post, normalizedPostID));
     return true;
   };
 

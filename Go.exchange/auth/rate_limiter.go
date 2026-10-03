@@ -19,6 +19,7 @@ const (
 	AttemptLogin    AttemptAction = "login"
 	AttemptRegister AttemptAction = "register"
 	AttemptRefresh  AttemptAction = "refresh"
+	AttemptLogout   AttemptAction = "logout"
 )
 
 type AttemptInput struct {
@@ -46,6 +47,7 @@ var attemptPolicies = map[AttemptAction]attemptPolicy{
 	AttemptLogin:    {window: time.Minute, ipLimit: 30, subjectLimit: 5},
 	AttemptRegister: {window: 10 * time.Minute, ipLimit: 10, subjectLimit: 3},
 	AttemptRefresh:  {window: time.Minute, ipLimit: 60, subjectLimit: 20},
+	AttemptLogout:   {window: time.Minute, ipLimit: 60, subjectLimit: 20},
 }
 
 var attemptCounterScript = redis.NewScript(`

@@ -10,6 +10,7 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -421,6 +422,20 @@ func GetFile(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid file path"})
 		return
 	}
+	if postmedia.IsPublicObjectKey(objectKey) {
+		ctx.Header("Cache-Control", fileCacheControl(objectKey))
+		allowed, err := publicPostMediaReadable(ctx.Request.Context(), objectKey)
+		if err != nil {
+			if !handleRequestDBError(ctx, err) {
+				ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+			}
+			return
+		}
+		if !allowed {
+			ctx.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+			return
+		}
+	}
 
 	object, err := getStoredObject(ctx.Request.Context(), objectKey)
 	if err != nil {
@@ -436,12 +451,20 @@ func GetFile(ctx *gin.Context) {
 	}
 
 	ctx.Header("Cache-Control", fileCacheControl(objectKey))
+	if postmedia.IsPublicObjectKey(objectKey) && info.ETag != "" {
+		etag := strconv.Quote(info.ETag)
+		ctx.Header("ETag", etag)
+		if matchesFileETag(ctx.GetHeader("If-None-Match"), etag) {
+			ctx.Status(http.StatusNotModified)
+			return
+		}
+	}
 	ctx.DataFromReader(http.StatusOK, info.Size, info.ContentType, object, nil)
 }
 
 func fileCacheControl(objectKey string) string {
 	if postmedia.IsPublicObjectKey(objectKey) {
-		return "public, max-age=31536000, immutable"
+		return "private, no-cache, max-age=0, must-revalidate"
 	}
 	if profilecover.IsPublicObjectKey(objectKey) {
 		return "public, max-age=31536000, immutable"

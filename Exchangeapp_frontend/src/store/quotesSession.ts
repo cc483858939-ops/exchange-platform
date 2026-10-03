@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { reactive, ref, watch } from 'vue';
 import { useAuthStore } from './auth';
+import { useFeedStore } from './feed';
 import { getPostQuotes } from '../services/quoteService';
 import { getPostEngagementStates } from '../services/engagementService';
 import type { Post } from '../types/Post';
@@ -18,6 +19,7 @@ import {
   applyFeedLikeStateUpdate,
   applyFeedRepostStateUpdate,
   postToFeedPost,
+  invalidateFeedPostReferences,
   setFeedPostBookmarkUnavailable,
   setFeedPostLikeUnavailable,
   setFeedPostRepostUnavailable,
@@ -67,6 +69,7 @@ const isNotFound = (error: unknown) => (
 
 export const useQuotesSessionStore = defineStore('quotesSession', () => {
   const authStore = useAuthStore();
+  const feedStore = useFeedStore();
   const targetPostID = ref<number | null>(null);
   const items = ref<FeedPost[]>([]);
   const loaded = ref(false);
@@ -84,6 +87,7 @@ export const useQuotesSessionStore = defineStore('quotesSession', () => {
   const { likePendingPostIDs, repostPendingPostIDs, bookmarkPendingPostIDs } = engagementMutations;
   const mutationErrors = reactive(new Map<number, string>());
   const loadedPostIDs = new Set<number>();
+  const deletedPostIDs = new Set<number>();
 
   const findPost = (postID: number) => items.value.find(post => post.id === postID);
   const isCurrentRequest = (request: number, target: number) => (
@@ -104,9 +108,10 @@ export const useQuotesSessionStore = defineStore('quotesSession', () => {
   const appendPosts = (posts: Post[]) => {
     const additions: FeedPost[] = [];
     posts.forEach((post) => {
-      if (!Number.isSafeInteger(post.id) || post.id <= 0 || loadedPostIDs.has(post.id)) return;
+      if (!Number.isSafeInteger(post.id) || post.id <= 0 || loadedPostIDs.has(post.id)
+        || deletedPostIDs.has(post.id) || feedStore.isPostDeleted(post.id)) return;
       loadedPostIDs.add(post.id);
-      additions.push(postToFeedPost(post));
+      additions.push(postToFeedPost(post, {}, id => deletedPostIDs.has(id) || feedStore.isPostDeleted(id)));
     });
     if (viewerID.value === null) initializeGuestInteractionStates(additions);
     if (additions.length > 0) items.value = [...items.value, ...additions];
@@ -225,8 +230,8 @@ export const useQuotesSessionStore = defineStore('quotesSession', () => {
   const loadInitial = async (force = false) => {
     if (force) clearPageState();
     const target = targetPostID.value;
-    if (target === null) {
-      targetUnavailable.value = true;
+    if (target === null || deletedPostIDs.has(target) || feedStore.isPostDeleted(target)) {
+      markTargetUnavailable();
       return;
     }
     if (initialLoading.value || (loaded.value && !force)) return;
@@ -302,6 +307,7 @@ export const useQuotesSessionStore = defineStore('quotesSession', () => {
     if (nextViewerID === viewerID.value) return;
     viewerID.value = nextViewerID;
     viewerGeneration.value += 1;
+    deletedPostIDs.clear();
     engagementMutations.resetAll();
     mutationErrors.clear();
     if (nextViewerID === null) {
@@ -493,11 +499,25 @@ export const useQuotesSessionStore = defineStore('quotesSession', () => {
     return true;
   };
 
+  const removePostLocal = (postID: number) => {
+    deletedPostIDs.add(postID);
+    if (targetPostID.value === postID) {
+      markTargetUnavailable();
+      return;
+    }
+    items.value = items.value.filter(post => post.id !== postID);
+    items.value.forEach(post => invalidateFeedPostReferences(post, postID));
+    loadedPostIDs.delete(postID);
+    engagementMutations.invalidatePost(postID);
+    mutationErrors.delete(postID);
+  };
+
   registerQuotesSessionSync({
     applyExternalLikeStateLocal,
     applyExternalRepostStateLocal,
     applyExternalBookmarkStateLocal,
     applyQuoteCountUpdateLocal,
+    removePostLocal,
   });
 
   return {
@@ -531,6 +551,7 @@ export const useQuotesSessionStore = defineStore('quotesSession', () => {
     applyExternalRepostStateLocal,
     applyExternalBookmarkStateLocal,
     applyQuoteCountUpdateLocal,
+    removePostLocal,
     reset,
   };
 });

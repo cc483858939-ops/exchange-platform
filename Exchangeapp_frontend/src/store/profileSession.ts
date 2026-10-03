@@ -30,6 +30,7 @@ import {
   applyFeedBookmarkStateUpdate,
   applyFeedRepostStateUpdate,
   postToFeedPost,
+  invalidateFeedPostReferences,
   setFeedPostBookmarkUnavailable,
   setFeedPostLikeUnavailable,
   setFeedPostRepostUnavailable,
@@ -161,7 +162,10 @@ const matchesProfileAudience = (
     : audience.authenticated && audience.viewerID === capturedViewerID;
 };
 
-const timelineActivityToProfileItem = (activity: TimelineItem): ProfileTimelineItem => ({
+const timelineActivityToProfileItem = (
+  activity: TimelineItem,
+  isPostDeleted: (postID: number) => boolean,
+): ProfileTimelineItem => ({
   activityType: activity.activity_type,
   activityAt: activity.activity_at,
   sourceId: activity.source_id,
@@ -169,6 +173,7 @@ const timelineActivityToProfileItem = (activity: TimelineItem): ProfileTimelineI
   post: postToFeedPost(
     activity.post,
     activity.activity_type === 'repost' ? { repostActor: activity.actor } : {},
+    isPostDeleted,
   ),
 });
 
@@ -657,7 +662,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
       const key = timelineActivityKey(activity.activity_type, activity.source_id);
       if (session.loadedActivityKeys.has(key)) return;
       session.loadedActivityKeys.add(key);
-      const item = timelineActivityToProfileItem(activity);
+      const item = timelineActivityToProfileItem(activity, id => session.removedPostIDs.has(id) || feedStore.isPostDeleted(id));
       const audience = currentProfileAudience(authStore, viewerID.value);
       if (!audience.authenticated) {
         item.post.likeStatus = 'ready';
@@ -1114,6 +1119,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     sessions.forEach((session) => {
       const removedFromSession = session.timelineItems.some((item) => item.post.id === postId);
       session.removedPostIDs.add(postId);
+      session.timelineItems.forEach(item => invalidateFeedPostReferences(item.post, postId));
       if (!removedFromSession) return;
       session.timelineItems = session.timelineItems.filter((item) => item.post.id !== postId);
       if (session.timelineLoadingMore) {
@@ -1336,7 +1342,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     ) return false;
     const session = ensureSession(publisherID);
     if (!session) return false;
-    const feedPost = postToFeedPost(post);
+    const feedPost = postToFeedPost(post, {}, feedStore.isPostDeleted);
     const item: ProfileTimelineItem = {
       activityType: 'post',
       activityAt: post.published_at || post.created_at,

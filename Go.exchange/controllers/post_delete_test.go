@@ -193,7 +193,7 @@ func openPostDeleteIntegrationDatabase(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostRepost{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostRepost{}, &models.PostMedia{}, &models.PostMediaCleanup{}); err != nil {
 		t.Fatal(err)
 	}
 	return db

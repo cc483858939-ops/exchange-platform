@@ -1,4 +1,5 @@
 import { useRouter } from 'vue-router';
+import { ElMessage } from 'element-plus';
 import { useAuthStore } from '../store/auth';
 
 export function useLogout() {
@@ -6,7 +7,9 @@ export function useLogout() {
   const authStore = useAuthStore();
 
   const handleLogout = () => {
-    void authStore.logout();
+    void authStore.logout().catch(() => {
+      ElMessage.warning('Signed out on this browser, but server sign-out could not be confirmed. The session may still be active.');
+    });
     void router.push({ name: 'Home' });
   };
 

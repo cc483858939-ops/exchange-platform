@@ -28,6 +28,8 @@ import {
   applyFeedBookmarkStateUpdate,
   applyFeedRepostStateUpdate,
   postToFeedPost,
+  invalidateFeedPostReferences,
+  normalizePostReferences,
   setFeedPostBookmarkUnavailable,
   setFeedPostLikeUnavailable,
   setFeedPostRepostUnavailable,
@@ -607,6 +609,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       .map((activity) => postToFeedPost(
         activity.post,
         activity.activity_type === 'repost' ? { repostActor: activity.actor } : {},
+        feedStore.isPostDeleted,
       ));
     if (newPosts.length > 0) {
       following.items = [...following.items, ...newPosts];
@@ -629,7 +632,8 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       }
 
       forYouLoadedPostIds.add(postID);
-      const feedPost = postToFeedPost(recommendation.post);
+      normalizePostReferences(recommendation.post, feedStore.isPostDeleted);
+      const feedPost = postToFeedPost(recommendation.post, {}, feedStore.isPostDeleted);
       if (!audience.authenticated) {
         feedPost.likeStatus = 'ready';
         feedPost.repostStatus = 'ready';
@@ -931,6 +935,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         const freshPost = postToFeedPost(
           post,
           activity.activity_type === 'repost' ? { repostActor: activity.actor } : {},
+          feedStore.isPostDeleted,
         );
         const previousPost = previousPostsByID.get(freshPost.id);
         freshPosts.push(previousPost && previousPost.repostStatus !== 'unknown'
@@ -1140,6 +1145,11 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   const removePostLocal = (postId: number) => {
     following.items = following.items.filter((post) => post.id !== postId);
     forYou.items = forYou.items.filter((item) => item.post.id !== postId);
+    following.items.forEach(post => invalidateFeedPostReferences(post, postId));
+    forYou.items.forEach(item => {
+      invalidateFeedPostReferences(item.post, postId);
+      normalizePostReferences(item.recommendation.post, id => id === postId);
+    });
     followingLoadedPostIds.add(postId);
     engagementMutations.invalidatePost(postId);
     pendingDeletePostIds.delete(postId);

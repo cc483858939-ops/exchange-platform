@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { reactive, ref, watch } from 'vue';
 import { useAuthStore } from './auth';
+import { useFeedStore } from './feed';
 import { getTopicPosts, type TopicSummary } from '../services/topicService';
 import { bookmarkPost, unbookmarkPost } from '../services/bookmarkService';
 import { getPostEngagementStates } from '../services/engagementService';
@@ -15,6 +16,7 @@ import {
   applyFeedLikeStateUpdate,
   applyFeedRepostStateUpdate,
   postToFeedPost,
+  invalidateFeedPostReferences,
   setFeedPostBookmarkUnavailable,
   setFeedPostLikeUnavailable,
   setFeedPostRepostUnavailable,
@@ -50,6 +52,7 @@ const normalizeCount = (value: unknown, fallback: number) => {
 
 export const useTopicSessionStore = defineStore('topicSession', () => {
   const authStore = useAuthStore();
+  const feedStore = useFeedStore();
   const activeSlug = ref<string | null>(null);
   const topic = ref<TopicSummary | null>(null);
   const items = ref<FeedPost[]>([]);
@@ -94,9 +97,9 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
   const appendPosts = (posts: Post[]) => {
     const additions: FeedPost[] = [];
     posts.forEach((post) => {
-      if (loadedPostIDs.has(post.id) || deletedPostIDs.has(post.id)) return;
+      if (loadedPostIDs.has(post.id) || (deletedPostIDs.has(post.id) || feedStore.isPostDeleted(post.id))) return;
       loadedPostIDs.add(post.id);
-      additions.push(postToFeedPost(post));
+      additions.push(postToFeedPost(post, {}, id => deletedPostIDs.has(id) || feedStore.isPostDeleted(id)));
     });
     if (viewerID.value === null) initializeGuestInteractionStates(additions);
     if (additions.length > 0) items.value = [...items.value, ...additions];
@@ -331,6 +334,7 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
     const existed = Boolean(findPost(postID));
     deletedPostIDs.add(postID);
     items.value = items.value.filter(post => post.id !== postID);
+    items.value.forEach(post => invalidateFeedPostReferences(post, postID));
     mutationErrors.delete(postID);
     engagementMutations.invalidatePost(postID);
     return existed;

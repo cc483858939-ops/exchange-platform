@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => ({
   feedStore: {
     viewerID: 7,
     markPostDeleted: vi.fn(),
+    isPostDeleted: vi.fn(() => false),
   },
 }));
 

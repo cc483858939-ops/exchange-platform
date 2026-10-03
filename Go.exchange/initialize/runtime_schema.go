@@ -17,15 +17,15 @@ import (
 )
 
 // RequiredSchemaVersion is the schema version required by this binary.
-// Schema 14 adds indexes for bounded Post substring search.
-const RequiredSchemaVersion int64 = 14
+// Schema 15 adds indexed media eligibility and durable published-media cleanup.
+const RequiredSchemaVersion int64 = 15
 
 // PublishedSchemaCurrentVersion and PublishedSchemaCompatibilityFloor are
 // migration-owned values. They are deliberately separate from the binary's
 // required version so a migration can publish a compatibility interval that
 // spans more than one release.
 const (
-	PublishedSchemaCurrentVersion     int64 = 14
+	PublishedSchemaCurrentVersion     int64 = 15
 	PublishedSchemaCompatibilityFloor int64 = 14
 )
 
@@ -143,7 +143,14 @@ var postSchemaObjectCanaries = []schemaObjectCanary{
 		},
 		Indexes: []string{
 			"uidx_post_media_post_position",
+			"idx_post_media_url",
+			"idx_post_media_large_url",
 		},
+	},
+	{
+		Table:       "post_media_cleanup",
+		Constraints: []string{"chk_post_media_cleanup_identity", "chk_post_media_cleanup_error"},
+		Indexes:     []string{"post_media_cleanup_pkey", "idx_post_media_cleanup_due"},
 	},
 	{
 		Table: "post_media_uploads",
@@ -226,6 +233,7 @@ var apiSchemaModels = []interface{}{
 	&models.Post{},
 	&models.PostMedia{},
 	&models.PostMediaUpload{},
+	&models.PostMediaCleanup{},
 	&models.PostRepost{},
 	&models.PostBookmark{},
 	&models.PostReaction{},

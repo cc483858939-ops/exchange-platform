@@ -402,7 +402,7 @@ export const useAuthStore = defineStore('auth', () => {
     }, { requireLock: true });
   };
 
-  const logout = (): Promise<void> => {
+  const clearAuth = (): Promise<void> => {
     const loggedOutSessionId = sessionId.value;
     advanceSessionVersion();
     applyPersistedSession(null);
@@ -423,7 +423,25 @@ export const useAuthStore = defineStore('auth', () => {
     });
   };
 
-  const clearAuth = logout;
+  const logout = async (): Promise<void> => {
+    // Capture before clearing memory. Never use a later login's credentials.
+    // The server accepts this family's consumed secret if an in-flight refresh
+    // already rotated it, and revocation cannot restore credentials locally.
+    const loggedOutRefreshToken = refreshToken.value;
+    await clearAuth();
+    if (!loggedOutRefreshToken) return;
+    try {
+      const response = await authClient.post('/auth/logout', {
+        refresh_token: loggedOutRefreshToken,
+      });
+      if (response.status !== 204) throw new Error('Server sign-out was not confirmed');
+    } catch {
+      throw new AuthRequestError(
+        'Signed out on this browser, but server sign-out could not be confirmed. The session may still be active.',
+        'AUTH_LOGOUT_UNCONFIRMED',
+      );
+    }
+  };
 
   const syncCurrentIdentityProfile = (candidate: AuthIdentity): boolean => {
     const normalized = normalizeAuthIdentity(candidate);

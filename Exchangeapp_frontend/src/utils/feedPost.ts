@@ -1,4 +1,4 @@
-import type { Post } from '../types/Post';
+import type { Post, PostReference } from '../types/Post';
 import type { PublicAuthor } from '../types/User';
 import type {
   FeedBookmarkStateUpdate,
@@ -29,14 +29,15 @@ const safeQuoteCount = (quotes: number, fallback = 0) => {
 export function postToFeedPost(
   post: Post,
   context: { repostActor?: PublicAuthor } = {},
+  isPostDeleted: (postID: number) => boolean = () => false,
 ): FeedPost {
   return {
     id: post.id,
     content: post.content,
     language: post.language,
     media: post.media.map(item => ({ ...item })),
-    quotePost: post.quote_post,
-    replyToPost: post.reply_to_post,
+    quotePost: normalizePostReference(post.quote_post, isPostDeleted),
+    replyToPost: normalizePostReference(post.reply_to_post, isPostDeleted),
     author: post.author,
     createdAt: post.published_at || post.created_at,
     likeCount: post.like_count ?? 0,
@@ -106,6 +107,30 @@ export function applyFeedRepostStateUpdate(post: FeedPost, update: FeedRepostSta
     post.repostStatus = 'unknown';
   }
   return true;
+}
+
+export function normalizePostReference(
+  reference: PostReference | null | undefined,
+  isPostDeleted: (postID: number) => boolean,
+): PostReference | null | undefined {
+  return reference && (reference.deleted || isPostDeleted(reference.id))
+    ? { id: reference.id, deleted: true }
+    : reference;
+}
+
+export function invalidateFeedPostReferences(post: FeedPost, deletedPostID: number): void {
+  if (post.quotePost?.id === deletedPostID) {
+    post.quotePost = { id: deletedPostID, deleted: true };
+  }
+  if (post.replyToPost?.id === deletedPostID) {
+    post.replyToPost = { id: deletedPostID, deleted: true };
+  }
+}
+
+export function normalizePostReferences(post: Post, isPostDeleted: (postID: number) => boolean): Post {
+  post.quote_post = normalizePostReference(post.quote_post, isPostDeleted) ?? null;
+  post.reply_to_post = normalizePostReference(post.reply_to_post, isPostDeleted) ?? null;
+  return post;
 }
 
 export function setFeedPostBookmarkReady(

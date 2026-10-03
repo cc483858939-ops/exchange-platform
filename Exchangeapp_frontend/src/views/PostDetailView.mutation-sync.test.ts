@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => ({
   feedStore: {
     viewerID: 7,
     markPostDeleted: vi.fn(),
+    isPostDeleted: vi.fn((_postID: number) => false),
   },
   externalLike: vi.fn(),
   externalBookmark: vi.fn(),
@@ -58,6 +59,7 @@ const mocks = vi.hoisted(() => ({
   detailSync: null as {
     applyExternalBookmarkStateLocal: (update: unknown) => boolean;
     applyQuoteCountUpdateLocal: (update: unknown) => boolean;
+    removePostLocal: (postID: number) => void;
   } | null,
 }));
 
@@ -237,6 +239,7 @@ describe('PostDetailView mutation synchronization', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.feedStore.isPostDeleted.mockReset().mockReturnValue(false);
     mocks.route = reactive({ params: { id: '42' }, query: {}, hash: '' });
     originalHistoryState = window.history.state;
     originalHistoryURL = window.location.href;
@@ -338,6 +341,55 @@ describe('PostDetailView mutation synchronization', () => {
     expect(mocks.detailSync?.applyQuoteCountUpdateLocal({ postId: 99, quoteCount: 12 })).toBe(false);
     expect((mounted.vm as any).$.setupState.quoteCount).toBe(9);
 
+    mounted.unmount();
+  });
+
+  it('purges root and reply references on external deletion without removing their parent', async () => {
+    const reference = {
+      id: 99, deleted: false as const, author: post.author, content: 'Deleted body', published_at: post.published_at,
+      media: [{ type: 'image' as const, url: '/deleted.png', large_url: '/deleted-large.png', width: 10, height: 10, position: 0 }],
+    };
+    mocks.getPostById.mockResolvedValueOnce({ ...post, quote_post: reference });
+    mocks.getPostReplies.mockResolvedValueOnce({ items: [{ ...reply(9), reply_to_post: reference }], next_cursor: null });
+    const mounted = mountDetail(); await flushPromises();
+    expect(mounted.get('.post-detail__reference-content').text()).toBe('Deleted body');
+    mocks.detailSync!.removePostLocal(99);
+    await flushPromises();
+    const state = (mounted.vm as any).$.setupState;
+    expect(state.post.quote_post).toEqual({ id: 99, deleted: true });
+    expect(state.replies[0].reply_to_post).toEqual({ id: 99, deleted: true });
+    expect(state.post.content).toBe(post.content);
+    expect(state.replies[0].id).toBe(9);
+    expect(mounted.get('.post-detail__reference-tombstone').text()).toBe('Post unavailable');
+    expect(mounted.find('.post-detail__reference-content').exists()).toBe(false);
+    mounted.unmount();
+  });
+
+  it('normalizes a root reference deleted while its initial request was pending', async () => {
+    const request = deferred<Post>();
+    mocks.getPostById.mockReturnValueOnce(request.promise);
+    const mounted = mountDetail();
+    mocks.feedStore.isPostDeleted.mockImplementation(id => id === 99);
+    mocks.detailSync!.removePostLocal(99);
+    request.resolve({ ...post, reply_to_post: {
+      id: 99, deleted: false, author: post.author, content: 'Stale body', published_at: post.published_at, media: [],
+    } });
+    await flushPromises();
+    expect((mounted.vm as any).$.setupState.post.reply_to_post).toEqual({ id: 99, deleted: true });
+    expect(mounted.get('.post-detail__reference-tombstone').text()).toBe('Post unavailable');
+    mounted.unmount();
+  });
+
+  it('filters a reply deleted while pagination was pending', async () => {
+    const request = deferred<{ items: Post[]; next_cursor: string | null }>();
+    mocks.getPostReplies.mockResolvedValueOnce({ items: [reply(9)], next_cursor: 'next' }).mockReturnValueOnce(request.promise);
+    const mounted = mountDetail(); await flushPromises();
+    await mounted.get('.test-load-more').trigger('click');
+    mocks.feedStore.isPostDeleted.mockImplementation(id => id === 9);
+    mocks.detailSync!.removePostLocal(9);
+    request.resolve({ items: [reply(9), reply(10)], next_cursor: null });
+    await flushPromises();
+    expect((mounted.vm as any).$.setupState.replies.map((value: Post) => value.id)).toEqual([10]);
     mounted.unmount();
   });
 

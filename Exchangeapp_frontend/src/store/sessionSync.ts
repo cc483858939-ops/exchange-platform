@@ -97,6 +97,7 @@ export type BookmarksSessionSync = {
 export type PostDetailSessionSync = {
   applyExternalBookmarkStateLocal: (update: FeedBookmarkStateUpdate) => boolean;
   applyQuoteCountUpdateLocal: (update: PostQuoteCountUpdate) => boolean;
+  removePostLocal?: (postID: number) => void;
 };
 
 export type QuotesSessionSync = {
@@ -104,6 +105,7 @@ export type QuotesSessionSync = {
   applyExternalRepostStateLocal: (update: FeedRepostStateUpdate) => boolean;
   applyExternalBookmarkStateLocal: (update: FeedBookmarkStateUpdate) => boolean;
   applyQuoteCountUpdateLocal: (update: PostQuoteCountUpdate) => boolean;
+  removePostLocal: (postID: number) => void;
 };
 
 let homeTimelineSync: HomeTimelineSync | null = null;
@@ -197,6 +199,8 @@ export const syncHomeRepostState = (update: FeedRepostStateUpdate) => {
 };
 
 export const syncHomePostRemoval = (postID: number) => {
+  quotesSessionSync?.removePostLocal(postID);
+  postDetailSessionSync?.removePostLocal?.(postID);
   profileSessionSync?.removePostEverywhereLocal(postID);
   historySessionSync?.removePostLocal(postID);
   topicSessionSync?.removePostLocal(postID);
@@ -298,6 +302,8 @@ export const syncHistoryBookmarkState = (update: FeedBookmarkStateUpdate) => {
 };
 
 export const syncProfilePostRemoval = (postID: number) => {
+  quotesSessionSync?.removePostLocal(postID);
+  postDetailSessionSync?.removePostLocal?.(postID);
   homeTimelineSync?.removePostLocal(postID);
   historySessionSync?.removePostLocal(postID);
   topicSessionSync?.removePostLocal(postID);
@@ -408,6 +414,8 @@ export const markOwnProfileTimelineStale = () =>
   profileSessionSync?.markOwnProfileTimelineStale?.() ?? false;
 
 export const syncExternalPostRemoval = (postID: number) => {
+  quotesSessionSync?.removePostLocal(postID);
+  postDetailSessionSync?.removePostLocal?.(postID);
   homeTimelineSync?.removePostLocal(postID);
   profileSessionSync?.removePostEverywhereLocal(postID);
   historySessionSync?.removePostLocal(postID);

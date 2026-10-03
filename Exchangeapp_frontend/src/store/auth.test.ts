@@ -163,6 +163,7 @@ beforeEach(() => {
   stores = [];
   setActivePinia(createPinia());
   mocks.post.mockReset();
+  mocks.post.mockResolvedValue({ status: 204 });
   lockRequest = installSerializedLock();
 });
 
@@ -496,6 +497,51 @@ describe('auth store cross-tab session coordination', () => {
 
     expect(readStoredSession()).toBeNull();
     expect(localStorage.getItem(AUTH_USER_STORAGE_KEY)).toBeNull();
+  });
+
+  it('revokes only the captured refresh credential after clearing local state', async () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    const response = deferred<{ status: number }>();
+    mocks.post.mockReturnValueOnce(response.promise);
+    const logout = store.logout();
+    expect(store.isAuthenticated).toBe(false);
+    await vi.waitFor(() => expect(mocks.post).toHaveBeenCalledWith('/auth/logout', {
+      refresh_token: 'alice-refresh',
+    }));
+    expect(readStoredSession()).toBeNull();
+    writePersistedAuthSession(persistedSession(otherIdentity, 'bob-access', 'bob-refresh', 'sid-8'));
+    localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(otherIdentity));
+    window.dispatchEvent(new StorageEvent('storage', { key: AUTH_SESSION_STORAGE_KEY }));
+    response.resolve({ status: 204 });
+    await logout;
+    expect(store.token).toBe(bearerFor('bob-access', otherIdentity));
+    expect(readStoredSession()?.refreshToken).toBe('bob-refresh');
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['network', 'timeout', 'server', 'unexpected response'])(
+    'reports unconfirmed server logout on %s while keeping local credentials cleared', async (failure) => {
+      seedV2Auth();
+      const store = createAuthStore();
+      if (failure === 'unexpected response') mocks.post.mockResolvedValueOnce({ status: 200 });
+      else mocks.post.mockRejectedValueOnce(failure === 'timeout'
+        ? { code: 'ECONNABORTED' }
+        : { response: failure === 'server' ? { status: 503 } : undefined });
+      await expect(store.logout()).rejects.toMatchObject({ code: 'AUTH_LOGOUT_UNCONFIRMED' });
+      expect(store.isAuthenticated).toBe(false);
+      expect(readStoredSession()).toBeNull();
+      expect(localStorage.getItem(AUTH_USER_STORAGE_KEY)).toBeNull();
+    },
+  );
+
+  it('performs local-only invalidation and does not send empty logout credentials', async () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    await store.clearAuth();
+    await store.logout();
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(readStoredSession()).toBeNull();
   });
 
   it('preserves a new login when an older queued logout runs', async () => {

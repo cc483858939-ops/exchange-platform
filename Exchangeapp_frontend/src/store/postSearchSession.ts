@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, reactive, ref, watch } from 'vue';
 import { useAuthStore } from './auth';
+import { useFeedStore } from './feed';
 import { getPostEngagementStates } from '../services/engagementService';
 import { searchPosts } from '../services/postSearchService';
 import type { Post } from '../types/Post';
@@ -19,6 +20,7 @@ import {
   applyFeedLikeStateUpdate,
   applyFeedRepostStateUpdate,
   postToFeedPost,
+  invalidateFeedPostReferences,
   setFeedPostBookmarkUnavailable,
   setFeedPostLikeUnavailable,
   setFeedPostRepostUnavailable,
@@ -105,6 +107,7 @@ const normalizeCountOrZero = (value: number) => normalizeCount(value, 0);
 
 export const usePostSearchSessionStore = defineStore('postSearchSession', () => {
   const authStore = useAuthStore();
+  const feedStore = useFeedStore();
   const viewerID = ref<number | null>(null);
   const viewerGeneration = ref(0);
   const criteria = ref<PostSearchCriteriaV1>({ ...defaultCriteria });
@@ -170,9 +173,9 @@ export const usePostSearchSessionStore = defineStore('postSearchSession', () => 
   const appendPosts = (posts: Post[]) => {
     const additions: FeedPost[] = [];
     posts.forEach((post) => {
-      if (!Number.isSafeInteger(post.id) || post.id <= 0 || loadedPostIDs.has(post.id) || deletedPostIDs.has(post.id)) return;
+      if (!Number.isSafeInteger(post.id) || post.id <= 0 || loadedPostIDs.has(post.id) || (deletedPostIDs.has(post.id) || feedStore.isPostDeleted(post.id))) return;
       loadedPostIDs.add(post.id);
-      additions.push(postToFeedPost(post));
+      additions.push(postToFeedPost(post, {}, id => deletedPostIDs.has(id) || feedStore.isPostDeleted(id)));
     });
     if (viewerID.value === null) initializeGuestInteractionStates(additions);
     if (additions.length > 0) items.value = [...items.value, ...additions];
@@ -467,6 +470,7 @@ export const usePostSearchSessionStore = defineStore('postSearchSession', () => 
     deletedPostIDs.add(postID);
     const existed = Boolean(findPost(postID));
     items.value = items.value.filter(post => post.id !== postID);
+    items.value.forEach(post => invalidateFeedPostReferences(post, postID));
     loadedPostIDs.delete(postID);
     engagementMutations.invalidatePost(postID);
     mutationErrors.delete(postID);

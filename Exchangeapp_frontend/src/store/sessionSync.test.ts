@@ -30,11 +30,13 @@ import {
   syncHomeLikeState,
   syncHomeRepostState,
   syncHomeBookmarkState,
+  syncHomePostRemoval,
   syncProfileAuthorIdentity,
   syncProfileFollowState,
   syncProfileLikeState,
   syncProfileRepostState,
   syncProfileBookmarkState,
+  syncProfilePostRemoval,
   syncHistoryBookmarkState,
   syncTopicBookmarkState,
   syncTopicLikeState,
@@ -144,12 +146,14 @@ const registerSinks = () => {
     replaceAuthorIdentityLocal: vi.fn().mockReturnValue(true),
   };
   const quotes = {
+    removePostLocal: vi.fn(),
     applyExternalLikeStateLocal: vi.fn().mockReturnValue(true),
     applyExternalRepostStateLocal: vi.fn().mockReturnValue(true),
     applyExternalBookmarkStateLocal: vi.fn().mockReturnValue(true),
     applyQuoteCountUpdateLocal: vi.fn().mockReturnValue(true),
   };
   const postDetail = {
+    removePostLocal: vi.fn(),
     applyExternalBookmarkStateLocal: vi.fn().mockReturnValue(true),
     applyQuoteCountUpdateLocal: vi.fn().mockReturnValue(true),
   };
@@ -167,6 +171,14 @@ const registerSinks = () => {
 };
 
 describe('sessionSync external mutation sinks', () => {
+  it.each([syncExternalPostRemoval, syncHomePostRemoval, syncProfilePostRemoval])(
+    'sends deletion from every entry point to Quotes and detail without rebroadcast', (sync) => {
+      const { quotes, postDetail } = registerSinks();
+      sync(42);
+      expect(quotes.removePostLocal).toHaveBeenCalledExactlyOnceWith(42);
+      expect(postDetail.removePostLocal).toHaveBeenCalledExactlyOnceWith(42);
+    },
+  );
   it('sends external likes to Home and Profile exactly once', () => {
     const { home, profile, postSearch, history, topic, bookmarks, quotes } = registerSinks();
 

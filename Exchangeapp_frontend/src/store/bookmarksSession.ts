@@ -17,12 +17,14 @@ import {
   applyFeedLikeStateUpdate,
   applyFeedRepostStateUpdate,
   postToFeedPost,
+  invalidateFeedPostReferences,
   setFeedPostBookmarkUnavailable,
   setFeedPostLikeUnavailable,
   setFeedPostRepostUnavailable,
 } from '../utils/feedPost';
 import { normalizePostQuoteCountUpdate } from '../utils/quoteCount';
 import { useAuthStore } from './auth';
+import { useFeedStore } from './feed';
 import {
   registerBookmarksSessionSync,
   syncExternalPostBookmarkState,
@@ -61,6 +63,7 @@ const normalizeID = (value: unknown): number | null => (
 
 export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
   const authStore = useAuthStore();
+  const feedStore = useFeedStore();
   const viewerID = ref<number | null>(null);
   const viewerGeneration = ref(0);
   const items = ref<FeedPost[]>([]);
@@ -149,12 +152,12 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
     const additions: FeedPost[] = [];
     posts.forEach((post) => {
       if (
-        deletedPostIDs.has(post.id)
+        (deletedPostIDs.has(post.id) || feedStore.isPostDeleted(post.id))
         || loadedPostIDs.has(post.id)
         || removedBookmarkSnapshots.has(post.id)
       ) return;
       loadedPostIDs.add(post.id);
-      const feedPost = postToFeedPost(post);
+      const feedPost = postToFeedPost(post, {}, id => deletedPostIDs.has(id) || feedStore.isPostDeleted(id));
       // Membership in this endpoint is the initial positive bookmark state.
       feedPost.bookmarked = true;
       feedPost.bookmarkStatus = 'ready';
@@ -429,9 +432,9 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
       const freshIDs = new Set<number>();
       const freshPosts: FeedPost[] = [];
       (response.items ?? []).forEach((post) => {
-        if (freshIDs.has(post.id) || deletedPostIDs.has(post.id) || removedBookmarkSnapshots.has(post.id)) return;
+        if (freshIDs.has(post.id) || (deletedPostIDs.has(post.id) || feedStore.isPostDeleted(post.id)) || removedBookmarkSnapshots.has(post.id)) return;
         freshIDs.add(post.id);
-        const next = postToFeedPost(post);
+        const next = postToFeedPost(post, {}, id => deletedPostIDs.has(id) || feedStore.isPostDeleted(id));
         next.bookmarked = true;
         next.bookmarkStatus = 'ready';
         const old = oldByID.get(post.id);
@@ -447,7 +450,7 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
           }
           : next);
       });
-      const cachedTail = items.value.filter(post => !deletedPostIDs.has(post.id) && !freshIDs.has(post.id));
+      const cachedTail = items.value.filter(post => !(deletedPostIDs.has(post.id) || feedStore.isPostDeleted(post.id)) && !freshIDs.has(post.id));
       items.value = [...freshPosts, ...cachedTail];
       loadedPostIDs.clear();
       items.value.forEach(post => loadedPostIDs.add(post.id));
@@ -656,8 +659,10 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
     const existed = Boolean(findPost(postID) || removedBookmarkSnapshots.has(postID));
     deletedPostIDs.add(postID);
     items.value = items.value.filter(post => post.id !== postID);
+    items.value.forEach(post => invalidateFeedPostReferences(post, postID));
     loadedPostIDs.delete(postID);
     removedBookmarkSnapshots.delete(postID);
+    removedBookmarkSnapshots.forEach(snapshot => invalidateFeedPostReferences(snapshot.post, postID));
     engagementMutations.invalidatePost(postID);
     return existed;
   };

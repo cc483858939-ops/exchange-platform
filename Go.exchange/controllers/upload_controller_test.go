@@ -744,7 +744,7 @@ func TestFileObjectKeyAllowlistAcceptsPublicMediaVariantsAndRejectsPrivateKeys(t
 	}
 }
 
-func TestFileCacheControlMakesOnlyV1PublicMediaImmutable(t *testing.T) {
+func TestFileCacheControlRevalidatesPostMediaAndKeepsProfileMediaImmutable(t *testing.T) {
 	for _, testCase := range []struct {
 		key  string
 		want string
@@ -754,8 +754,8 @@ func TestFileCacheControlMakesOnlyV1PublicMediaImmutable(t *testing.T) {
 		{key: "profile-covers/devdata/v1/mkbhd/" + strings.Repeat("c", 64) + ".jpg", want: "public, max-age=31536000, immutable"},
 		{key: "profile-avatars/42/550e8400-e29b-41d4-a716-446655440000.jpg", want: "public, max-age=86400"},
 		{key: "post-media/42/image.jpg", want: "public, max-age=86400"},
-		{key: "post-media/users/v1/42/550e8400-e29b-41d4-a716-446655440000/medium.jpg", want: "public, max-age=31536000, immutable"},
-		{key: "post-media/users/v1/42/550e8400-e29b-41d4-a716-446655440000/large.png", want: "public, max-age=31536000, immutable"},
+		{key: "post-media/users/v1/42/550e8400-e29b-41d4-a716-446655440000/medium.jpg", want: "private, no-cache, max-age=0, must-revalidate"},
+		{key: "post-media/users/v1/42/550e8400-e29b-41d4-a716-446655440000/large.png", want: "private, no-cache, max-age=0, must-revalidate"},
 		{key: "post-media/users/v1/42/550e8400-e29b-41d4-a716-446655440000/original.jpg", want: "public, max-age=86400"},
 		{key: "post-media/users/v1/42/550e8400-e29b-41d4-a716-446655440000/manifest.json", want: "public, max-age=86400"},
 	} {

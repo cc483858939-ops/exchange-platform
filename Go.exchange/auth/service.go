@@ -21,6 +21,7 @@ type TokenService interface {
 	AccessTokenVerifier
 	IssuePair(ctx context.Context, userID uint) (TokenPair, error)
 	RotateRefresh(ctx context.Context, rawRefreshToken, requestID string) (TokenPair, error)
+	RevokeRefresh(ctx context.Context, rawRefreshToken string) error
 }
 
 type Manager struct {
@@ -134,6 +135,16 @@ func (m *Manager) RotateRefresh(ctx context.Context, rawRefreshToken, requestID 
 		AccessExpiresIn:  m.config.AccessTTL,
 		RefreshExpiresIn: effectiveTTL,
 	}, nil
+}
+
+// RevokeRefresh ends only the presented refresh family. Already-issued access
+// JWTs retain their configured lifetime; access verification remains stateless.
+func (m *Manager) RevokeRefresh(ctx context.Context, rawRefreshToken string) error {
+	parsed, err := parseRefreshToken(rawRefreshToken)
+	if err != nil {
+		return err
+	}
+	return m.store.Revoke(ctx, parsed.sessionID, hashRefreshSecret(parsed.secret))
 }
 
 func minDuration(left, right time.Duration) time.Duration {
