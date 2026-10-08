@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -26,12 +27,37 @@ type recoveryTestStore struct {
 	reads      int
 	registries int
 	versions   int
+	tokens     map[uint]string
 }
 
 func newRecoveryTestStore() *recoveryTestStore {
 	return &recoveryTestStore{
 		ready: make(map[uint]likes.State), registered: make(map[uint]bool), markers: make(map[uint]int64),
 		fail: make(map[uint]error), writes: make(map[uint]likes.FullState), fences: make(map[uint]likes.RecoveryFence),
+	}
+}
+
+func (s *recoveryTestStore) BeginRebuildMany(_ context.Context, ids []uint) (map[uint]string, map[uint]error, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tokens == nil {
+		s.tokens = make(map[uint]string)
+	}
+	result := make(map[uint]string, len(ids))
+	for _, id := range ids {
+		result[id] = fmt.Sprintf("token-%d", id)
+		s.tokens[id] = result[id]
+	}
+	return result, nil, nil
+}
+
+func (s *recoveryTestStore) ReleaseRebuildMany(_ context.Context, tokens map[uint]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, token := range tokens {
+		if s.tokens[id] == token {
+			delete(s.tokens, id)
+		}
 	}
 }
 
@@ -84,6 +110,9 @@ func (s *recoveryTestStore) Recover(ctx context.Context, id uint, state likes.Fu
 	if err := s.fail[id]; err != nil {
 		return false, err
 	}
+	if fence.RebuildToken == "" || s.tokens[id] != fence.RebuildToken {
+		return false, likes.ErrLikeRecoveryFenceLost
+	}
 	s.writes[id], s.fences[id] = state, fence
 	s.ready[id] = likes.State{Count: state.Count, Version: state.Version}
 	return true, nil
@@ -109,6 +138,23 @@ func waitForRecoverySignal(t *testing.T, signal <-chan struct{}) {
 	case <-signal:
 	case <-time.After(5 * time.Second):
 		t.Fatal("recovery test did not reach expected boundary")
+	}
+}
+
+func TestPostLikeRecoveryAcquiresTokenBeforeLoadAndRejectsRevocation(t *testing.T) {
+	store := newRecoveryTestStore()
+	results, err := recoverPostLikeBatch(t.Context(), store, []uint{9}, func(context.Context, []uint) (map[uint]postLikeBaseline, error) {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		if store.tokens[9] == "" {
+			t.Fatal("SQL read before rebuild token")
+		}
+		// Deletion revokes the token while the old SQL baseline is in flight.
+		delete(store.tokens, 9)
+		return map[uint]postLikeBaseline{9: buildPostLikeBaseline(0, 0, nil)}, nil
+	})
+	if err != nil || !errors.Is(results[9], likes.ErrLikeRecoveryFenceLost) || len(store.writes) != 0 {
+		t.Fatalf("stale baseline accepted: results=%v writes=%v err=%v", results, store.writes, err)
 	}
 }
 

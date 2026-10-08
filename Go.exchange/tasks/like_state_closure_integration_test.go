@@ -244,7 +244,7 @@ func TestPostLikeSafeExpiryRecoveryIntegration(t *testing.T) {
 	env.posts = []uint{env.post.ID}
 
 	ctx := context.Background()
-	if initialized, err := env.store.Initialize(ctx, env.post.ID, 0, 0, nil); err != nil || !initialized {
+	if initialized, err := initializeLikeStore(env.store, ctx, env.post.ID, 0, 0, nil); err != nil || !initialized {
 		t.Fatalf("initialize created=%t err=%v", initialized, err)
 	}
 	first := invokeLikeStateClosureHandler(t, http.MethodPut, "/api/posts/"+strconv.FormatUint(uint64(env.post.ID), 10)+"/like", env.post.ID, env.actor.ID, controllers.LikePost)
@@ -409,7 +409,7 @@ func TestPostLikeDeletePurgeFailureReconcilesIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	env.posts = []uint{env.post.ID}
-	if initialized, err := env.store.Initialize(t.Context(), env.post.ID, 0, 0, nil); err != nil || !initialized {
+	if initialized, err := initializeLikeStore(env.store, t.Context(), env.post.ID, 0, 0, nil); err != nil || !initialized {
 		t.Fatalf("initialize created=%t err=%v", initialized, err)
 	}
 	likeRecorder := invokeLikeStateClosureHandler(t, http.MethodPut, "/api/posts/"+strconv.FormatUint(uint64(env.post.ID), 10)+"/like", env.post.ID, env.author.ID, controllers.LikePost)
@@ -483,7 +483,7 @@ func TestLikeStateMaintenanceRegistryLeavesActiveAndPurgesDeletedOrMissingIntegr
 	}
 	for _, post := range posts {
 		env.posts = append(env.posts, post.ID)
-		if initialized, err := env.store.Initialize(t.Context(), post.ID, 0, 0, nil); err != nil || !initialized {
+		if initialized, err := initializeLikeStore(env.store, t.Context(), post.ID, 0, 0, nil); err != nil || !initialized {
 			t.Fatalf("post=%d initialize created=%t err=%v", post.ID, initialized, err)
 		}
 	}

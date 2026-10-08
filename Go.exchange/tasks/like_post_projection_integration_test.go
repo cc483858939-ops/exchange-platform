@@ -127,7 +127,7 @@ func TestCanonicalPostLikeRedisToPostgresProjectionIntegration(t *testing.T) {
 	behaviorEventID = "like-state:" + strconv.FormatUint(uint64(actor.ID), 10) + ":" + strconv.FormatUint(uint64(post.ID), 10) + ":1"
 	reactionAggregateID = strconv.FormatUint(uint64(actor.ID), 10) + ":" + strconv.FormatUint(uint64(post.ID), 10)
 
-	initialized, err := store.Initialize(ctx, post.ID, 0, 0, nil)
+	initialized, err := initializeLikeStore(store, ctx, post.ID, 0, 0, nil)
 	if err != nil || !initialized {
 		t.Fatalf("like state initialized=%t err=%v", initialized, err)
 	}

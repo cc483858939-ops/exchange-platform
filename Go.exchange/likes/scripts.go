@@ -65,8 +65,31 @@ if changed then
 end
 return {count, current, changed, version}
 `)
+var beginRebuildScript = redis.NewScript(`
+local ready_type = redis.call('TYPE', KEYS[1]).ok
+if ready_type ~= 'none' and ready_type ~= 'string' then return redis.error_reply('LIKE_TYPE_PRECHECK') end
+if redis.call('GET', KEYS[1]) == 'deleted' and ARGV[3] ~= '1' then return redis.error_reply('LIKE_POST_DELETED') end
+if not redis.call('SET', KEYS[2], ARGV[1], 'PX', ARGV[2], 'NX') then return redis.error_reply('LIKE_RECOVERY_FENCE_LOST') end
+return 1
+`)
+
+var releaseRebuildScript = redis.NewScript(`
+if redis.call('TYPE', KEYS[1]).ok == 'string' and redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end
+return 0
+`)
+
+// This fence is independent of live-state/global-index type prechecks.
+var markPostDeletedScript = redis.NewScript(`
+-- A delayed duplicate must not turn an already collected fence permanent again.
+if redis.call('TYPE', KEYS[1]).ok ~= 'string' or redis.call('GET', KEYS[1]) ~= 'deleted' then
+  redis.call('SET', KEYS[1], 'deleted')
+end
+redis.call('DEL', KEYS[2])
+return 1
+`)
+
 var initializeScript = redis.NewScript(`
-if redis.call('TYPE', KEYS[1]).ok == 'string' and redis.call('GET', KEYS[1]) == 'deleted' then return redis.error_reply('LIKE_POST_DELETED') end
+if redis.call('TYPE', KEYS[1]).ok == 'string' and redis.call('GET', KEYS[1]) == 'deleted' and string.sub(ARGV[5], 1, 11) ~= 'reactivate:' then return redis.error_reply('LIKE_POST_DELETED') end
 local function type_matches(key, expected)
   local actual = redis.call('TYPE', key).ok
   return actual == 'none' or actual == expected
@@ -78,18 +101,20 @@ if not type_matches(KEYS[1], 'string') or
    not type_matches(KEYS[4], 'string') or
    not type_matches(KEYS[5], 'set') or
    not type_matches(KEYS[6], 'zset') or
-   not type_matches(KEYS[7], 'hash') then
+   not type_matches(KEYS[7], 'hash') or not type_matches(KEYS[8], 'string') then
   return redis.error_reply('LIKE_TYPE_PRECHECK')
 end
-if redis.call('GET', KEYS[1]) == '1' then return 0 end
+if ARGV[5] == '' or redis.call('GET', KEYS[8]) ~= ARGV[5] then return redis.error_reply('LIKE_RECOVERY_FENCE_LOST') end
+if redis.call('GET', KEYS[1]) == '1' then redis.call('DEL', KEYS[8]); return 0 end
 redis.call('DEL', KEYS[3])
-for i = 5, #ARGV do redis.call('SADD', KEYS[3], ARGV[i]) end
+for i = 6, #ARGV do redis.call('SADD', KEYS[3], ARGV[i]) end
 redis.call('SET', KEYS[2], ARGV[1])
 redis.call('SET', KEYS[4], ARGV[2])
 redis.call('SADD', KEYS[5], ARGV[3])
 redis.call('ZADD', KEYS[6], ARGV[4], ARGV[3])
 redis.call('HDEL', KEYS[7], ARGV[3])
 redis.call('SET', KEYS[1], '1')
+redis.call('DEL', KEYS[8])
 return 1
 `)
 
@@ -106,9 +131,10 @@ if not type_matches(KEYS[1], 'string') or
    not type_matches(KEYS[4], 'string') or
    not type_matches(KEYS[5], 'set') or
    not type_matches(KEYS[6], 'zset') or
-   not type_matches(KEYS[7], 'hash') then
+   not type_matches(KEYS[7], 'hash') or not type_matches(KEYS[8], 'string') then
   return redis.error_reply('LIKE_TYPE_PRECHECK')
 end
+if ARGV[8] == '' or redis.call('GET', KEYS[8]) ~= ARGV[8] then return redis.error_reply('LIKE_RECOVERY_FENCE_LOST') end
 
 local ready = redis.call('GET', KEYS[1])
 if ready == '1' then
@@ -117,6 +143,7 @@ if ready == '1' then
   local count = count_raw and tonumber(count_raw)
   local version = version_raw and tonumber(version_raw)
   if count and count >= 0 and version and version >= 0 and redis.call('SCARD', KEYS[3]) == count then
+    redis.call('DEL', KEYS[8])
     return 0
   end
 end
@@ -146,11 +173,12 @@ end
 redis.call('DEL', KEYS[3])
 redis.call('SET', KEYS[2], ARGV[1])
 redis.call('SET', KEYS[4], ARGV[2])
-for i = 8, #ARGV do redis.call('SADD', KEYS[3], ARGV[i]) end
+for i = 9, #ARGV do redis.call('SADD', KEYS[3], ARGV[i]) end
 redis.call('SADD', KEYS[5], ARGV[3])
 redis.call('ZADD', KEYS[6], ARGV[7], ARGV[3])
 redis.call('HDEL', KEYS[7], ARGV[3])
 redis.call('SET', KEYS[1], '1')
+redis.call('DEL', KEYS[8])
 return 1
 `)
 
@@ -251,6 +279,8 @@ return 1
 `
 
 var purgePostScript = redis.NewScript(`
+-- Revoke stale rebuilds even when malformed live state prevents cleanup.
+redis.call('DEL', KEYS[11])
 local function type_matches(key, expected)
   local actual = redis.call('TYPE', key).ok
   return actual == 'none' or actual == expected
@@ -277,6 +307,9 @@ redis.call('HDEL', KEYS[7], ARGV[1])
 redis.call('SREM', KEYS[8], ARGV[1])
 redis.call('ZREM', KEYS[9], ARGV[1])
 redis.call('HDEL', KEYS[10], ARGV[1])
+if redis.call('GET', KEYS[1]) == 'deleted' and tonumber(ARGV[2]) > 0 then
+  redis.call('PEXPIRE', KEYS[1], ARGV[2])
+end
 return 1
 `)
 

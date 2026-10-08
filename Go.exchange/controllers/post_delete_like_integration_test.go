@@ -54,7 +54,7 @@ func TestDeletePostPurgesOnlyTargetRedisLikeStateIntegration(t *testing.T) {
 
 	store := likes.NewStore(redisClient)
 	for _, postID := range postIDs {
-		if created, err := store.Initialize(t.Context(), postID, 1, 4, []uint{other.ID}); err != nil || !created {
+		if created, err := initializeLikeStore(store, t.Context(), postID, 1, 4, []uint{other.ID}); err != nil || !created {
 			t.Fatalf("initialize post=%d created=%t err=%v", postID, created, err)
 		}
 	}

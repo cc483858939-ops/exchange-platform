@@ -87,7 +87,7 @@ func SyncTargetedReplacement(ctx context.Context, db *gorm.DB, registry SourceRe
 	result.AffectedPostIDs = sortedIDs(maintenance.affected)
 	result.NewPostIDs = sortedIDs(maintenance.newPosts)
 	result.PurgedPostIDs = sortedIDs(maintenance.purged)
-	performPostCommitMaintenance(ctx, redisClient, maintenance)
+	performPostCommitMaintenance(ctx, db, redisClient, maintenance)
 	return result, nil
 }
 

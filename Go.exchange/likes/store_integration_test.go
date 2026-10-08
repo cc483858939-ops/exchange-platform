@@ -41,7 +41,7 @@ func TestStoreMutationAndClaimOwnershipIntegration(t *testing.T) {
 	}
 	cleanup()
 	defer cleanup()
-	created, err := store.Initialize(ctx, postID, 0, 0, nil)
+	created, err := initializeLikeStore(store, ctx, postID, 0, 0, nil)
 	if err != nil || !created {
 		t.Fatalf("initialize created=%t err=%v", created, err)
 	}
@@ -122,10 +122,10 @@ func TestStoreGetManyIntegration(t *testing.T) {
 	cleanup()
 	defer cleanup()
 
-	if created, err := store.Initialize(ctx, postIDs[0], 1, 1, []uint{11}); err != nil || !created {
+	if created, err := initializeLikeStore(store, ctx, postIDs[0], 1, 1, []uint{11}); err != nil || !created {
 		t.Fatalf("article A initialize created=%t err=%v", created, err)
 	}
-	if created, err := store.Initialize(ctx, postIDs[1], 0, 0, nil); err != nil || !created {
+	if created, err := initializeLikeStore(store, ctx, postIDs[1], 0, 0, nil); err != nil || !created {
 		t.Fatalf("article B initialize created=%t err=%v", created, err)
 	}
 
@@ -184,7 +184,7 @@ func TestStorePurgePostRemovesOnlyTargetLikeStateIntegration(t *testing.T) {
 	defer cleanup()
 
 	for _, postID := range []uint{target, unrelated} {
-		if created, err := store.Initialize(ctx, postID, 1, 7, []uint{userID}); err != nil || !created {
+		if created, err := initializeLikeStore(store, ctx, postID, 1, 7, []uint{userID}); err != nil || !created {
 			t.Fatalf("initialize post=%d created=%t err=%v", postID, created, err)
 		}
 	}

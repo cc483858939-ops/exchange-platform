@@ -43,7 +43,7 @@ func TestBehaviorClaimsAreOwnedAndVersionAwareIntegration(t *testing.T) {
 	cleanup()
 	defer cleanup()
 
-	created, err := store.Initialize(ctx, postID, 0, 0, nil)
+	created, err := initializeLikeStore(store, ctx, postID, 0, 0, nil)
 	if err != nil || !created {
 		t.Fatalf("initialize created=%t err=%v", created, err)
 	}

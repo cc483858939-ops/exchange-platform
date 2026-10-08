@@ -41,7 +41,7 @@ func TestDevDataReactivationRestoresRedisLikeStateIntegration(t *testing.T) {
 
 	ctx := context.Background()
 	store := likes.NewStore(client)
-	if created, err := store.Initialize(ctx, postID, 2, 17, []uint{11, 13}); err != nil || !created {
+	if created, err := initializeLikeStore(store, ctx, postID, 2, 17, []uint{11, 13}); err != nil || !created {
 		t.Fatalf("seed like state created=%t err=%v", created, err)
 	}
 	if err := store.PurgePost(ctx, postID); err != nil {
@@ -51,9 +51,16 @@ func TestDevDataReactivationRestoresRedisLikeStateIntegration(t *testing.T) {
 		t.Fatalf("purged state error=%v, want ErrNotReady", err)
 	}
 
-	maintenance := newSyncMaintenance()
-	maintenance.addReactivation(postID, likes.FullState{Count: 2, Version: 17, UserIDs: []uint{11, 13}})
-	performPostCommitMaintenance(ctx, client, maintenance)
+	// A current-state loader runs only after its token exists. The full DB-backed
+	// maintenance path is covered by the PostgreSQL/Redis integration test.
+	if _, err := store.InitializeFrom(ctx, postID, true, func(context.Context) (likes.FullState, error) {
+		if exists, err := client.Exists(likes.RebuildTokenKey(postID)).Result(); err != nil || exists != 1 {
+			t.Fatalf("baseline read before token: exists=%d err=%v", exists, err)
+		}
+		return likes.FullState{Count: 2, Version: 17, UserIDs: []uint{11, 13}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, userID := range []uint{11, 13} {
 		state, err := store.Get(ctx, userID, postID)

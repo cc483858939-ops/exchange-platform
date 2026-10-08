@@ -81,7 +81,7 @@ func TestLikeBehaviorRelayBatchesAndAcksAfterPublishIntegration(t *testing.T) {
 	if err := cleanupLikeRelayIntegrationState(client, []uint{postID}, []uint{userID}); err != nil {
 		t.Fatal(err)
 	}
-	if created, err := store.Initialize(ctx, postID, 0, 0, nil); err != nil || !created {
+	if created, err := initializeLikeStore(store, ctx, postID, 0, 0, nil); err != nil || !created {
 		t.Fatalf("initialize created=%t err=%v", created, err)
 	}
 	if _, err := store.Mutate(ctx, userID, postID, true); err != nil {

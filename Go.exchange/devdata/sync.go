@@ -140,7 +140,7 @@ func SyncSnapshotWithOptions(ctx context.Context, db *gorm.DB, registry SourceRe
 	result.AffectedPostIDs = sortedIDs(maintenance.affected)
 	result.NewPostIDs = sortedIDs(maintenance.newPosts)
 	result.PurgedPostIDs = sortedIDs(maintenance.purged)
-	performPostCommitMaintenance(ctx, redisClient, maintenance)
+	performPostCommitMaintenance(ctx, db, redisClient, maintenance)
 	return result, nil
 }
 
@@ -782,7 +782,7 @@ func readSyncCounts(tx *gorm.DB, result *SyncResult) error {
 	return nil
 }
 
-func performPostCommitMaintenance(ctx context.Context, redisClient *redis.Client, maintenance *syncMaintenance) {
+func performPostCommitMaintenance(ctx context.Context, db *gorm.DB, redisClient *redis.Client, maintenance *syncMaintenance) {
 	if redisClient == nil || maintenance == nil {
 		return
 	}
@@ -793,13 +793,12 @@ func performPostCommitMaintenance(ctx context.Context, redisClient *redis.Client
 	}
 	store := likes.NewStore(redisClient)
 	for _, postID := range sortedIDs(maintenance.newPosts) {
-		if _, err := store.Initialize(ctx, postID, 0, 0, nil); err != nil {
+		if _, err := store.InitializeFrom(ctx, postID, false, currentPostLikeStateLoader(db, postID)); err != nil {
 			log.Printf("WARN [DevData] initialize Redis like state for %d: %v", postID, err)
 		}
 	}
 	for _, postID := range sortedIDs(fullStateIDs(maintenance.reactivations)) {
-		state := maintenance.reactivations[postID]
-		if _, err := store.Initialize(ctx, postID, state.Count, state.Version, state.UserIDs); err != nil {
+		if _, err := store.InitializeFrom(ctx, postID, true, currentPostLikeStateLoader(db, postID)); err != nil {
 			log.Printf("WARN [DevData] restore Redis like state for reactivated Post %d: %v", postID, err)
 		}
 	}
@@ -807,6 +806,21 @@ func performPostCommitMaintenance(ctx context.Context, redisClient *redis.Client
 		if err := store.PurgePost(ctx, postID); err != nil {
 			log.Printf("WARN [DevData] purge Redis like state for %d: %v", postID, err)
 		}
+	}
+}
+
+// Transaction-time reactivation snapshots are not write authorization. Read
+// current canonical state only after deletion can revoke this rebuild token.
+func currentPostLikeStateLoader(db *gorm.DB, postID uint) func(context.Context) (likes.FullState, error) {
+	return func(ctx context.Context) (likes.FullState, error) {
+		if db == nil {
+			return likes.FullState{}, errors.New("database is not initialized")
+		}
+		var post models.Post
+		if err := db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", postID).First(&post).Error; err != nil {
+			return likes.FullState{}, err
+		}
+		return loadReactivationLikeState(db.WithContext(ctx), postID, post.LikeCount, post.LikeSyncVersion)
 	}
 }
 

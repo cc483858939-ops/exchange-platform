@@ -231,6 +231,19 @@ func LikeStateTTL() time.Duration {
 	return envDuration("LIKE_STATE_TTL", 24*time.Hour)
 }
 
+// Deletion tombstones expire by default after successful cleanup.
+func LikeDeletionTombstoneExpiryEnabled() bool {
+	return envBool("LIKE_DELETION_TOMBSTONE_EXPIRY_ENABLED", true)
+}
+
+func LikeDeletionTombstoneTTL() time.Duration {
+	return max(time.Millisecond, envDuration("LIKE_DELETION_TOMBSTONE_TTL", 24*time.Hour))
+}
+
+func LikeRebuildTokenTTL() time.Duration {
+	return max(time.Millisecond, envDuration("LIKE_REBUILD_TOKEN_TTL", 30*time.Second))
+}
+
 // LikeStateReadRenewalThreshold defaults to half the configured expiry TTL.
 func LikeStateReadRenewalThreshold() time.Duration {
 	ttl := LikeStateTTL()

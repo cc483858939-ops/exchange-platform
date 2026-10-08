@@ -37,6 +37,8 @@ type FullState struct {
 type RecoveryFence struct {
 	ExpectedVersion    *int64
 	AllowZeroBootstrap bool
+	// RebuildToken must be acquired before reading the SQL baseline.
+	RebuildToken string
 }
 
 type SnapshotClaim struct {

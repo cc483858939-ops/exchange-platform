@@ -44,7 +44,7 @@ func configureLikeStateMaintenanceExpiry(t *testing.T) {
 
 func prepareLikeStateMaintenanceCandidate(t *testing.T, env *likeStateClosureIntegration, count, version int64, userIDs []uint, now time.Time) {
 	t.Helper()
-	if initialized, err := env.store.Initialize(t.Context(), env.post.ID, count, version, userIDs); err != nil || !initialized {
+	if initialized, err := initializeLikeStore(env.store, t.Context(), env.post.ID, count, version, userIDs); err != nil || !initialized {
 		t.Fatalf("initialize created=%t err=%v", initialized, err)
 	}
 	if err := env.store.TouchExpiryCandidate(t.Context(), env.post.ID, now.Add(-2*time.Hour)); err != nil {
@@ -239,7 +239,7 @@ func TestLikeStateMaintenanceDisabledSkipsExpiryAndReconcilesRegistryIntegration
 	if err := env.db.Delete(&deletedPost).Error; err != nil {
 		t.Fatal(err)
 	}
-	if initialized, err := env.store.Initialize(t.Context(), deletedPost.ID, 0, 0, nil); err != nil || !initialized {
+	if initialized, err := initializeLikeStore(env.store, t.Context(), deletedPost.ID, 0, 0, nil); err != nil || !initialized {
 		t.Fatalf("initialize deleted state created=%t err=%v", initialized, err)
 	}
 

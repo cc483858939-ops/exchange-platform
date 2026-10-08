@@ -9,6 +9,8 @@ import (
 )
 
 type postLikeRecoveryStore interface {
+	BeginRebuildMany(context.Context, []uint) (map[uint]string, map[uint]error, error)
+	ReleaseRebuildMany(context.Context, map[uint]string)
 	GetMany(context.Context, uint, []uint) (map[uint]likes.State, []uint, error)
 	RegistryContainsMany(context.Context, []uint) (map[uint]bool, error)
 	GetRecoverableVersions(context.Context, []uint) (map[uint]int64, error)
@@ -99,6 +101,23 @@ func recoverPostLikeBatch(ctx context.Context, store postLikeRecoveryStore, ids 
 	for id := range states {
 		results[id] = nil
 	}
+	tokens, unavailable, err := store.BeginRebuildMany(ctx, missing)
+	if err != nil {
+		return results, err
+	}
+	defer store.ReleaseRebuildMany(ctx, tokens)
+	acquired := make([]uint, 0, len(tokens))
+	for _, id := range missing {
+		if err := unavailable[id]; err != nil {
+			results[id] = err
+		} else if _, ok := tokens[id]; ok {
+			acquired = append(acquired, id)
+		}
+	}
+	missing = acquired
+	if len(missing) == 0 {
+		return results, nil
+	}
 	registered, err := store.RegistryContainsMany(ctx, missing)
 	if err != nil {
 		return results, err
@@ -129,6 +148,7 @@ func recoverPostLikeBatch(ctx context.Context, store postLikeRecoveryStore, ids 
 			results[id] = err
 			continue
 		}
+		fence.RebuildToken = tokens[id]
 		_, err = store.Recover(ctx, id, likes.FullState{Count: baseline.Count, Version: baseline.Version, UserIDs: baseline.UserIDs}, fence)
 		results[id] = err
 		if err != nil && !isPostLikeBatchUnavailableError(err) {

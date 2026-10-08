@@ -11,6 +11,7 @@ import (
 )
 
 func TestDeletedPostFenceSurvivesCleanupFailureAndStaleRecoveryIntegration(t *testing.T) {
+	t.Setenv("LIKE_DELETION_TOMBSTONE_EXPIRY_ENABLED", "false")
 	addr := os.Getenv("REDIS_TEST_ADDR")
 	if addr == "" {
 		t.Skip("set REDIS_TEST_ADDR to run Redis integration test")
@@ -30,7 +31,7 @@ func TestDeletedPostFenceSurvivesCleanupFailureAndStaleRecoveryIntegration(t *te
 		}
 	})
 	for _, id := range []uint{postID, liveID} {
-		if _, err := store.Initialize(t.Context(), id, 1, 7, []uint{11}); err != nil {
+		if _, err := initializeLikeStore(store, t.Context(), id, 1, 7, []uint{11}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -57,11 +58,11 @@ func TestDeletedPostFenceSurvivesCleanupFailureAndStaleRecoveryIntegration(t *te
 	if err != nil || len(states) != 1 || states[liveID].Count != 1 || len(missing) != 1 || missing[0] != postID {
 		t.Fatalf("batch=%v unavailable=%v err=%v", states, missing, err)
 	}
-	if _, err := store.Initialize(t.Context(), postID, 1, 7, []uint{11}); !errors.Is(err, ErrPostLikeUnavailable) {
+	if _, err := initializeLikeStore(store, t.Context(), postID, 1, 7, []uint{11}); !errors.Is(err, ErrPostLikeUnavailable) {
 		t.Fatalf("stale initializer=%v", err)
 	}
 	version := int64(7)
-	if _, err := store.Recover(t.Context(), postID, FullState{Count: 1, Version: 7, UserIDs: []uint{11}}, RecoveryFence{ExpectedVersion: &version}); !errors.Is(err, ErrPostLikeUnavailable) {
+	if _, err := recoverLikeStore(store, t.Context(), postID, FullState{Count: 1, Version: 7, UserIDs: []uint{11}}, RecoveryFence{ExpectedVersion: &version}); !errors.Is(err, ErrPostLikeUnavailable) {
 		t.Fatalf("stale recovery=%v", err)
 	}
 	if err := client.Del(CountKey(postID)).Err(); err != nil {

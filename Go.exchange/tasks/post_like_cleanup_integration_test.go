@@ -50,7 +50,7 @@ func TestPostLikeCleanupRetainsWorkAcrossOutageAndRetriesIntegration(t *testing.
 		client.SRem(likes.RegistryKey, postID)
 		client.ZRem(likes.ExpiryCandidatesKey, postID)
 	})
-	if _, err := store.Initialize(t.Context(), postID, 0, 0, nil); err != nil {
+	if _, err := initializeLikeStore(store, t.Context(), postID, 0, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)

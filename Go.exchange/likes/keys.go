@@ -20,4 +20,5 @@ func ReadyKey(postID uint) string             { return fmt.Sprintf("post:like:%d
 func CountKey(postID uint) string             { return fmt.Sprintf("post:like:%d:count", postID) }
 func UsersKey(postID uint) string             { return fmt.Sprintf("post:like:%d:users", postID) }
 func VersionKey(postID uint) string           { return fmt.Sprintf("post:like:%d:version", postID) }
+func RebuildTokenKey(postID uint) string      { return fmt.Sprintf("post:like:%d:rebuild-token", postID) }
 func BehaviorPair(userID, postID uint) string { return fmt.Sprintf("%d:%d", userID, postID) }

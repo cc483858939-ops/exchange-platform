@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"Go.exchange/config"
+
 	"github.com/go-redis/redis/v7"
 	"github.com/google/uuid"
 )
@@ -240,7 +242,9 @@ func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint, ttl, r
 	}
 	return states, unavailable, nil
 }
-func (s *Store) Initialize(ctx context.Context, postID uint, count, version int64, userIDs []uint) (bool, error) {
+
+// Initialize requires a token acquired before loading the active SQL baseline.
+func (s *Store) Initialize(ctx context.Context, postID uint, count, version int64, userIDs []uint, rebuildToken string) (bool, error) {
 	if s == nil || s.client == nil {
 		return false, errors.New("redis is not initialized")
 	}
@@ -251,13 +255,13 @@ func (s *Store) Initialize(ctx context.Context, postID uint, count, version int6
 	if !ok || int64(len(userIDs)) != count {
 		return false, errors.New("invalid post like baseline")
 	}
-	args := []interface{}{count, version, postID, time.Now().UTC().UnixMilli()}
+	args := []interface{}{count, version, postID, time.Now().UTC().UnixMilli(), rebuildToken}
 	for _, id := range userIDs {
 		args = append(args, id)
 	}
 	value, err := initializeScript.Run(
 		s.client.WithContext(ctx),
-		[]string{ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID), RegistryKey, ExpiryCandidatesKey, RecoverableVersionsKey},
+		[]string{ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID), RegistryKey, ExpiryCandidatesKey, RecoverableVersionsKey, RebuildTokenKey(postID)},
 		args...,
 	).Int64()
 	return value == 1, mapScriptError(err)
@@ -288,14 +292,14 @@ func (s *Store) Recover(ctx context.Context, postID uint, baseline FullState, fe
 	}
 	args := []interface{}{
 		baseline.Count, baseline.Version, postID, mode, expectedVersion,
-		len(userIDs), time.Now().UTC().UnixMilli(),
+		len(userIDs), time.Now().UTC().UnixMilli(), fence.RebuildToken,
 	}
 	for _, id := range userIDs {
 		args = append(args, id)
 	}
 	value, err := recoverScript.Run(
 		s.client.WithContext(ctx),
-		[]string{ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID), RegistryKey, ExpiryCandidatesKey, RecoverableVersionsKey},
+		[]string{ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID), RegistryKey, ExpiryCandidatesKey, RecoverableVersionsKey, RebuildTokenKey(postID)},
 		args...,
 	).Int64()
 	return value == 1, mapScriptError(err)
@@ -394,8 +398,9 @@ func durationMillisecondsCeil(duration time.Duration) int64 {
 
 // DeletePost first fences the identity using the existing Ready key, so partial
 // cleanup cannot serve old state or let a pre-deletion recovery reinstall it.
-// Keep the fence until Redis loses its state; SQL recovery then rejects the
-// deleted Post. Failed propagation is retried from the durable deletion queue.
+// Revoke pre-deletion rebuild tokens independently of cleanup. The fence gets
+// a TTL only after successful cleanup when deletion expiry is enabled.
+// Failed propagation is retried from the durable deletion queue.
 func (s *Store) DeletePost(ctx context.Context, postID uint) error {
 	if s == nil || s.client == nil {
 		return errors.New("redis is not initialized")
@@ -403,8 +408,8 @@ func (s *Store) DeletePost(ctx context.Context, postID uint) error {
 	if postID == 0 {
 		return errors.New("invalid post id")
 	}
-	if err := s.client.WithContext(ctx).Set(ReadyKey(postID), "deleted", 0).Err(); err != nil {
-		return err
+	if err := markPostDeletedScript.Run(s.client.WithContext(ctx), []string{ReadyKey(postID), RebuildTokenKey(postID)}).Err(); err != nil {
+		return mapScriptError(err)
 	}
 	return s.PurgePost(ctx, postID)
 }
@@ -420,14 +425,19 @@ func (s *Store) PurgePost(ctx context.Context, postID uint) error {
 		return errors.New("invalid post id")
 	}
 
+	tombstoneTTL := int64(0)
+	if config.LikeDeletionTombstoneExpiryEnabled() {
+		tombstoneTTL = config.LikeDeletionTombstoneTTL().Milliseconds()
+	}
 	_, err := purgePostScript.Run(
 		s.client.WithContext(ctx),
 		[]string{
 			ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID),
 			DirtyKey, ProcessingKey, ClaimsKey,
 			RegistryKey, ExpiryCandidatesKey, RecoverableVersionsKey,
+			RebuildTokenKey(postID),
 		},
-		postID,
+		postID, tombstoneTTL,
 	).Int64()
 	return mapScriptError(err)
 }

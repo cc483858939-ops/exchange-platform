@@ -94,7 +94,7 @@ func TestStoreIncompleteStateIsNotReadyIntegration(t *testing.T) {
 func TestStoreInitializeCreatesManagedPersistentStateIntegration(t *testing.T) {
 	client, store, postID := openRecoverableStoreIntegration(t)
 	ctx := context.Background()
-	if created, err := store.Initialize(ctx, postID, 2, 4, []uint{12, 11}); err != nil || !created {
+	if created, err := initializeLikeStore(store, ctx, postID, 2, 4, []uint{12, 11}); err != nil || !created {
 		t.Fatalf("Initialize created=%t err=%v", created, err)
 	}
 	state, err := store.LoadFullState(ctx, postID)
@@ -123,11 +123,11 @@ func TestStoreInitializeCreatesManagedPersistentStateIntegration(t *testing.T) {
 func TestStoreManagedZeroLossCannotBootstrapIntegration(t *testing.T) {
 	client, store, postID := openRecoverableStoreIntegration(t)
 	ctx := context.Background()
-	if created, err := store.Initialize(ctx, postID, 0, 0, nil); err != nil || !created {
+	if created, err := initializeLikeStore(store, ctx, postID, 0, 0, nil); err != nil || !created {
 		t.Fatalf("Initialize created=%t err=%v", created, err)
 	}
 	client.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
-	created, err := store.Recover(ctx, postID, FullState{}, RecoveryFence{AllowZeroBootstrap: true})
+	created, err := recoverLikeStore(store, ctx, postID, FullState{}, RecoveryFence{AllowZeroBootstrap: true})
 	if created || !errors.Is(err, ErrLikeRecoveryUnsafe) {
 		t.Fatalf("managed zero recovery created=%t err=%v", created, err)
 	}
@@ -143,7 +143,7 @@ func TestStoreMarkerRecoveryAndMutationFenceIntegration(t *testing.T) {
 		cleanupRecoverableStoreBehaviorPair(client, 12, postID)
 	})
 	ctx := context.Background()
-	if created, err := store.Initialize(ctx, postID, 1, 10, []uint{11}); err != nil || !created {
+	if created, err := initializeLikeStore(store, ctx, postID, 1, 10, []uint{11}); err != nil || !created {
 		t.Fatalf("Initialize created=%t err=%v", created, err)
 	}
 	armed, err := store.ArmExpiry(ctx, postID, 10, time.Hour)
@@ -155,7 +155,7 @@ func TestStoreMarkerRecoveryAndMutationFenceIntegration(t *testing.T) {
 	}
 	client.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
 	markerVersion := int64(10)
-	if created, err := store.Recover(ctx, postID, FullState{Count: 1, Version: 10, UserIDs: []uint{11}}, RecoveryFence{ExpectedVersion: &markerVersion}); err != nil || !created {
+	if created, err := recoverLikeStore(store, ctx, postID, FullState{Count: 1, Version: 10, UserIDs: []uint{11}}, RecoveryFence{ExpectedVersion: &markerVersion}); err != nil || !created {
 		t.Fatalf("marker Recover created=%t err=%v", created, err)
 	}
 	if _, err := store.Mutate(ctx, 12, postID, true); err != nil {
@@ -181,7 +181,7 @@ func TestStoreRecoveryFenceAndExpiryRacesIntegration(t *testing.T) {
 		cleanupRecoverableStoreBehaviorPair(client, 11, mutateFirstPostID)
 	})
 	ctx := context.Background()
-	if created, err := store.Initialize(ctx, postID, 1, 10, []uint{11}); err != nil || !created {
+	if created, err := initializeLikeStore(store, ctx, postID, 1, 10, []uint{11}); err != nil || !created {
 		t.Fatalf("Initialize created=%t err=%v", created, err)
 	}
 	if armed, err := store.ArmExpiry(ctx, postID, 10, time.Hour); err != nil || !armed {
@@ -189,7 +189,7 @@ func TestStoreRecoveryFenceAndExpiryRacesIntegration(t *testing.T) {
 	}
 	client.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
 	wrongVersion := int64(9)
-	if created, err := store.Recover(ctx, postID, FullState{Count: 1, Version: 9, UserIDs: []uint{11}}, RecoveryFence{ExpectedVersion: &wrongVersion}); created || !errors.Is(err, ErrLikeRecoveryFenceLost) {
+	if created, err := recoverLikeStore(store, ctx, postID, FullState{Count: 1, Version: 9, UserIDs: []uint{11}}, RecoveryFence{ExpectedVersion: &wrongVersion}); created || !errors.Is(err, ErrLikeRecoveryFenceLost) {
 		t.Fatalf("mismatched recovery created=%t err=%v", created, err)
 	}
 	if exists, err := client.Exists(ReadyKey(postID)).Result(); err != nil || exists != 0 {
@@ -198,13 +198,13 @@ func TestStoreRecoveryFenceAndExpiryRacesIntegration(t *testing.T) {
 	if err := store.PurgePost(ctx, postID); err != nil {
 		t.Fatal(err)
 	}
-	if created, err := store.Recover(ctx, postID, FullState{Count: 1, Version: 10, UserIDs: []uint{11}}, RecoveryFence{ExpectedVersion: &wrongVersion}); created || !errors.Is(err, ErrLikeRecoveryFenceLost) {
+	if created, err := recoverLikeStore(store, ctx, postID, FullState{Count: 1, Version: 10, UserIDs: []uint{11}}, RecoveryFence{ExpectedVersion: &wrongVersion}); created || !errors.Is(err, ErrLikeRecoveryFenceLost) {
 		t.Fatalf("purged recovery created=%t err=%v", created, err)
 	}
 
 	cleanupRecoverableStorePost(client, armFirstPostID)
 	t.Cleanup(func() { cleanupRecoverableStorePost(client, armFirstPostID) })
-	if created, err := store.Initialize(ctx, armFirstPostID, 0, 0, nil); err != nil || !created {
+	if created, err := initializeLikeStore(store, ctx, armFirstPostID, 0, 0, nil); err != nil || !created {
 		t.Fatalf("race Initialize created=%t err=%v", created, err)
 	}
 	if armed, err := store.ArmExpiry(ctx, armFirstPostID, 0, time.Hour); err != nil || !armed {
@@ -219,7 +219,7 @@ func TestStoreRecoveryFenceAndExpiryRacesIntegration(t *testing.T) {
 
 	cleanupRecoverableStorePost(client, mutateFirstPostID)
 	t.Cleanup(func() { cleanupRecoverableStorePost(client, mutateFirstPostID) })
-	if created, err := store.Initialize(ctx, mutateFirstPostID, 0, 0, nil); err != nil || !created {
+	if created, err := initializeLikeStore(store, ctx, mutateFirstPostID, 0, 0, nil); err != nil || !created {
 		t.Fatalf("second Initialize created=%t err=%v", created, err)
 	}
 	if mutation, err := store.Mutate(ctx, 11, mutateFirstPostID, true); err != nil || !mutation.Changed || mutation.Version != 1 {
@@ -236,7 +236,7 @@ func TestStoreRecoveryFenceAndExpiryRacesIntegration(t *testing.T) {
 func TestStoreIdempotentMutationPreservesArmedExpiryIntegration(t *testing.T) {
 	client, store, postID := openRecoverableStoreIntegration(t)
 	ctx := context.Background()
-	if created, err := store.Initialize(ctx, postID, 1, 1, []uint{11}); err != nil || !created {
+	if created, err := initializeLikeStore(store, ctx, postID, 1, 1, []uint{11}); err != nil || !created {
 		t.Fatalf("Initialize created=%t err=%v", created, err)
 	}
 	if armed, err := store.ArmExpiry(ctx, postID, 1, time.Hour); err != nil || !armed {
@@ -279,7 +279,7 @@ func TestStoreReadAwareExpiryLeaseIntegration(t *testing.T) {
 
 	initialize := func(postID uint, count int64, userIDs []uint) {
 		t.Helper()
-		if created, err := store.Initialize(ctx, postID, count, 10, userIDs); err != nil || !created {
+		if created, err := initializeLikeStore(store, ctx, postID, count, 10, userIDs); err != nil || !created {
 			t.Fatalf("Initialize post=%d created=%t err=%v", postID, created, err)
 		}
 	}
@@ -493,7 +493,7 @@ func TestStoreReadAwareExpiryLeaseIntegration(t *testing.T) {
 func TestStoreLuaTypePreflightPreventsPurgePartialMutationIntegration(t *testing.T) {
 	client, store, postID := openRecoverableStoreIntegration(t)
 	ctx := context.Background()
-	if created, err := store.Initialize(ctx, postID, 1, 1, []uint{11}); err != nil || !created {
+	if created, err := initializeLikeStore(store, ctx, postID, 1, 1, []uint{11}); err != nil || !created {
 		t.Fatalf("Initialize created=%t err=%v", created, err)
 	}
 	client.Set(UsersKey(postID), "wrong type", 0)
@@ -510,13 +510,13 @@ func TestStoreLuaTypePreflightPreventsPurgePartialMutationIntegration(t *testing
 func TestStoreLuaTypePreflightPreventsRecoverPartialMutationIntegration(t *testing.T) {
 	client, store, postID := openRecoverableStoreIntegration(t)
 	ctx := context.Background()
-	if created, err := store.Initialize(ctx, postID, 1, 1, []uint{11}); err != nil || !created {
+	if created, err := initializeLikeStore(store, ctx, postID, 1, 1, []uint{11}); err != nil || !created {
 		t.Fatalf("Initialize created=%t err=%v", created, err)
 	}
 	client.Set(RecoverableVersionsKey, "wrong type", 0)
 	t.Cleanup(func() { client.Del(RecoverableVersionsKey) })
 	version := int64(1)
-	if created, err := store.Recover(ctx, postID, FullState{Count: 1, Version: 1, UserIDs: []uint{11}}, RecoveryFence{ExpectedVersion: &version}); created || !errors.Is(err, ErrLikeRedisType) {
+	if created, err := recoverLikeStore(store, ctx, postID, FullState{Count: 1, Version: 1, UserIDs: []uint{11}}, RecoveryFence{ExpectedVersion: &version}); created || !errors.Is(err, ErrLikeRedisType) {
 		t.Fatalf("Recover created=%t err=%v want ErrLikeRedisType", created, err)
 	}
 	if state, err := store.LoadFullState(ctx, postID); err != nil || state.Count != 1 || state.Version != 1 || !equalRecoverableUintSlices(state.UserIDs, []uint{11}) {
@@ -527,7 +527,7 @@ func TestStoreLuaTypePreflightPreventsRecoverPartialMutationIntegration(t *testi
 func TestStoreLuaTypePreflightPreventsArmExpiryPartialMutationIntegration(t *testing.T) {
 	client, store, postID := openRecoverableStoreIntegration(t)
 	ctx := context.Background()
-	if created, err := store.Initialize(ctx, postID, 0, 0, nil); err != nil || !created {
+	if created, err := initializeLikeStore(store, ctx, postID, 0, 0, nil); err != nil || !created {
 		t.Fatalf("Initialize created=%t err=%v", created, err)
 	}
 	client.Del(ExpiryCandidatesKey)
