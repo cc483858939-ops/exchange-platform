@@ -40,17 +40,6 @@ export const canAbandonDurableSubmission = (
 
 export const canMarkDurableSubmissionFailed = (phase: string): boolean => phase !== 'succeeded';
 
-export const recoveredSubmissionMustFailClosed = (
-  phase: string,
-  durableSessionID: string | null | undefined,
-): boolean => (
-  phase !== 'succeeded'
-  && (
-    typeof durableSessionID !== 'string'
-    || !durableSessionID.trim()
-  )
-);
-
 export const isPostIdempotencyConflictError = (error: unknown): boolean => {
   if (!error || typeof error !== 'object') return false;
   const response = (error as {

@@ -79,8 +79,8 @@ func mutatePostBookmarkRequest(ctx *gin.Context, bookmarked bool) {
 
 func GetPostBookmarkStates(ctx *gin.Context) {
 	var request postBookmarkStatesRequest
-	if err := ctx.ShouldBindJSON(&request); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid post_ids"})
+	if err := bindBoundedPostStates(ctx, &request); err != nil {
+		writeJSONRequestError(ctx, err, "Invalid post_ids")
 		return
 	}
 	if len(request.PostIDs) == 0 || len(request.PostIDs) > maxPostBookmarkStateIDs {
@@ -197,10 +197,8 @@ func loadPostBookmarkStatesFromDB(ctx context.Context, userID uint, postIDs []ui
 	}
 
 	now := time.Now().UTC()
-	var availableIDs []uint
-	if err := publicPostScope(db.Model(&models.Post{}), now).
-		Where("posts.id IN ?", postIDs).
-		Pluck("posts.id", &availableIDs).Error; err != nil {
+	availableIDs, err := loadPublicPostIDs(ctx, db, postIDs, now)
+	if err != nil {
 		return postBookmarkStatesLoadResult{}, err
 	}
 	available := make(map[uint]struct{}, len(availableIDs))

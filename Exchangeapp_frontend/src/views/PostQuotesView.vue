@@ -31,19 +31,35 @@
     </section>
 
     <section v-else-if="quotesSession.loaded" class="quotes-view__feed" aria-label="Quotes">
-      <PostCard
-        v-for="post in quotesSession.items"
-        :key="post.id"
-        :post="post"
-        :track-view="false"
-        :requires-auth-for-actions="!authStore.isAuthenticated"
-        :like-pending="quotesSession.likePendingPostIDs.has(post.id)"
-        :repost-pending="quotesSession.repostPendingPostIDs.has(post.id)"
-        :bookmark-pending="quotesSession.bookmarkPendingPostIDs.has(post.id)"
-        @toggle-like="quotesSession.toggleLike"
-        @toggle-repost="quotesSession.toggleRepost"
-        @toggle-bookmark="quotesSession.toggleBookmark"
-      />
+      <div
+        ref="virtualListRef"
+        class="quotes-view__virtual-list"
+        :style="{ height: `${quotesVirtualizerTotalSize}px` }"
+        @focusin="updateFocusedPost"
+        @focusout="updateFocusedPost"
+      >
+        <div
+          v-for="virtualItem in quotesVirtualItems"
+          :key="String(virtualItem.key)"
+          class="quotes-view__virtual-row"
+          :data-index="virtualItem.index"
+          :data-post-id="quotePostForIndex(virtualItem.index).id"
+          :style="{ transform: `translateY(${virtualItem.start - listOffset}px)` }"
+          :ref="measureQuoteRow"
+        >
+          <PostCard
+            :post="quotePostForIndex(virtualItem.index)"
+            :track-view="false"
+            :requires-auth-for-actions="!authStore.isAuthenticated"
+            :like-pending="quotesSession.likePendingPostIDs.has(quotePostForIndex(virtualItem.index).id)"
+            :repost-pending="quotesSession.repostPendingPostIDs.has(quotePostForIndex(virtualItem.index).id)"
+            :bookmark-pending="quotesSession.bookmarkPendingPostIDs.has(quotePostForIndex(virtualItem.index).id)"
+            @toggle-like="quotesSession.toggleLike"
+            @toggle-repost="quotesSession.toggleRepost"
+            @toggle-bookmark="quotesSession.toggleBookmark"
+          />
+        </div>
+      </div>
 
       <div
         v-if="quotesSession.nextCursor || quotesSession.loadingMore || quotesSession.loadMoreError"
@@ -74,13 +90,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance } from 'vue';
+import { defaultRangeExtractor, useWindowVirtualizer } from '@tanstack/vue-virtual';
 import { useRoute, useRouter } from 'vue-router';
 import AppIcon from '../components/icons/AppIcon.vue';
 import MobileAccountMenu from '../components/layout/MobileAccountMenu.vue';
 import PostCard from '../components/feed/PostCard.vue';
 import { useAuthStore } from '../store/auth';
 import { useQuotesSessionStore } from '../store/quotesSession';
+import type { FeedPost } from '../types/Feed';
+import { virtualItemsWithInitialFallback } from '../utils/virtualizer';
 
 defineOptions({ name: 'PostQuotesView' });
 
@@ -89,6 +108,66 @@ const router = useRouter();
 const authStore = useAuthStore();
 const quotesSession = useQuotesSessionStore();
 const sentinelRef = ref<HTMLElement | null>(null);
+const virtualListRef = ref<HTMLElement | null>(null);
+const listOffset = ref(0);
+const focusedPostID = ref<number | null>(null);
+const focusedPostIndex = computed(() => focusedPostID.value === null ? -1
+  : quotesSession.items.findIndex(post => post.id === focusedPostID.value));
+const quoteRowEstimate = 240;
+const quotesVirtualizer = useWindowVirtualizer<HTMLElement>(computed(() => {
+  const focused = focusedPostIndex.value;
+  return {
+  count: quotesSession.items.length,
+  estimateSize: () => quoteRowEstimate,
+  getItemKey: (index: number) => quotesSession.items[index]?.id ?? index,
+  scrollMargin: listOffset.value,
+  overscan: 5,
+  enabled: quotesSession.loaded && quotesSession.items.length > 0,
+  rangeExtractor: (range) => {
+    const indexes = defaultRangeExtractor(range);
+    return focused < 0 || indexes.includes(focused) ? indexes : [...indexes, focused].sort((a, b) => a - b);
+  },
+  };
+}));
+const quotesVirtualItems = computed(() => virtualItemsWithInitialFallback(
+  quotesVirtualizer.value.getVirtualItems(), quotesSession.items.length,
+  quotesSession.items[0]?.id, quoteRowEstimate,
+));
+const quotesVirtualizerTotalSize = computed(() => quotesVirtualizer.value.getTotalSize());
+const quotePostForIndex = (index: number): FeedPost => {
+  const post = quotesSession.items[index];
+  if (!post) throw new Error(`Unexpected Quotes post index ${index}`);
+  return post;
+};
+const measureQuoteRow = (element: Element | ComponentPublicInstance | null) => {
+  if (element === null || element instanceof HTMLElement) quotesVirtualizer.value.measureElement(element);
+};
+const updateFocusedPost = (event: FocusEvent) => {
+  const target = event.type === 'focusout' ? event.relatedTarget : event.target;
+  const row = target instanceof Element ? target.closest<HTMLElement>('.quotes-view__virtual-row') : null;
+  focusedPostID.value = row && virtualListRef.value?.contains(row) ? Number(row.dataset.postId) : null;
+};
+let listResizeObserver: ResizeObserver | null = null;
+let measuredWidth: number | null = null;
+const measureListGeometry = () => {
+  const list = virtualListRef.value;
+  if (!list) return;
+  listOffset.value = list.getBoundingClientRect().top + window.scrollY;
+  const width = list.clientWidth;
+  if (measuredWidth !== null && width !== measuredWidth) quotesVirtualizer.value.measure();
+  measuredWidth = width;
+};
+watch(virtualListRef, list => {
+  listResizeObserver?.disconnect();
+  listResizeObserver = null;
+  measuredWidth = null;
+  if (!list) return;
+  measureListGeometry();
+  if (typeof ResizeObserver !== 'undefined') {
+    listResizeObserver = new ResizeObserver(measureListGeometry);
+    listResizeObserver.observe(list);
+  }
+}, { flush: 'post' });
 const intersectionObserverAvailable = typeof IntersectionObserver !== 'undefined';
 let observer: IntersectionObserver | null = null;
 
@@ -153,6 +232,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   disconnectObserver();
+  listResizeObserver?.disconnect();
   quotesSession.reset();
 });
 </script>
@@ -164,6 +244,8 @@ onBeforeUnmount(() => {
 .quotes-view__back { display: grid; width: 44px; height: 44px; place-items: center; border: 0; border-radius: 50%; padding: 0; background: transparent; color: var(--color-text); cursor: pointer; }
 .quotes-view__back:focus-visible { background: var(--color-surface-subtle); color: var(--color-accent); outline: none; }
 .quotes-view__feed { min-width: 0; }
+.quotes-view__virtual-list { position: relative; width: 100%; }
+.quotes-view__virtual-row { position: absolute; top: 0; left: 0; width: 100%; }
 .quotes-view__state { display: grid; justify-items: center; gap: var(--space-3); padding: 56px var(--space-5); color: var(--color-text-secondary); text-align: center; }
 .quotes-view__state h2, .quotes-view__state p { margin: 0; }
 .quotes-view__state h2 { color: var(--color-text); font-size: 20px; }

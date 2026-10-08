@@ -13,6 +13,8 @@ type WorkerPipelineSnapshot struct {
 	BacklogSince          time.Time `json:"backlog_since,omitempty"`
 	LastProgressAt        time.Time `json:"last_progress_at,omitempty"`
 	Backlog               int64     `json:"backlog"`
+	BacklogSampleAt       time.Time `json:"backlog_sample_at,omitempty"`
+	BacklogSampleValid    bool      `json:"backlog_sample_valid"`
 	State                 string    `json:"state"`
 	ReasonCode            string    `json:"reason_code,omitempty"`
 }

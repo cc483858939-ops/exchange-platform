@@ -17,8 +17,6 @@ import (
 	"Go.exchange/likes"
 	"Go.exchange/metrics"
 	"Go.exchange/runtimehealth"
-
-	"github.com/segmentio/kafka-go"
 )
 
 var workerReady atomic.Bool
@@ -67,6 +65,8 @@ type workerPipelineState struct {
 	backlogSince          time.Time
 	lastProgressAt        time.Time
 	backlog               int64
+	backlogSampleAt       time.Time
+	backlogSampleValid    bool
 	state                 string
 	reasonCode            string
 }
@@ -213,6 +213,9 @@ func registerPipelineAt(name string, expectedWorkers int, now time.Time) {
 	state.expectedWorkers = expectedWorkers
 	if state.registeredAt.IsZero() {
 		state.registeredAt = now
+		if isKafkaPipeline(name) {
+			state.backlog = -1
+		}
 	}
 	if state.state == "" {
 		state.state = "starting"
@@ -269,7 +272,7 @@ func pipelineSuccessAt(name string, backlog int64, now time.Time) {
 	workerPipelines.Lock()
 	state, ok := workerPipelines.states[name]
 	if ok {
-		setPipelineBacklog(&state, backlog, now)
+		setPipelineLocalBacklog(name, &state, backlog, now)
 		state.lastSuccessAt = now
 		state.lastProgressAt = now
 		state.consecutiveFailures = 0
@@ -291,7 +294,7 @@ func pipelineCommitAt(name string, offset time.Time, backlog int64, now time.Tim
 		if offset.IsZero() {
 			offset = now
 		}
-		setPipelineBacklog(&state, backlog, now)
+		setPipelineLocalBacklog(name, &state, backlog, now)
 		state.lastCommittedOffsetAt = offset
 		state.lastSuccessAt = now
 		state.lastProgressAt = now
@@ -312,8 +315,8 @@ func pipelineIdleAt(name string, backlog int64, now time.Time) {
 	workerPipelines.Lock()
 	state, ok := workerPipelines.states[name]
 	if ok {
-		setPipelineBacklog(&state, backlog, now)
-		if backlog == 0 {
+		setPipelineLocalBacklog(name, &state, backlog, now)
+		if backlog == 0 && (!isKafkaPipeline(name) || state.backlogSampleValid && state.backlog == 0 && now.Sub(state.backlogSampleAt) <= kafkaBacklogMaxAge) {
 			state.lastSuccessAt = now
 			state.lastProgressAt = now
 			state.consecutiveFailures = 0
@@ -335,7 +338,7 @@ func pipelineFailureAt(name, reason string, backlog int64, now time.Time) {
 	workerPipelines.Lock()
 	state, ok := workerPipelines.states[name]
 	if ok {
-		setPipelineBacklog(&state, backlog, now)
+		setPipelineLocalBacklog(name, &state, backlog, now)
 		state.lastFailureAt = now
 		state.consecutiveFailures++
 		state.state = "failed"
@@ -367,7 +370,7 @@ func setPipelineBacklog(state *workerPipelineState, backlog int64, now time.Time
 	previous := state.backlog
 	state.backlog = backlog
 	switch {
-	case previous == 0 && backlog > 0:
+	case previous <= 0 && backlog > 0:
 		state.backlogSince = now
 		state.lastProgressAt = now
 	case backlog == 0:
@@ -375,6 +378,12 @@ func setPipelineBacklog(state *workerPipelineState, backlog int64, now time.Time
 		state.lastProgressAt = now
 	case backlog < previous:
 		state.lastProgressAt = now
+	}
+}
+
+func setPipelineLocalBacklog(name string, state *workerPipelineState, backlog int64, now time.Time) {
+	if !isKafkaPipeline(name) {
+		setPipelineBacklog(state, backlog, now)
 	}
 }
 
@@ -524,7 +533,7 @@ func evaluatePipelineHealth(now time.Time) []string {
 		metrics.SetWorkerPipelineConsecutiveFailures(name, state.consecutiveFailures)
 		metrics.SetWorkerPipelineLastSuccess(name, state.lastSuccessAt)
 		metrics.SetWorkerPipelineBacklog(name, state.backlog)
-		metrics.SetWorkerPipelineBacklogStalled(name, blocked)
+		metrics.SetWorkerPipelineBacklogStalled(name, blocked && backlogReason != "worker_pipeline_backlog_unknown")
 		if reason != "" {
 			reasons = append(reasons, reason)
 		}
@@ -551,6 +560,9 @@ func backlogPolicy(name string) pipelineBacklogPolicy {
 }
 
 func pipelineBacklogBlocked(name string, now time.Time, state workerPipelineState) (bool, string) {
+	if isKafkaPipeline(name) && (!state.backlogSampleValid || state.backlogSampleAt.IsZero() || now.Sub(state.backlogSampleAt) > kafkaBacklogMaxAge) {
+		return true, "worker_pipeline_backlog_unknown"
+	}
 	policy := backlogPolicy(name)
 	if state.backlog <= 0 || !backlogExceeded(now, state, policy.Grace) {
 		return false, ""
@@ -577,6 +589,7 @@ func pipelineSnapshots() map[string]runtimehealth.WorkerPipelineSnapshot {
 			LastFailureAt: state.lastFailureAt, ConsecutiveFailures: state.consecutiveFailures,
 			LastCommittedOffsetAt: state.lastCommittedOffsetAt, BacklogSince: state.backlogSince,
 			LastProgressAt: state.lastProgressAt, Backlog: state.backlog,
+			BacklogSampleAt: state.backlogSampleAt, BacklogSampleValid: state.backlogSampleValid,
 			State: state.state, ReasonCode: state.reasonCode,
 		}
 	}
@@ -665,15 +678,4 @@ func normalizeBacklog(backlog int64) int64 {
 		return 0
 	}
 	return backlog
-}
-
-func kafkaBacklog(reader interface{ Stats() kafka.ReaderStats }) int64 {
-	if reader == nil {
-		return 0
-	}
-	lag := reader.Stats().Lag
-	if lag < 0 {
-		return 0
-	}
-	return int64(lag)
 }

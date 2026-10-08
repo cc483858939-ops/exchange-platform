@@ -40,6 +40,12 @@ const replySubmissionStore = useReplySubmissionStore();
 const searchSession = useSearchSessionStore();
 let notificationPollTimer: number | null = null;
 let disposed = false;
+let notificationPollGeneration = 0;
+let notificationFailureStreak = 0;
+
+const notificationPollDelay = () => notificationFailureStreak === 0
+  ? NOTIFICATION_POLL_INTERVAL_MS
+  : Math.min(15 * 60_000, NOTIFICATION_POLL_INTERVAL_MS * 2 ** notificationFailureStreak * (0.8 + Math.random() * 0.4));
 
 const currentViewerID = () => (
   authStore.isAuthenticated ? authStore.currentIdentity?.id ?? null : null
@@ -63,15 +69,17 @@ const clearNotificationPollTimer = () => {
 const refreshUnreadAndMaybeRevalidate = async () => {
   const capture = notificationStore.captureViewer();
   if (!capture) {
-    return;
+    return false;
   }
   try {
     await notificationStore.refreshUnreadCount(capture);
     if (route.name === 'Notifications' && notificationStore.listStale) {
       await notificationStore.revalidateNotifications();
     }
+    return true;
   } catch {
     // Background freshness failures keep the cached badge and list unchanged.
+    return false;
   }
 };
 
@@ -84,19 +92,27 @@ const scheduleNotificationPoll = () => {
   notificationPollTimer = window.setTimeout(() => {
     notificationPollTimer = null;
     void runScheduledNotificationRefresh();
-  }, NOTIFICATION_POLL_INTERVAL_MS);
+  }, notificationPollDelay());
+};
+
+const finishNotificationRefresh = (generation: number, succeeded: boolean) => {
+  if (disposed || generation !== notificationPollGeneration) return;
+  notificationFailureStreak = succeeded ? 0 : Math.min(5, notificationFailureStreak + 1);
+  scheduleNotificationPoll();
 };
 
 const runScheduledNotificationRefresh = async () => {
   if (!canPollNotifications()) {
     return;
   }
-  await refreshUnreadAndMaybeRevalidate();
-  scheduleNotificationPoll();
+  const generation = notificationPollGeneration;
+  const succeeded = await refreshUnreadAndMaybeRevalidate();
+  finishNotificationRefresh(generation, succeeded);
 };
 
 const refreshNowAndRestartNotificationPoll = (allowHidden = false) => {
   clearNotificationPollTimer();
+  const generation = ++notificationPollGeneration;
   if (disposed || !authStore.isAuthenticated) {
     return;
   }
@@ -104,11 +120,13 @@ const refreshNowAndRestartNotificationPoll = (allowHidden = false) => {
     return;
   }
 
-  void refreshUnreadAndMaybeRevalidate().finally(scheduleNotificationPoll);
+  void refreshUnreadAndMaybeRevalidate().then(succeeded => finishNotificationRefresh(generation, succeeded));
 };
 
 const syncSessionViewers = () => {
   const nextViewerID = currentViewerID();
+  notificationPollGeneration += 1;
+  notificationFailureStreak = 0;
   notificationStore.setViewer(nextViewerID);
   searchSession.setViewer(nextViewerID);
   postSearchSession.setViewer(nextViewerID);
@@ -134,6 +152,7 @@ const handleVisibilityChange = () => {
   if (document.visibilityState === 'visible') {
     refreshNowAndRestartNotificationPoll();
   } else {
+    notificationPollGeneration += 1;
     clearNotificationPollTimer();
   }
 };
@@ -154,6 +173,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   disposed = true;
+  notificationPollGeneration += 1;
   clearNotificationPollTimer();
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   window.removeEventListener('online', handleOnline);

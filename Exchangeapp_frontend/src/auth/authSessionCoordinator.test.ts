@@ -138,9 +138,7 @@ describe('auth session persistence', () => {
     expect(readPersistedAuthSession()).toBeNull();
   });
 
-  it('writes the credential pair as one snapshot and removes legacy token keys', () => {
-    localStorage.setItem('token', 'legacy-access');
-    localStorage.setItem('refresh_token', 'legacy-refresh');
+  it('writes the credential pair as one snapshot', () => {
     const spy = vi.spyOn(Storage.prototype, 'setItem');
     const session = sessionFor();
 
@@ -148,14 +146,10 @@ describe('auth session persistence', () => {
 
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy).toHaveBeenCalledWith(AUTH_SESSION_STORAGE_KEY, JSON.stringify(session));
-    expect(localStorage.getItem('token')).toBeNull();
-    expect(localStorage.getItem('refresh_token')).toBeNull();
     expect(readPersistedAuthSession()).toEqual(session);
   });
 
-  it('does not treat legacy credentials as a persisted auth session', () => {
-    localStorage.setItem('token', tokenFor(7, 'sid-7'));
-    localStorage.setItem('refresh_token', 'legacy-refresh');
+  it('does not treat cached profile data as a persisted auth session', () => {
     localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify({ id: 7, username: 'alice' }));
 
     expect(readPersistedAuthSession()).toBeNull();

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"math/big"
+	"net/http"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -24,6 +25,8 @@ const (
 )
 
 type ServiceConfig struct {
+	MaxConcurrent  int
+	MaxQueued      int
 	Enabled        bool
 	BaseURL        string
 	Model          string
@@ -37,6 +40,8 @@ type ServiceConfig struct {
 }
 
 type TranslationService struct {
+	slots    chan struct{}
+	waiters  chan struct{}
 	provider Provider
 	cache    Cache
 	config   ServiceConfig
@@ -53,6 +58,12 @@ type cachedValue struct {
 }
 
 func NewService(provider Provider, cache Cache, config ServiceConfig) *TranslationService {
+	if config.MaxConcurrent <= 0 {
+		config.MaxConcurrent = 4
+	}
+	if config.MaxQueued <= 0 {
+		config.MaxQueued = 8
+	}
 	if strings.TrimSpace(config.PromptVersion) == "" {
 		config.PromptVersion = DefaultPromptVersion
 	}
@@ -72,7 +83,7 @@ func NewService(provider Provider, cache Cache, config ServiceConfig) *Translati
 		config.WorkTimeout = DefaultTimeout + 2*config.CacheTimeout
 	}
 	lifetime, cancel := context.WithCancel(context.Background())
-	return &TranslationService{provider: provider, cache: cache, config: config, lifetime: lifetime, close: cancel}
+	return &TranslationService{provider: provider, cache: cache, config: config, lifetime: lifetime, close: cancel, slots: make(chan struct{}, config.MaxConcurrent), waiters: make(chan struct{}, config.MaxQueued)}
 }
 
 // Close cancels shared work without coupling it to any individual caller.
@@ -132,6 +143,14 @@ func (s *TranslationService) Translate(ctx context.Context, postID uint, content
 		workCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.config.WorkTimeout)
 		stopClose := context.AfterFunc(s.lifetime, cancel)
 		defer func() { stopClose(); cancel() }()
+		// All waiters may leave while this flight finishes a bounded cache warm.
+		// Admission is inside same-key merging and covers cache/provider/writeback;
+		// both queued and active work share the existing total work deadline.
+		release, err := s.acquireFlight(workCtx)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
 		if s.lifetime.Err() != nil {
 			cancel()
 		}
@@ -243,6 +262,32 @@ func (s *TranslationService) Translate(ctx context.Context, postID uint, content
 			outcome = "same_language"
 		}
 		return result, nil
+	}
+}
+
+func (s *TranslationService) acquireFlight(ctx context.Context) (func(), error) {
+	if err := translationWorkError(ctx); err != nil {
+		return nil, err
+	}
+	select {
+	case s.slots <- struct{}{}:
+		return func() { <-s.slots }, nil
+	default:
+	}
+	select {
+	case s.waiters <- struct{}{}:
+	default:
+		err := newProviderError(ProviderErrorRateLimited, http.StatusTooManyRequests, ErrProviderRateLimited)
+		err.RetryAfter = time.Second
+		err.RetryAfterHeader = "1"
+		return nil, err
+	}
+	defer func() { <-s.waiters }()
+	select {
+	case s.slots <- struct{}{}:
+		return func() { <-s.slots }, nil
+	case <-ctx.Done():
+		return nil, translationWorkError(ctx)
 	}
 }
 

@@ -1,10 +1,13 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -436,11 +439,12 @@ func (s RedisSnapshotStore) key() string {
 }
 
 type FrankfurterProvider struct {
-	Endpoint string
-	Base     string
-	Provider string
-	Client   *http.Client
-	Now      func() time.Time
+	MaxResponseBytes int64
+	Endpoint         string
+	Base             string
+	Provider         string
+	Client           *http.Client
+	Now              func() time.Time
 }
 
 type frankfurterRate struct {
@@ -482,7 +486,24 @@ func (p FrankfurterProvider) Fetch(ctx context.Context) (RateSnapshot, error) {
 	if response.StatusCode != http.StatusOK {
 		return RateSnapshot{}, fmt.Errorf("fetch exchange rates: upstream returned %d", response.StatusCode)
 	}
-	decoder := json.NewDecoder(response.Body)
+	maxResponseBytes := p.MaxResponseBytes
+	if maxResponseBytes <= 0 {
+		maxResponseBytes = 1 << 20
+	}
+	if maxResponseBytes == math.MaxInt64 {
+		return RateSnapshot{}, errors.New("exchange-rate response budget is too large")
+	}
+	if response.ContentLength > maxResponseBytes {
+		return RateSnapshot{}, errors.New("exchange-rate response exceeds byte budget")
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
+	if err != nil {
+		return RateSnapshot{}, fmt.Errorf("read exchange rates: %w", err)
+	}
+	if int64(len(raw)) > maxResponseBytes {
+		return RateSnapshot{}, errors.New("exchange-rate response exceeds byte budget")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	var records []frankfurterRate
 	if err := decoder.Decode(&records); err != nil {

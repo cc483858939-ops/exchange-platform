@@ -130,3 +130,21 @@ groups:
         annotations:
           summary: Go.exchange worker pipeline backlog is stalled
           description: A worker pipeline backlog has exceeded its progress grace period.
+
+      - alert: GoExchangeKafkaCommittedLagSampleUnavailable
+        expr: (go_exchange_kafka_consumer_group_lag_sample_valid == 0) or (time() - go_exchange_kafka_consumer_group_lag_last_success_timestamp_seconds > 30)
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Kafka committed lag sample is unavailable or stale
+          description: Consumer group backlog cannot be determined from a fresh successful sample.
+
+      - alert: GoExchangeOutboxAgeSampleUnavailable
+        expr: (go_exchange_outbox_oldest_row_age_sample_valid == 0) or (time() - go_exchange_outbox_oldest_row_age_last_success_timestamp_seconds > 30)
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Outbox oldest row age sample is unavailable or stale
+          description: The retained oldest age value must not be interpreted as a current empty backlog.

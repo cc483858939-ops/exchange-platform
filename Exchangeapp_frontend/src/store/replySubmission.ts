@@ -27,13 +27,12 @@ import {
   canMarkDurableSubmissionFailed,
   canRetryDurableSubmission,
   isPostIdempotencyConflictError,
-  recoveredSubmissionMustFailClosed,
 } from '../utils/durableSubmissionContract';
 
 export type ReplySubmissionOperation = {
   id: string;
   viewerID: number;
-  viewerSessionID: string | null;
+  viewerSessionID: string;
   parentPostID: number;
   content: string;
   sourceDraftContent: string | null;
@@ -65,7 +64,7 @@ const normalizeViewerID = (value: unknown): number | null => (
 const restoreOperation = (record: PersistedReplySubmissionOperation): ReplySubmissionOperation => ({
   id: record.id,
   viewerID: record.viewerID,
-  viewerSessionID: record.viewerSessionID ?? null,
+  viewerSessionID: record.viewerSessionID,
   parentPostID: record.parentPostID,
   content: record.content,
   sourceDraftContent: record.sourceDraftContent,
@@ -332,13 +331,6 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
         const restored = records.map(restoreOperation);
         operations.value = operations.value.filter(operation => operation.viewerID !== normalized).concat(restored);
         for (const operation of restored) {
-          if (recoveredSubmissionMustFailClosed(operation.phase, operation.viewerSessionID)) {
-            operation.phase = 'failed';
-            operation.failureKind = 'auth_context_changed';
-            operation.error = 'Reply failed. Retry safely.';
-            operation.cleanupPending = false;
-            try { await updateReplySubmissionOperation(persistOperation(operation)); } catch { /* legacy record remains fail-closed */ }
-          }
           if (operation.phase === 'succeeded') completedSucceededOperationIDs.add(operation.id);
         }
         hydratedViewers.add(normalized);

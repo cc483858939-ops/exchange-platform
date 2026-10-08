@@ -9,15 +9,18 @@ import (
 )
 
 type EmbeddingConfig struct {
-	Enabled        bool   `mapstructure:"enabled"`
-	BaseURL        string `mapstructure:"base_url"`
-	APIKey         string `mapstructure:"api_key"`
-	Model          string `mapstructure:"model"`
-	BuildVersion   string `mapstructure:"build_version"`
-	TimeoutSeconds int    `mapstructure:"timeout_seconds"`
+	MaxResponseBytes int64  `mapstructure:"max_response_bytes"`
+	Enabled          bool   `mapstructure:"enabled"`
+	BaseURL          string `mapstructure:"base_url"`
+	APIKey           string `mapstructure:"api_key"`
+	Model            string `mapstructure:"model"`
+	BuildVersion     string `mapstructure:"build_version"`
+	TimeoutSeconds   int    `mapstructure:"timeout_seconds"`
 }
 
 type TranslationConfig struct {
+	MaxConcurrent       int    `mapstructure:"max_concurrent"`
+	MaxQueued           int    `mapstructure:"max_queued"`
 	Enabled             bool   `mapstructure:"enabled"`
 	BaseURL             string `mapstructure:"base_url"`
 	APIKey              string `mapstructure:"api_key"`

@@ -303,7 +303,7 @@ const handleApply = async () => {
   try {
     const croppedFile = await createCroppedAvatar({
       source: props.file,
-      cropSize: currentGeometry.cropSize,
+      cropSize: currentGeometry.viewportWidth,
       naturalWidth: currentGeometry.naturalWidth,
       naturalHeight: currentGeometry.naturalHeight,
       scale: scale.value,

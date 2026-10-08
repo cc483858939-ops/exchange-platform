@@ -294,11 +294,7 @@ func consumePostEmbeddingMessagesWithPolicy(
 			return commitErr
 		}
 		metrics.ObservePostEmbeddingProcessingDuration(time.Since(started))
-		backlog := int64(0)
-		if statsReader, ok := reader.(interface{ Stats() kafka.ReaderStats }); ok {
-			backlog = kafkaBacklog(statsReader)
-		}
-		PipelineCommit(PipelinePostEmbedding, time.Now().UTC(), backlog)
+		PipelineCommit(PipelinePostEmbedding, time.Now().UTC(), 0)
 	}
 }
 

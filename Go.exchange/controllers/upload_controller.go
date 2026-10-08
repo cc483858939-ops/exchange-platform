@@ -179,9 +179,9 @@ func UploadPostMedia(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file must be between 1 byte and 5MB"})
 		return
 	}
-	processed, err := postmediaimage.Process(body)
+	processed, err := processUploadedImage(ctx.Request.Context(), body, postmediaimage.MaxPixels, postmediaimage.ProcessContext)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "only jpeg, png, or webp images are supported"})
+		writeUploadImageError(ctx, err, "only jpeg, png, or webp images are supported")
 		return
 	}
 
@@ -334,9 +334,9 @@ func UploadProfileAvatar(ctx *gin.Context) {
 		return
 	}
 
-	derivative, err := avatarimage.Optimize(body)
+	derivative, err := processUploadedImage(ctx.Request.Context(), body, avatarimage.MaxPixels, avatarimage.OptimizeContext)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "only jpeg, png, or webp images are supported"})
+		writeUploadImageError(ctx, err, "only jpeg, png, or webp images are supported")
 		return
 	}
 	objectKey, err := profileavatar.BuildUserV1ObjectKey(viewerID, derivative.ContentHash, derivative.Extension)
@@ -391,9 +391,9 @@ func UploadProfileCover(ctx *gin.Context) {
 		return
 	}
 
-	derivative, err := profilecoverimage.Optimize(body)
+	derivative, err := processUploadedImage(ctx.Request.Context(), body, profilecoverimage.MaxPixels, profilecoverimage.OptimizeContext)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "only jpeg, png, or webp images are supported"})
+		writeUploadImageError(ctx, err, "only jpeg, png, or webp images are supported")
 		return
 	}
 	objectKey, err := profilecover.BuildUserV1ObjectKey(viewerID, derivative.ContentHash, derivative.Extension)

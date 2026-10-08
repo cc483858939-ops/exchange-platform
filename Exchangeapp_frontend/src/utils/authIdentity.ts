@@ -77,9 +77,3 @@ export const normalizeAuthIdentity = (value: unknown): AuthIdentity | null => {
     avatar_url: typeof candidate.avatar_url === 'string' ? candidate.avatar_url : '',
   };
 };
-
-export const decodeAuthIdentity = (token: string | null | undefined): AuthIdentity | null => {
-  const claims = readTokenClaims(token);
-  const id = readUserID(claims?.sub);
-  return id ? { id, username: '', display_name: '', avatar_url: '' } : null;
-};

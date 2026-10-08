@@ -1,15 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it } from 'vitest';
-import { decodeAuthIdentity, decodeAuthTokenMetadata, normalizeAuthIdentity } from './authIdentity';
-
-const tokenWithSubject = (sub: unknown) => {
-  const payload = btoa(JSON.stringify({ sub }))
-    .replace(/=/g, '')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_');
-  return `header.${payload}.signature`;
-};
+import { decodeAuthTokenMetadata, normalizeAuthIdentity } from './authIdentity';
 
 const tokenWithMetadata = (sub: unknown, sid: unknown) => {
   const payload = btoa(JSON.stringify({ sub, sid }))
@@ -55,17 +47,6 @@ describe('normalizeAuthIdentity', () => {
   });
 });
 
-describe('decodeAuthIdentity', () => {
-  it('builds a canonical identity from only the JWT subject', () => {
-    expect(decodeAuthIdentity(tokenWithSubject('7'))).toEqual({
-      id: 7,
-      username: '',
-      display_name: '',
-      avatar_url: '',
-    });
-  });
-});
-
 describe('decodeAuthTokenMetadata', () => {
   it('decodes a positive subject and stable session id', () => {
     expect(decodeAuthTokenMetadata(tokenWithMetadata('7', 'sid-1'))).toEqual({
@@ -84,7 +65,4 @@ describe('decodeAuthTokenMetadata', () => {
     expect(decodeAuthTokenMetadata(token)).toBeNull();
   });
 
-  it('keeps the legacy identity decoder compatible with tokens without sid', () => {
-    expect(decodeAuthIdentity(tokenWithSubject('7'))).toMatchObject({ id: 7 });
-  });
 });

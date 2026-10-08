@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -25,16 +24,9 @@ type likedHistoryCursor struct {
 }
 
 func parseLikedHistoryPageQuery(ctx *gin.Context) (int, *likedHistoryCursor, error) {
-	limit := defaultLikedHistoryLimit
-	if raw, exists := ctx.GetQuery("limit"); exists {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed <= 0 {
-			return 0, nil, errors.New("invalid limit")
-		}
-		limit = parsed
-	}
-	if limit > maxLikedHistoryLimit {
-		limit = maxLikedHistoryLimit
+	limit, err := parsePageLimit(ctx, defaultLikedHistoryLimit, maxLikedHistoryLimit)
+	if err != nil {
+		return 0, nil, err
 	}
 
 	raw, exists := ctx.GetQuery("cursor")

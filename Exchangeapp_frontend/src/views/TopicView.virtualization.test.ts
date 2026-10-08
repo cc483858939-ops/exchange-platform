@@ -79,6 +79,7 @@ const createPosts = (count: number): FeedPost[] => Array.from({ length: count },
 const createSession = (items = createPosts(300), overrides: Record<string, unknown> = {}) => {
   const session = reactive({
     activeSlug: 'japan',
+    viewSessionKey: 'topic:anonymous:japan:0:0',
     topic: { slug: 'japan', label: 'Japan', description: 'Topic description' },
     items,
     loaded: true,
@@ -430,7 +431,7 @@ describe('TopicView virtualization', () => {
 
     await scrollTopic(wrapper, 0);
     expect(mountedCard(wrapper, 1).element).not.toBe(originalFirstCard);
-    expect(mountedCard(wrapper, 1).attributes('data-session-key')).toBe('topic:anonymous:japan');
+    expect(mountedCard(wrapper, 1).attributes('data-session-key')).toBe('topic:anonymous:japan:0:0');
   });
 
   it('measures heterogeneous rows and updates later offsets when a mounted row changes height', async () => {

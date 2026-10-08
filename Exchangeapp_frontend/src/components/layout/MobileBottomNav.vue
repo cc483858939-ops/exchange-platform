@@ -87,7 +87,6 @@ const homeDestination = computed<NavigationItem['to']>(() =>
 const searchDestination = computed<NavigationItem['to']>(() => searchNavigationDestination(
   authStore.isAuthenticated,
   route,
-  searchSession.query,
 ));
 
 const notificationsDestination = computed<NavigationItem['to']>(() => (

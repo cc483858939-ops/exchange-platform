@@ -14,7 +14,6 @@ import {
   parsePendingScenarioEnvelope,
   parseSuiteSession,
   prepareNextExecution,
-  serializePendingScenarioEnvelope,
   serializeSuiteSession,
 } from './topLevelSuiteSession';
 import { createPerfScenarioPlans } from './runnerPlan';
@@ -360,7 +359,7 @@ describe('top-level suite session state machine', () => {
   it('round-trips and validates pending v2 envelopes', () => {
     const prepared = prepare(newSession());
     const pending = pendingFor(prepared.session, rawRun(prepared.execution!.plan));
-    expect(parsePendingScenarioEnvelope(serializePendingScenarioEnvelope(pending))).toEqual(pending);
+    expect(parsePendingScenarioEnvelope(JSON.stringify(pending))).toEqual(pending);
     expect(isPerfPendingScenarioEnvelope(pending)).toBe(true);
     expect(parsePendingScenarioEnvelope(JSON.stringify({ ...pending, schemaVersion: 1 }))).toBeNull();
     expect(parsePendingScenarioEnvelope(JSON.stringify({ ...pending, suiteId: '' }))).toBeNull();

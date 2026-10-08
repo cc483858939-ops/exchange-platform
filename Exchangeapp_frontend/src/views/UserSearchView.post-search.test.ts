@@ -133,7 +133,7 @@ describe('UserSearchView Post Search', () => {
     expect(wrapper.get('[role="tab"][aria-selected="true"]').text()).toBe('Posts');
     expect(wrapper.find('.test-post').attributes('data-track-view')).toBe('false');
     expect(wrapper.find('.test-post').attributes('data-requires-auth')).toBe('false');
-    expect(mocks.searchPosts).toHaveBeenCalledWith(expect.objectContaining({ q: 'yen', sort: 'latest', limit: 20 }));
+    expect(mocks.searchPosts).toHaveBeenCalledWith(expect.objectContaining({ q: 'yen', sort: 'latest', limit: 20 }), expect.any(AbortSignal));
     wrapper.unmount();
   });
 
@@ -250,7 +250,7 @@ describe('UserSearchView Post Search', () => {
     await flushPromises();
 
     expect(mocks.getUser).toHaveBeenCalledWith(42);
-    expect(mocks.searchPosts).toHaveBeenCalledWith(expect.objectContaining({ q: 'yen', author_id: 42 }));
+    expect(mocks.searchPosts).toHaveBeenCalledWith(expect.objectContaining({ q: 'yen', author_id: 42 }), expect.any(AbortSignal));
     expect(wrapper.text()).toContain('Author unavailable');
     await wrapper.get('[aria-label="Clear author filter"]').trigger('click');
     await wrapper.get('.search-view__form').trigger('submit');

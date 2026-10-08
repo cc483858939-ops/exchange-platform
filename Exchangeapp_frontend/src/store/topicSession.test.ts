@@ -9,6 +9,7 @@ import { engagementResponseFromBatchMocks } from '../test-utils/engagementServic
 
 const mocks = vi.hoisted(() => ({
   authStore: null as { isAuthenticated: boolean; currentIdentity: { id: number } | null } | null,
+  releasePostViewSession: vi.fn(),
   getTopicPosts: vi.fn(),
   getPostLikeStates: vi.fn(),
   getPostEngagementStates: vi.fn(),
@@ -31,6 +32,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('./auth', () => ({ useAuthStore: () => mocks.authStore }));
+vi.mock('../services/postViewTelemetry', () => ({ releasePostViewSession: mocks.releasePostViewSession }));
 vi.mock('../services/topicService', () => ({ getTopicPosts: mocks.getTopicPosts }));
 vi.mock('../services/likeService', () => ({
   getPostLikeStates: mocks.getPostLikeStates,
@@ -132,6 +134,37 @@ describe('topicSession store', () => {
     mocks.undoRepostPost.mockResolvedValue({ reposts: 3, reposted: false });
     mocks.bookmarkPost.mockResolvedValue({ post_id: 1, bookmarked: true });
     mocks.unbookmarkPost.mockResolvedValue({ post_id: 1, bookmarked: false });
+  });
+
+  it('retains view deduplication within a session and releases reset, topic, viewer and disposal boundaries', async () => {
+    const store = createStore(true);
+    await store.setTopic('japan');
+    const original = store.viewSessionKey;
+    mocks.releasePostViewSession.mockClear();
+    await store.setTopic('japan');
+    store.saveScrollTop(100);
+    expect(store.viewSessionKey).toBe(original);
+    expect(mocks.releasePostViewSession).not.toHaveBeenCalled();
+
+    await store.loadInitial(true);
+    expect(mocks.releasePostViewSession).toHaveBeenCalledWith(original);
+    const refreshed = store.viewSessionKey;
+    expect(refreshed).not.toBe(original);
+    await store.setTopic('ai');
+    expect(mocks.releasePostViewSession).toHaveBeenCalledWith(refreshed);
+    const switched = store.viewSessionKey;
+    store.setViewer(8);
+    expect(mocks.releasePostViewSession).toHaveBeenCalledWith(switched);
+    const viewer = store.viewSessionKey;
+    expect(viewer).toContain('topic:8:ai:');
+    store.reset();
+    expect(mocks.releasePostViewSession).toHaveBeenCalledWith(viewer);
+    expect(store.viewSessionKey).toBe('');
+    await store.setTopic('japan');
+    expect(store.viewSessionKey).not.toBe(original);
+    const disposed = store.viewSessionKey;
+    store.$dispose();
+    expect(mocks.releasePostViewSession).toHaveBeenCalledWith(disposed);
   });
 
   it('loads a public topic and converts Posts to ready guest FeedPosts', async () => {

@@ -1,3 +1,4 @@
+import { indexedDBRequestResult, withIndexedDBStore } from './indexedDBTransaction';
 import type { Post } from '../types/Post';
 import {
   createPostDraftSnapshot,
@@ -19,12 +20,14 @@ export type PublishOperationMediaValue = {
   uploadedURL: string;
 };
 
-export type PublishOperationValue = {
+export type PublishSourceDraft =
+  | { sourceDraftID: null; sourceDraftSnapshot: null }
+  | { sourceDraftID: string; sourceDraftSnapshot: DraftSnapshot };
+
+export type PublishOperationValue = PublishSourceDraft & {
   id: string;
   publisherUserID: number;
   publisherSessionID: string | null;
-  sourceDraftID: string | null;
-  sourceDraftSnapshot: DraftSnapshot | null;
   content: string;
   quotePostID: number | null;
   media: PublishOperationMediaValue[];
@@ -45,13 +48,11 @@ export type PersistedPublishOperationMedia = {
   uploadedURL: string;
 };
 
-export type PersistedPostPublishOperation = {
-  schemaVersion: 1 | 2 | 3 | 4;
+export type PersistedPostPublishOperation = PublishSourceDraft & {
+  schemaVersion: 4;
   id: string;
   publisherUserID: number;
-  publisherSessionID: string | null;
-  sourceDraftID: string | null;
-  sourceDraftSnapshot: DraftSnapshot | null;
+  publisherSessionID: string;
   content: string;
   quotePostID: number | null;
   media: PersistedPublishOperationMedia[];
@@ -67,9 +68,15 @@ export type PostPublishClaimResult =
   | { status: 'claimed' }
   | { status: 'occupied'; operation: PersistedPostPublishOperation };
 
+export type PersistedPublishCheckpoint = PublishSourceDraft
+  & Omit<PersistedPostPublishOperation, 'media' | 'sourceDraftID' | 'sourceDraftSnapshot'> & {
+  media: Omit<PersistedPublishOperationMedia, 'blob'>[];
+};
+
 const DATABASE_NAME = 'exchangeapp-publish-operations';
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 const OBJECT_STORE_NAME = 'post_publish_operations';
+const CHECKPOINT_STORE_NAME = 'post_publish_checkpoints';
 
 let databasePromise: Promise<IDBDatabase> | null = null;
 
@@ -86,15 +93,12 @@ const validPhase = (phase: unknown): phase is PersistedPublishPhase => (
   || phase === 'succeeded'
 );
 
-const isDraftSnapshot = (value: unknown, requireQuoteIdentity: boolean): value is DraftSnapshot => {
+const isDraftSnapshot = (value: unknown): value is DraftSnapshot => {
   if (!value || typeof value !== 'object') return false;
   const snapshot = value as Partial<DraftSnapshot>;
   const quotePostID = snapshot.quotePostID;
   return typeof snapshot.content === 'string'
-    && (requireQuoteIdentity
-      ? Object.prototype.hasOwnProperty.call(snapshot, 'quotePostID')
-        && (quotePostID === null || isValidQuotePostID(quotePostID))
-      : quotePostID === undefined || quotePostID === null || isValidQuotePostID(quotePostID))
+    && (quotePostID === null || isValidQuotePostID(quotePostID))
     && Array.isArray(snapshot.media)
     && snapshot.media.every(item => Boolean(
       item
@@ -113,22 +117,21 @@ const validateRecord = (value: unknown): PersistedPostPublishOperation => {
     throw new Error('The saved publish operation is invalid.');
   }
   const record = value as Partial<PersistedPostPublishOperation>;
-  const schemaVersion = record.schemaVersion === undefined ? 1 : record.schemaVersion;
   if (
-    (schemaVersion !== 1 && schemaVersion !== 2 && schemaVersion !== 3 && schemaVersion !== 4)
+    record.schemaVersion !== 4
     || typeof record.id !== 'string'
     || !record.id.trim()
     || !validViewerID(record.publisherUserID)
-    || !(record.sourceDraftID === null || typeof record.sourceDraftID === 'string')
+    || !(record.sourceDraftID === null
+      || (typeof record.sourceDraftID === 'string' && record.sourceDraftID.trim()))
     || typeof record.content !== 'string'
     || !Array.isArray(record.media)
     || !validPhase(record.phase)
     || !isDurableSubmissionFailureKind(record.failureKind)
     || !hasValidDurableSubmissionFailureShape(record.phase, record.failureKind)
-    || ((schemaVersion === 3 || schemaVersion === 4) && (typeof record.publisherSessionID !== 'string'
-      || !record.publisherSessionID.trim()))
-    || (schemaVersion === 4 && (!Object.prototype.hasOwnProperty.call(record, 'quotePostID')
-      || !(record.quotePostID === null || isValidQuotePostID(record.quotePostID))))
+    || typeof record.publisherSessionID !== 'string'
+    || !record.publisherSessionID.trim()
+    || !(record.quotePostID === null || isValidQuotePostID(record.quotePostID))
     || typeof record.error !== 'string'
     || typeof record.startedAt !== 'number'
     || !Number.isFinite(record.startedAt)
@@ -139,21 +142,11 @@ const validateRecord = (value: unknown): PersistedPostPublishOperation => {
     throw new Error('The saved publish operation is invalid.');
   }
 
-  let sourceDraftSnapshot: DraftSnapshot | null = null;
-  if (schemaVersion === 2 || schemaVersion === 3 || schemaVersion === 4) {
-    if (record.sourceDraftSnapshot === undefined) {
-      throw new Error('The saved publish source snapshot is invalid.');
-    }
-    if (record.sourceDraftSnapshot !== null) {
-      if (!isDraftSnapshot(record.sourceDraftSnapshot, schemaVersion === 4)) {
-        throw new Error('The saved publish source snapshot is invalid.');
-      }
-      sourceDraftSnapshot = createPostDraftSnapshot(
-        record.sourceDraftSnapshot.content,
-        record.sourceDraftSnapshot.media,
-        record.sourceDraftSnapshot.quotePostID ?? null,
-      );
-    }
+  if (record.sourceDraftSnapshot !== null && !isDraftSnapshot(record.sourceDraftSnapshot)) {
+    throw new Error('The saved publish source snapshot is invalid.');
+  }
+  if ((record.sourceDraftID === null) !== (record.sourceDraftSnapshot === null)) {
+    throw new Error('The saved publish source draft ID and snapshot must be present together.');
   }
 
   for (const media of record.media) {
@@ -177,17 +170,14 @@ const validateRecord = (value: unknown): PersistedPostPublishOperation => {
   }
 
   return {
-    schemaVersion,
+    schemaVersion: 4,
     id: record.id,
     publisherUserID: record.publisherUserID,
-    publisherSessionID: schemaVersion === 3 || schemaVersion === 4
-      ? record.publisherSessionID as string
-      : null,
+    publisherSessionID: record.publisherSessionID,
     sourceDraftID: record.sourceDraftID,
-    // Records created before schema 2 deliberately retain no deletion authority.
-    sourceDraftSnapshot,
+    sourceDraftSnapshot: record.sourceDraftSnapshot,
     content: record.content,
-    quotePostID: schemaVersion === 4 ? record.quotePostID as number | null : null,
+    quotePostID: record.quotePostID,
     media: record.media as PersistedPublishOperationMedia[],
     phase: record.phase,
     failureKind: record.failureKind,
@@ -215,9 +205,8 @@ const openDatabase = (): Promise<IDBDatabase> => {
 
     request.onupgradeneeded = () => {
       const database = request.result;
-      if (!database.objectStoreNames.contains(OBJECT_STORE_NAME)) {
-        database.createObjectStore(OBJECT_STORE_NAME, { keyPath: 'publisherUserID' });
-      }
+      database.createObjectStore(OBJECT_STORE_NAME, { keyPath: 'publisherUserID' });
+      database.createObjectStore(CHECKPOINT_STORE_NAME, { keyPath: 'publisherUserID' });
     };
     request.onerror = () => reject(request.error || new Error('Could not open publish storage.'));
     request.onblocked = () => reject(new Error('Publish storage is blocked by another tab.'));
@@ -240,62 +229,53 @@ const openDatabase = (): Promise<IDBDatabase> => {
 const withStore = async <T>(
   mode: IDBTransactionMode,
   execute: (store: IDBObjectStore, transaction: IDBTransaction) => Promise<T>,
-): Promise<T> => {
-  const database = await openDatabase();
-  return new Promise<T>((resolve, reject) => {
-    let transaction: IDBTransaction;
-    try {
-      transaction = database.transaction(OBJECT_STORE_NAME, mode);
-    } catch (error) {
-      reject(error);
-      return;
-    }
-
-    let result: T;
-    let settled = false;
-    const fail = (error: unknown) => {
-      if (!settled) {
-        settled = true;
-        reject(error);
-      }
-    };
-
-    transaction.oncomplete = () => {
-      if (!settled) {
-        settled = true;
-        resolve(result);
-      }
-    };
-    transaction.onerror = () => fail(transaction.error || new Error('Publish storage failed.'));
-    transaction.onabort = () => fail(transaction.error || new Error('Publish storage was aborted.'));
-
-    void execute(transaction.objectStore(OBJECT_STORE_NAME), transaction)
-      .then(value => {
-        result = value;
-      })
-      .catch(error => {
-        try {
-          transaction.abort();
-        } catch {
-          // The transaction may already have completed.
-        }
-        fail(error);
-      });
-  });
-};
-
-const requestResult = <T>(request: IDBRequest<T>): Promise<T> => new Promise((resolve, reject) => {
-  request.onsuccess = () => resolve(request.result);
-  request.onerror = () => reject(request.error || new Error('Publish storage request failed.'));
+): Promise<T> => withIndexedDBStore(await openDatabase(), [OBJECT_STORE_NAME, CHECKPOINT_STORE_NAME], mode, execute, {
+  failed: 'Publish storage failed.',
+  aborted: 'Publish storage was aborted.',
 });
+
+const requestResult = <T>(request: IDBRequest<T>): Promise<T> => (
+  indexedDBRequestResult(request, 'Publish storage request failed.')
+);
+
+const checkpointFromRecord = (record: PersistedPostPublishOperation): PersistedPublishCheckpoint => ({
+  ...record,
+  media: record.media.map(({ blob: _blob, ...metadata }) => metadata),
+});
+
+const mergeCheckpoint = (
+  record: PersistedPostPublishOperation,
+  value: unknown,
+): PersistedPostPublishOperation => {
+  if (value === undefined) return record;
+  const checkpoint = value as Partial<PersistedPublishCheckpoint> | null;
+  if (!checkpoint || checkpoint.id !== record.id
+    || checkpoint.publisherUserID !== record.publisherUserID
+    || !Array.isArray(checkpoint.media) || checkpoint.media.length !== record.media.length) {
+    throw new Error('The saved publish checkpoint is invalid.');
+  }
+  const media = checkpoint.media.map((metadata, index) => {
+    const original = record.media[index]!;
+    // A checkpoint may advance uploads, but cannot replace the saved recovery files.
+    if (!metadata || metadata.draftMediaID !== original.draftMediaID
+      || metadata.name !== original.name || metadata.type !== original.type
+      || metadata.size !== original.size || metadata.lastModified !== original.lastModified) {
+      throw new Error('The saved publish checkpoint media is invalid.');
+    }
+    return { ...metadata, blob: original.blob };
+  });
+  return validateRecord({ ...checkpoint, media });
+};
 
 export const getPostPublishOperation = async (
   viewerID: number,
 ): Promise<PersistedPostPublishOperation | null> => {
   if (!validViewerID(viewerID)) throw new Error('Invalid publish viewer.');
-  return withStore('readonly', async store => {
+  return withStore('readonly', async (store, transaction) => {
     const value = await requestResult(store.get(viewerID));
-    return value === undefined ? null : validateRecord(value);
+    if (value === undefined) return null;
+    const checkpoint = await requestResult(transaction.objectStore(CHECKPOINT_STORE_NAME).get(viewerID));
+    return mergeCheckpoint(validateRecord(value), checkpoint);
   });
 };
 
@@ -303,32 +283,35 @@ export const claimPostPublishOperation = async (
   operation: PersistedPostPublishOperation,
 ): Promise<PostPublishClaimResult> => {
   const record = validateRecord(operation);
-  return withStore('readwrite', async store => {
+  return withStore('readwrite', async (store, transaction) => {
+    const checkpoints = transaction.objectStore(CHECKPOINT_STORE_NAME);
     const value = await requestResult(store.get(record.publisherUserID));
     if (value !== undefined) {
       const current = validateRecord(value);
       if (current.publisherUserID !== record.publisherUserID) {
         throw new Error('The saved publish operation belongs to another viewer.');
       }
-      return { status: 'occupied', operation: current };
+      return { status: 'occupied', operation: mergeCheckpoint(current, await requestResult(checkpoints.get(record.publisherUserID))) };
     }
     await requestResult(store.put(record));
+    await requestResult(checkpoints.delete(record.publisherUserID));
     return { status: 'claimed' };
   });
 };
 
-export const updatePostPublishOperation = async (
-  operation: PersistedPostPublishOperation,
+export const updatePostPublishOperationCheckpoint = async (
+  checkpoint: PersistedPublishCheckpoint,
 ): Promise<boolean> => {
-  const record = validateRecord(operation);
-  return withStore('readwrite', async store => {
-    const value = await requestResult(store.get(record.publisherUserID));
+  if (!validViewerID(checkpoint.publisherUserID) || typeof checkpoint.id !== 'string' || !checkpoint.id.trim()) {
+    throw new Error('The publish checkpoint owner is invalid.');
+  }
+  return withStore('readwrite', async (store, transaction) => {
+    const value = await requestResult(store.get(checkpoint.publisherUserID));
     if (value === undefined) return false;
     const current = validateRecord(value);
-    if (current.publisherUserID !== record.publisherUserID || current.id !== record.id) {
-      return false;
-    }
-    await requestResult(store.put(record));
+    if (current.publisherUserID !== checkpoint.publisherUserID || current.id !== checkpoint.id) return false;
+    const record = mergeCheckpoint(current, checkpoint);
+    await requestResult(transaction.objectStore(CHECKPOINT_STORE_NAME).put(checkpointFromRecord(record)));
     return true;
   });
 };
@@ -338,15 +321,29 @@ export const deletePostPublishOperation = async (
   operationID: string,
 ): Promise<boolean> => {
   if (!validViewerID(viewerID) || !operationID.trim()) return false;
-  return withStore('readwrite', async store => {
+  return withStore('readwrite', async (store, transaction) => {
     const value = await requestResult(store.get(viewerID));
     if (value === undefined) return false;
     const current = validateRecord(value);
     if (current.publisherUserID !== viewerID || current.id !== operationID) return false;
     await requestResult(store.delete(viewerID));
+    await requestResult(transaction.objectStore(CHECKPOINT_STORE_NAME).delete(viewerID));
     return true;
   });
 };
+
+const copyPublishSourceDraft = (source: PublishSourceDraft): PublishSourceDraft => (
+  source.sourceDraftID === null
+    ? { sourceDraftID: null, sourceDraftSnapshot: null }
+    : {
+      sourceDraftID: source.sourceDraftID,
+      sourceDraftSnapshot: createPostDraftSnapshot(
+        source.sourceDraftSnapshot.content,
+        source.sourceDraftSnapshot.media,
+        source.sourceDraftSnapshot.quotePostID,
+      ),
+    }
+);
 
 export const serializePublishOperation = (
   operation: PublishOperationValue,
@@ -358,19 +355,13 @@ export const serializePublishOperation = (
   if (operation.quotePostID !== null && !isValidQuotePostID(operation.quotePostID)) {
     throw new Error('A publish operation quote ID must be a positive safe integer.');
   }
-  return validateRecord({
+  const record = validateRecord({
     schemaVersion: 4,
     id: operation.id,
     publisherUserID: operation.publisherUserID,
     publisherSessionID: operation.publisherSessionID,
     sourceDraftID: operation.sourceDraftID,
-    sourceDraftSnapshot: operation.sourceDraftSnapshot === null
-      ? null
-      : createPostDraftSnapshot(
-        operation.sourceDraftSnapshot.content,
-        operation.sourceDraftSnapshot.media,
-        operation.sourceDraftSnapshot.quotePostID,
-      ),
+    sourceDraftSnapshot: operation.sourceDraftSnapshot,
     quotePostID: operation.quotePostID,
     media: operation.media.map(item => ({
       draftMediaID: item.draftMediaID,
@@ -389,24 +380,23 @@ export const serializePublishOperation = (
     updatedAt,
     post: operation.post,
   });
+  return { ...record, ...copyPublishSourceDraft(record) };
 };
+
+export const serializePublishOperationCheckpoint = (
+  operation: PublishOperationValue,
+  updatedAt = Date.now(),
+): PersistedPublishCheckpoint => checkpointFromRecord(serializePublishOperation(operation, updatedAt));
 
 export const restorePublishOperation = (
   persisted: PersistedPostPublishOperation,
 ): PublishOperationValue => {
   const record = validateRecord(persisted);
   return {
+    ...copyPublishSourceDraft(record),
     id: record.id,
     publisherUserID: record.publisherUserID,
     publisherSessionID: record.publisherSessionID,
-    sourceDraftID: record.sourceDraftID,
-    sourceDraftSnapshot: record.sourceDraftSnapshot === null
-      ? null
-      : createPostDraftSnapshot(
-        record.sourceDraftSnapshot.content,
-        record.sourceDraftSnapshot.media,
-        record.sourceDraftSnapshot.quotePostID,
-      ),
     content: record.content,
     quotePostID: record.quotePostID,
     media: record.media.map(item => ({

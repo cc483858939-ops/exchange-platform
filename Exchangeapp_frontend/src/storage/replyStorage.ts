@@ -1,3 +1,4 @@
+import { indexedDBRequestResult, withIndexedDBStore } from './indexedDBTransaction';
 import type { Post } from '../types/Post';
 import {
   hasValidDurableSubmissionFailureShape,
@@ -21,8 +22,7 @@ export type PersistedReplySubmissionOperation = {
   key: string;
   id: string;
   viewerID: number;
-  /** Missing only on legacy durable replies that predate session ownership. */
-  viewerSessionID?: string | null;
+  viewerSessionID: string;
   parentPostID: number;
   content: string;
   sourceDraftContent: string | null;
@@ -79,15 +79,14 @@ const validateOperation = (value: unknown): PersistedReplySubmissionOperation =>
     || !(record.sourceDraftContent === null || typeof record.sourceDraftContent === 'string')
     || !(record.phase === 'publishing' || record.phase === 'failed' || record.phase === 'succeeded')
     || !isDurableSubmissionFailureKind(record.failureKind)
-    || (record.viewerSessionID !== undefined && record.viewerSessionID !== null
-      && (typeof record.viewerSessionID !== 'string' || !record.viewerSessionID.trim()))
+    || typeof record.viewerSessionID !== 'string' || !record.viewerSessionID.trim()
     || typeof record.error !== 'string'
     || typeof record.startedAt !== 'number' || !Number.isFinite(record.startedAt)
     || typeof record.updatedAt !== 'number' || !Number.isFinite(record.updatedAt)
     || !(record.post === null || (typeof record.post === 'object' && record.post !== null))
     || !hasValidDurableSubmissionFailureShape(record.phase, record.failureKind)
   ) throw new Error('The saved reply operation is invalid.');
-  return { ...record, viewerSessionID: record.viewerSessionID ?? null } as PersistedReplySubmissionOperation;
+  return record as PersistedReplySubmissionOperation;
 };
 
 const openDatabase = (): Promise<IDBDatabase> => {
@@ -104,13 +103,9 @@ const openDatabase = (): Promise<IDBDatabase> => {
     }
     request.onupgradeneeded = () => {
       const database = request.result;
-      if (!database.objectStoreNames.contains(DRAFT_STORE)) {
-        database.createObjectStore(DRAFT_STORE, { keyPath: 'key' });
-      }
-      if (!database.objectStoreNames.contains(OPERATION_STORE)) {
-        const store = database.createObjectStore(OPERATION_STORE, { keyPath: 'key' });
-        store.createIndex('viewerID', 'viewerID', { unique: false });
-      }
+      database.createObjectStore(DRAFT_STORE, { keyPath: 'key' });
+      const store = database.createObjectStore(OPERATION_STORE, { keyPath: 'key' });
+      store.createIndex('viewerID', 'viewerID', { unique: false });
     };
     request.onerror = () => reject(request.error || new Error('Could not open reply storage.'));
     request.onblocked = () => reject(new Error('Reply storage is blocked by another tab.'));
@@ -129,49 +124,18 @@ const openDatabase = (): Promise<IDBDatabase> => {
   return databasePromise;
 };
 
-const requestResult = <T>(request: IDBRequest<T>): Promise<T> => new Promise((resolve, reject) => {
-  request.onsuccess = () => resolve(request.result);
-  request.onerror = () => reject(request.error || new Error('Reply storage request failed.'));
-});
+const requestResult = <T>(request: IDBRequest<T>): Promise<T> => (
+  indexedDBRequestResult(request, 'Reply storage request failed.')
+);
 
 const withStore = async <T>(
   storeName: string,
   mode: IDBTransactionMode,
   execute: (store: IDBObjectStore) => Promise<T>,
-): Promise<T> => {
-  const database = await openDatabase();
-  return new Promise<T>((resolve, reject) => {
-    let transaction: IDBTransaction;
-    try {
-      transaction = database.transaction(storeName, mode);
-    } catch (error) {
-      reject(error);
-      return;
-    }
-    let result: T;
-    let settled = false;
-    const fail = (error: unknown) => {
-      if (!settled) {
-        settled = true;
-        reject(error);
-      }
-    };
-    transaction.oncomplete = () => {
-      if (!settled) {
-        settled = true;
-        resolve(result);
-      }
-    };
-    transaction.onerror = () => fail(transaction.error || new Error('Reply storage failed.'));
-    transaction.onabort = () => fail(transaction.error || new Error('Reply storage was aborted.'));
-    void execute(transaction.objectStore(storeName)).then(value => {
-      result = value;
-    }).catch(error => {
-      try { transaction.abort(); } catch { /* transaction may already be complete */ }
-      fail(error);
-    });
-  });
-};
+): Promise<T> => withIndexedDBStore(await openDatabase(), storeName, mode, execute, {
+  failed: 'Reply storage failed.',
+  aborted: 'Reply storage was aborted.',
+});
 
 const validOwner = (record: { viewerID: number; parentPostID: number }, viewerID: number, parentPostID: number) => (
   record.viewerID === viewerID && record.parentPostID === parentPostID
@@ -191,19 +155,6 @@ export const saveReplyDraft = async (record: PersistedReplyDraft): Promise<void>
   const normalized = validateDraft(record);
   await withStore(DRAFT_STORE, 'readwrite', async store => {
     await requestResult(store.put(normalized));
-  });
-};
-
-export const deleteReplyDraft = async (viewerID: number, parentPostID: number): Promise<boolean> => {
-  if (!validID(viewerID) || !validID(parentPostID)) return false;
-  return withStore(DRAFT_STORE, 'readwrite', async store => {
-    const key = replyStorageKey(viewerID, parentPostID);
-    const value = await requestResult(store.get(key));
-    if (value === undefined) return false;
-    const record = validateDraft(value);
-    if (!validOwner(record, viewerID, parentPostID)) return false;
-    await requestResult(store.delete(key));
-    return true;
   });
 };
 

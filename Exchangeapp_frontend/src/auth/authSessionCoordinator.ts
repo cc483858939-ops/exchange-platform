@@ -13,9 +13,6 @@ export class AuthMutationLockTimeoutError extends AuthRequestError {
   }
 }
 
-const legacyAccessTokenKey = 'token';
-const legacyRefreshTokenKey = 'refresh_token';
-
 export type PersistedAuthSession = {
   schemaVersion: 2;
   tokenRevision: string;
@@ -129,16 +126,6 @@ export const writePersistedAuthSession = (session: PersistedAuthSession): void =
     throw new Error('Invalid persisted auth session');
   }
   store.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(validated));
-  removeLegacyAuthCredentials();
-};
-
-export const removeLegacyAuthCredentials = (): void => {
-  const store = storage();
-  if (!store) {
-    return;
-  }
-  store.removeItem(legacyAccessTokenKey);
-  store.removeItem(legacyRefreshTokenKey);
 };
 
 export const clearPersistedAuthSession = (): void => {
@@ -147,7 +134,6 @@ export const clearPersistedAuthSession = (): void => {
     return;
   }
   store.removeItem(AUTH_SESSION_STORAGE_KEY);
-  removeLegacyAuthCredentials();
 };
 
 export const runWithAuthMutationLock = async <T>(

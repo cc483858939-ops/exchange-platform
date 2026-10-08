@@ -288,6 +288,7 @@ services:
   api:
     <<: [*backend-image, *service-defaults]
     entrypoint: ["/app/go-exchange-api"]
+    stop_grace_period: 45s
     environment:
       <<: [*backend-environment, *minio-environment, *jwt-environment]
     volumes:

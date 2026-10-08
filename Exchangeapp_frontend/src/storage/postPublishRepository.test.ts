@@ -7,10 +7,12 @@ import {
   getPostPublishOperation,
   restorePublishOperation,
   serializePublishOperation,
-  updatePostPublishOperation,
+  serializePublishOperationCheckpoint,
+  updatePostPublishOperationCheckpoint,
   type PersistedPublishFailureKind,
   type PersistedPublishPhase,
   type PersistedPostPublishOperation,
+  type PersistedPublishCheckpoint,
 } from './postPublishRepository';
 
 type Handler = ((event: Event) => void) | null;
@@ -33,6 +35,7 @@ class TestTransaction {
 
   constructor(
     private readonly records: Map<number, PersistedPostPublishOperation>,
+    private readonly checkpoints: Map<number, PersistedPublishCheckpoint>,
     private readonly ready: Promise<void>,
     private readonly releaseReadwrite: () => void,
   ) {}
@@ -64,8 +67,8 @@ class TestTransaction {
     }, 0);
   }
 
-  objectStore(_name: string) {
-    return new TestObjectStore(this.records, this);
+  objectStore(name: string) {
+    return new TestObjectStore(name === 'post_publish_checkpoints' ? this.checkpoints : this.records, this);
   }
 
   private scheduleCompletion() {
@@ -89,7 +92,7 @@ class TestTransaction {
 
 class TestObjectStore {
   constructor(
-    private readonly records: Map<number, PersistedPostPublishOperation>,
+    private readonly records: Map<number, PersistedPostPublishOperation | PersistedPublishCheckpoint>,
     private readonly transaction?: TestTransaction,
   ) {}
 
@@ -100,7 +103,7 @@ class TestObjectStore {
     return this.transaction.request(() => this.records.get(viewerID));
   }
 
-  put(record: PersistedPostPublishOperation) {
+  put(record: PersistedPostPublishOperation | PersistedPublishCheckpoint) {
     if (!this.transaction) throw new Error('Object store has no transaction.');
     return this.transaction.request(() => {
       this.records.set(record.publisherUserID, record);
@@ -119,6 +122,7 @@ class TestObjectStore {
 
 class TestDatabase {
   readonly records = new Map<number, PersistedPostPublishOperation>();
+  readonly checkpoints = new Map<number, PersistedPublishCheckpoint>();
   readonly stores = new Set<string>();
   readonly objectStoreNames = { contains: (name: string) => this.stores.has(name) };
   private readonly readwriteTails = new Map<string, Promise<void>>();
@@ -128,18 +132,19 @@ class TestDatabase {
 
   createObjectStore(name: string, _options: IDBObjectStoreParameters) {
     this.stores.add(name);
-    return new TestObjectStore(this.records);
+    return new TestObjectStore(name === 'post_publish_checkpoints' ? this.checkpoints : this.records);
   }
 
-  transaction(name: string, mode: IDBTransactionMode) {
+  transaction(names: string | string[], mode: IDBTransactionMode) {
+    const name = typeof names === 'string' ? names : names.join(',');
     if (mode !== 'readwrite') {
-      return new TestTransaction(this.records, Promise.resolve(), () => undefined);
+      return new TestTransaction(this.records, this.checkpoints, Promise.resolve(), () => undefined);
     }
     const previous = this.readwriteTails.get(name) ?? Promise.resolve();
     let release!: () => void;
     const current = new Promise<void>(resolve => { release = resolve; });
     this.readwriteTails.set(name, current);
-    return new TestTransaction(this.records, previous, () => {
+    return new TestTransaction(this.records, this.checkpoints, previous, () => {
       release();
       if (this.readwriteTails.get(name) === current) this.readwriteTails.delete(name);
     });
@@ -231,6 +236,55 @@ describe('postPublishRepository', () => {
     vi.unstubAllGlobals();
   });
 
+  it('checkpoints upload progress without rewriting recovery files and restores the latest state for claims', async () => {
+    const operation = makeOperation('checkpoint-owner', 81);
+    const base = serializePublishOperation(operation, 1);
+    await claimPostPublishOperation(base);
+    const savedBase = factory.database!.records.get(81);
+    const checkpoint = serializePublishOperationCheckpoint({
+      ...operation, phase: 'failed', failureKind: 'retryable', error: 'retry upload',
+      media: operation.media.map(media => ({ ...media, uploadedURL: '/uploaded/checkpoint' })),
+    }, 2);
+    expect(checkpoint.media.every(media => !('blob' in media))).toBe(true);
+    expect(await updatePostPublishOperationCheckpoint(checkpoint)).toBe(true);
+    expect(factory.database!.records.get(81)).toBe(savedBase);
+    expect(factory.database!.checkpoints.get(81)).toEqual(checkpoint);
+    const recovered = await getPostPublishOperation(81);
+    expect(recovered).toMatchObject({ phase: 'failed', updatedAt: 2, error: 'retry upload' });
+    expect(await readBlobText(recovered!.media[0]!.blob)).toBe('image-binary');
+    expect(recovered!.media[0]!.uploadedURL).toBe('/uploaded/checkpoint');
+    const occupied = await claimPostPublishOperation(serializePublishOperation(makeOperation('other', 81)));
+    expect(occupied).toEqual({ status: 'occupied', operation: recovered });
+    expect(await deletePostPublishOperation(81, 'stale-owner')).toBe(false);
+    expect(factory.database!.checkpoints.has(81)).toBe(true);
+    expect(await deletePostPublishOperation(81, operation.id)).toBe(true);
+    expect(factory.database!.records.has(81)).toBe(false);
+    expect(factory.database!.checkpoints.has(81)).toBe(false);
+  });
+
+  it('rejects stale owners and changed recovery media without losing the prior checkpoint', async () => {
+    const operation = makeOperation('checkpoint-owner', 82);
+    await claimPostPublishOperation(serializePublishOperation(operation));
+    const checkpoint = serializePublishOperationCheckpoint(operation, 2);
+    await updatePostPublishOperationCheckpoint(checkpoint);
+    expect(await updatePostPublishOperationCheckpoint({ ...checkpoint, id: 'stale' })).toBe(false);
+    expect(await updatePostPublishOperationCheckpoint({ ...checkpoint, publisherUserID: 999 })).toBe(false);
+    for (const media of [[], [...checkpoint.media].reverse(), checkpoint.media.map(item => ({ ...item, size: item.size + 1 }))]) {
+      await expect(updatePostPublishOperationCheckpoint({ ...checkpoint, media })).rejects.toThrow('checkpoint');
+    }
+    expect(factory.database!.checkpoints.get(82)).toEqual(checkpoint);
+    expect((await getPostPublishOperation(82))!.media[0]!.name).toBe('photo.webp');
+  });
+
+  it('fails closed on a checkpoint belonging to another operation', async () => {
+    const operation = makeOperation('checkpoint-owner', 83);
+    await claimPostPublishOperation(serializePublishOperation(operation));
+    factory.database!.checkpoints.set(83, { ...serializePublishOperationCheckpoint(operation), id: 'corrupted-owner' });
+    await expect(getPostPublishOperation(83)).rejects.toThrow('checkpoint');
+    await expect(claimPostPublishOperation(serializePublishOperation(makeOperation('candidate', 83)))).rejects.toThrow('checkpoint');
+    expect(factory.database!.records.get(83)!.id).toBe(operation.id);
+  });
+
   it('round-trips media and keeps claim, update, and delete scoped to the current operation', async () => {
     const original = makeOperation('operation-a', 7);
     const persisted = serializePublishOperation({
@@ -283,9 +337,10 @@ describe('postPublishRepository', () => {
     await expect(readBlobText(restored.media[0]!.file)).resolves.toBe('image-binary');
     expect(await getPostPublishOperation(8)).toMatchObject({ id: 'operation-b' });
 
-    expect(await updatePostPublishOperation({ ...persisted, id: 'stale-operation' })).toBe(false);
+    const checkpoint = serializePublishOperationCheckpoint({ ...original, error: 'checkpoint' }, 457);
+    expect(await updatePostPublishOperationCheckpoint({ ...checkpoint, id: 'stale-operation' })).toBe(false);
     expect(await getPostPublishOperation(7)).toMatchObject({ id: 'operation-a' });
-    expect(await updatePostPublishOperation({ ...persisted, error: 'checkpoint' })).toBe(true);
+    expect(await updatePostPublishOperationCheckpoint(checkpoint)).toBe(true);
     expect(await getPostPublishOperation(7)).toMatchObject({ error: 'checkpoint' });
     expect(await deletePostPublishOperation(7, 'stale-operation')).toBe(false);
     expect(await getPostPublishOperation(7)).not.toBeNull();
@@ -342,59 +397,56 @@ describe('postPublishRepository', () => {
     expect(factory.database!.records.get(75)).toBe(corrupted);
   });
 
-  it('normalizes a legacy operation without a source snapshot to preservation-only state', async () => {
-    const original = serializePublishOperation(makeOperation('legacy-operation', 7), 456);
-    await expect(claimPostPublishOperation(original)).resolves.toEqual({ status: 'claimed' });
-    const legacyRecord = { ...original } as unknown as Record<string, unknown>;
-    delete legacyRecord.schemaVersion;
-    delete legacyRecord.sourceDraftSnapshot;
-    delete legacyRecord.publisherSessionID;
-    delete legacyRecord.quotePostID;
-    factory.database!.records.set(7, legacyRecord as unknown as PersistedPostPublishOperation);
+  it('rejects records outside the current schema without converting or overwriting them', async () => {
+    const original = serializePublishOperation(makeOperation('invalid-schema', 84));
+    for (const schemaVersion of [undefined, 1, 2, 3, 5]) {
+      const invalid = { ...original, schemaVersion } as unknown as PersistedPostPublishOperation;
+      factory.database!.records.set(84, invalid);
+      await expect(getPostPublishOperation(84)).rejects.toThrow('saved publish operation is invalid');
+      await expect(claimPostPublishOperation(original)).rejects.toThrow('saved publish operation is invalid');
+      expect(factory.database!.records.get(84)).toBe(invalid);
+    }
+    factory.database!.records.delete(84);
+  });
 
-    const restoredRecord = await getPostPublishOperation(7);
-    expect(restoredRecord).toMatchObject({
-      schemaVersion: 1,
-      sourceDraftID: 'saved-draft',
-      sourceDraftSnapshot: null,
+  it('round-trips an operation without a saved source draft', () => {
+    const record = serializePublishOperation({
+      ...makeOperation('unsaved-source', 7), sourceDraftID: null, sourceDraftSnapshot: null,
     });
-    expect(restorePublishOperation(restoredRecord!).sourceDraftSnapshot).toBeNull();
-    expect(restorePublishOperation(restoredRecord!).publisherSessionID).toBeNull();
+    expect(restorePublishOperation(record)).toMatchObject({ sourceDraftID: null, sourceDraftSnapshot: null });
   });
 
-  it('restores schema 2 without a durable session owner as untrusted legacy state', async () => {
-    const original = serializePublishOperation(makeOperation('legacy-v2', 7), 789);
-    const { publisherSessionID: _sessionID, quotePostID: _quote, sourceDraftSnapshot, ...legacyV2 } = original;
-    const legacySnapshot = { ...sourceDraftSnapshot! } as Record<string, unknown>;
-    delete legacySnapshot.quotePostID;
-    factory.database!.records.set(7, {
-      ...legacyV2,
-      schemaVersion: 2,
-      sourceDraftSnapshot: legacySnapshot,
-    } as unknown as PersistedPostPublishOperation);
-
-    const restored = await getPostPublishOperation(7);
-
-    expect(restored).toMatchObject({ schemaVersion: 2, publisherSessionID: null });
-    expect(restorePublishOperation(restored!).publisherSessionID).toBeNull();
-    expect(restorePublishOperation(restored!).quotePostID).toBeNull();
-  });
-
-  it('restores the earlier session-bound schema 3 as a non-quote operation', () => {
-    const original = serializePublishOperation(makeOperation('legacy-v3', 7), 900);
-    const { quotePostID: _quote, sourceDraftSnapshot, ...withoutQuote } = original;
-    const legacySnapshot = { ...sourceDraftSnapshot! } as Record<string, unknown>;
-    delete legacySnapshot.quotePostID;
-    const restored = restorePublishOperation({
-      ...withoutQuote,
-      schemaVersion: 3,
-      sourceDraftSnapshot: legacySnapshot as unknown as PersistedPostPublishOperation['sourceDraftSnapshot'],
-    } as PersistedPostPublishOperation);
-
-    expect(restored.publisherSessionID).toBe('session-7');
-    expect(restored.quotePostID).toBeNull();
-    expect(restored.sourceDraftSnapshot?.quotePostID).toBeNull();
-  });
+  it.each(['missing snapshot', 'missing draft ID', 'blank draft ID'])(
+    'rejects %s without changing the saved publish operation', async invalidSource => {
+      const operation = makeOperation('invalid-source', 84);
+      const valid = serializePublishOperation(operation);
+      const source = invalidSource === 'missing snapshot'
+        ? { sourceDraftID: 'saved-draft', sourceDraftSnapshot: null }
+        : invalidSource === 'missing draft ID'
+          ? { sourceDraftID: null, sourceDraftSnapshot: valid.sourceDraftSnapshot }
+          : { sourceDraftID: '   ', sourceDraftSnapshot: valid.sourceDraftSnapshot };
+      const invalid = { ...valid, ...source } as unknown as PersistedPostPublishOperation;
+      expect(() => serializePublishOperation({ ...operation, ...source } as any)).toThrow();
+      expect(() => restorePublishOperation(invalid)).toThrow();
+      await expect(claimPostPublishOperation(invalid)).rejects.toThrow();
+      expect(factory.database!.records.has(84)).toBe(false);
+      await claimPostPublishOperation(valid);
+      await expect(updatePostPublishOperationCheckpoint({
+        ...serializePublishOperationCheckpoint(operation), ...source,
+      } as any)).rejects.toThrow();
+      expect(await getPostPublishOperation(84)).toEqual(valid);
+      expect(factory.database!.checkpoints.has(84)).toBe(false);
+      await deletePostPublishOperation(84, valid.id);
+      factory.database!.records.set(84, invalid);
+      await expect(getPostPublishOperation(84)).rejects.toThrow();
+      await expect(claimPostPublishOperation(valid)).rejects.toThrow();
+      await expect(updatePostPublishOperationCheckpoint(serializePublishOperationCheckpoint(operation)))
+        .rejects.toThrow();
+      await expect(deletePostPublishOperation(84, valid.id)).rejects.toThrow();
+      expect(factory.database!.records.get(84)).toBe(invalid);
+      factory.database!.records.delete(84);
+    },
+  );
 
   it('round-trips a quote ID and rejects malformed schema 4 quote identity', () => {
     const quoted = serializePublishOperation({
@@ -427,6 +479,14 @@ describe('postPublishRepository', () => {
       ...makeOperation('missing-session', 7),
       publisherSessionID: null,
     })).toThrow('must be bound to an authentication session');
+    const valid = serializePublishOperation(makeOperation('valid-session', 7));
+    for (const publisherSessionID of [undefined, null, '', '   ']) {
+      expect(() => restorePublishOperation({ ...valid, publisherSessionID } as unknown as PersistedPostPublishOperation))
+        .toThrow('saved publish operation is invalid');
+    }
+    const { sourceDraftSnapshot: _snapshot, ...missingSnapshot } = valid;
+    expect(() => restorePublishOperation(missingSnapshot as PersistedPostPublishOperation))
+      .toThrow('saved publish source snapshot is invalid');
   });
 
   it('rejects invalid phase/failure combinations and round-trips valid durable shapes', async () => {

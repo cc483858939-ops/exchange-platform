@@ -107,7 +107,6 @@ const homeDestination = computed(() => (
 const searchDestination = computed(() => searchNavigationDestination(
   authStore.isAuthenticated,
   route,
-  searchSession.query,
 ));
 
 const navigationDestination = (item: typeof navigation[number]) => {

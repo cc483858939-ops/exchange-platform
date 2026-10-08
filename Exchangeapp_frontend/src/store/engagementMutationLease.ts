@@ -4,7 +4,6 @@ export type EngagementMutationLeaseToken = {
   viewerID: number;
   postID: number;
   kind: EngagementMutationKind;
-  nonce: number;
 };
 
 const isValidResourceID = (value: number) => Number.isSafeInteger(value) && value > 0;
@@ -15,7 +14,6 @@ const isValidKind = (kind: unknown): kind is EngagementMutationKind => (
 
 export const createEngagementMutationLeaseRegistry = () => {
   const active = new Map<string, EngagementMutationLeaseToken>();
-  let nonce = 0;
 
   const keyFor = (viewerID: number, kind: EngagementMutationKind, postID: number) => (
     `${viewerID}:${kind}:${postID}`
@@ -35,7 +33,7 @@ export const createEngagementMutationLeaseRegistry = () => {
       return null;
     }
 
-    const token = { viewerID, kind, postID, nonce: ++nonce };
+    const token = { viewerID, kind, postID };
     active.set(key, token);
     return token;
   };
@@ -49,14 +47,7 @@ export const createEngagementMutationLeaseRegistry = () => {
     return true;
   };
 
-  const isLeased = (viewerID: number, kind: EngagementMutationKind, postID: number) => {
-    if (!isValidResourceID(viewerID) || !isValidKind(kind) || !isValidResourceID(postID)) {
-      return false;
-    }
-    return active.has(keyFor(viewerID, kind, postID));
-  };
-
-  return { tryBegin, release, isLeased };
+  return { tryBegin, release };
 };
 
 const sharedRegistry = createEngagementMutationLeaseRegistry();
@@ -70,9 +61,3 @@ export const tryBeginEngagementMutationLease = (
 export const releaseEngagementMutationLease = (token: EngagementMutationLeaseToken) => (
   sharedRegistry.release(token)
 );
-
-export const isEngagementMutationLeased = (
-  viewerID: number,
-  kind: EngagementMutationKind,
-  postID: number,
-) => sharedRegistry.isLeased(viewerID, kind, postID);

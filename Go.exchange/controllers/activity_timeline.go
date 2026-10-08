@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"strconv"
 	"strings"
 	"time"
 
@@ -50,16 +49,9 @@ type timelineActivityQueryRow struct {
 }
 
 func parseTimelinePageQuery(ctx *gin.Context) (int, *timelineCursor, error) {
-	limit := defaultTimelineLimit
-	if raw, exists := ctx.GetQuery("limit"); exists {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed <= 0 {
-			return 0, nil, errors.New("invalid limit")
-		}
-		limit = parsed
-	}
-	if limit > maxTimelineLimit {
-		limit = maxTimelineLimit
+	limit, err := parsePageLimit(ctx, defaultTimelineLimit, maxTimelineLimit)
+	if err != nil {
+		return 0, nil, err
 	}
 
 	raw, exists := ctx.GetQuery("cursor")

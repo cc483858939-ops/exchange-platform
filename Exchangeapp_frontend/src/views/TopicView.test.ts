@@ -48,6 +48,7 @@ const feedPost = {
 
 const createSession = (overrides: Record<string, unknown> = {}) => reactive({
   activeSlug: 'japan',
+  viewSessionKey: 'topic:anonymous:japan:0:0',
   topic: { slug: 'japan', label: 'Japan', description: 'Life, culture & places in Japan' },
   items: [feedPost],
   loaded: true,
@@ -138,7 +139,7 @@ describe('TopicView', () => {
     expect(card.text()).toBe('Topic body');
     expect(card.attributes('data-track-view')).toBe('false');
     expect(card.attributes('data-requires-auth')).toBe('true');
-    expect(card.attributes('data-session-key')).toBe('topic:anonymous:japan');
+    expect(card.attributes('data-session-key')).toBe('topic:anonymous:japan:0:0');
   });
 
   it('shows loading, empty and retry states', async () => {

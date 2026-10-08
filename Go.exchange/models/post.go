@@ -18,8 +18,10 @@ type Post struct {
 
 	// ClientPublishID and ClientPublishFingerprint are internal write-side
 	// identity fields used to make a client publish operation replay-safe.
-	ClientPublishID          *uuid.UUID `json:"-" gorm:"type:uuid"`
-	ClientPublishFingerprint *string    `json:"-" gorm:"type:char(64)"`
+	ClientPublishID *uuid.UUID `json:"-" gorm:"type:uuid"`
+	// PostgreSQL reports CHAR as bpchar; use that alias to avoid an identical
+	// ALTER COLUMN on every AutoMigrate while retaining the CHAR(64) contract.
+	ClientPublishFingerprint *string `json:"-" gorm:"type:bpchar(64)"`
 
 	ReplyToPostID *uint `json:"reply_to_post_id"`
 	ReplyToPost   *Post `json:"-" gorm:"foreignKey:ReplyToPostID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`

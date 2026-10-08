@@ -356,7 +356,7 @@ describe('LeftSidebar navigation', () => {
     expect(search.attributes('data-route-query-to')).toBe(to);
   });
 
-  it('restores remembered People search and falls back to a legacy People query', () => {
+  it('restores remembered People search and keeps a later bare Search visit', () => {
     mocks.authStore.isAuthenticated = true;
     mocks.route.name = 'PostDetail';
     rememberSearchRoute({ tab: 'people', q: 'alice' });
@@ -366,12 +366,13 @@ describe('LeftSidebar navigation', () => {
 
     rememberSearchRoute({});
     mocks.searchSession.query = 'legacy bob';
-    const legacy = mountSidebar().get('.left-sidebar__nav > a[aria-label="Search"]');
-    expect(legacy.attributes('data-route-query-tab')).toBe('people');
-    expect(legacy.attributes('data-route-query-q')).toBe('legacy bob');
+    const bareSearch = mountSidebar().get('.left-sidebar__nav > a[aria-label="Search"]');
+    expect(bareSearch.attributes('data-route-name')).toBe('UserSearch');
+    expect(bareSearch.attributes('data-route-query-tab')).toBeUndefined();
+    expect(bareSearch.attributes('data-route-query-q')).toBeUndefined();
   });
 
-  it('uses bare Search when no route snapshot or legacy People query exists', () => {
+  it('uses bare Search when no route snapshot exists', () => {
     mocks.authStore.isAuthenticated = true;
     mocks.route.name = 'PostDetail';
     rememberSearchRoute({});

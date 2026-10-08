@@ -69,78 +69,23 @@ func loadFollowingTimelinePageFromDB(ctx context.Context, viewerID uint, limit i
 	db := global.APIDb.WithContext(ctx)
 
 	now := time.Now().UTC()
-	query := `
-WITH activities AS (
-	SELECT
-	    'post'::text AS activity_type,
-	    posts.created_at AS activity_at,
-        posts.id AS source_id,
-        posts.id AS post_id,
-        posts.author_id AS actor_id,
-        1::int AS activity_rank
-	FROM posts
-	JOIN user_follows AS direct_follow
-      ON direct_follow.following_id = posts.author_id
-     AND direct_follow.follower_id = ?
-    WHERE posts.reply_to_post_id IS NULL
-	      AND ` + publicPostEligibilitySQL("posts") + `
-
-    UNION ALL
-
-    SELECT
-        'repost'::text AS activity_type,
-        post_reposts.created_at AS activity_at,
-        post_reposts.id AS source_id,
-        posts.id AS post_id,
-        post_reposts.user_id AS actor_id,
-        2::int AS activity_rank
-    FROM post_reposts
-    JOIN user_follows AS repost_follow
-      ON repost_follow.following_id = post_reposts.user_id
-     AND repost_follow.follower_id = ?
-    JOIN users AS reposter
-      ON reposter.id = post_reposts.user_id
-     AND reposter.deleted_at IS NULL
-	JOIN posts
-	  ON posts.id = post_reposts.post_id
-    JOIN users AS canonical_author
-      ON canonical_author.id = posts.author_id
-     AND canonical_author.deleted_at IS NULL
-	WHERE ` + publicPostEligibilitySQL("posts") + `
-), latest AS (
-    SELECT DISTINCT ON (post_id)
-        activity_type,
-        activity_at,
-        source_id,
-        post_id,
-        actor_id,
-        activity_rank
-    FROM activities
-    ORDER BY post_id, activity_at DESC, activity_rank DESC, source_id DESC
-)
-SELECT activity_type, activity_at, source_id, post_id, actor_id, activity_rank
-FROM latest
-`
-	args := []interface{}{
-		viewerID,
-		viewerID,
-	}
-	if cursor != nil {
+	var query string
+	var args []interface{}
+	if cursor == nil {
+		query = followingTimelineFirstPageSQL()
+		args = []interface{}{viewerID, limit + 1, limit + 1, limit + 1}
+	} else {
 		rank := timelineActivityRank(cursor.ActivityType)
 		if rank == 0 {
 			return timelinePageResponse{}, errors.New("invalid cursor")
 		}
-		query += `
-WHERE activity_at < ?
-   OR (activity_at = ? AND (activity_rank < ? OR (activity_rank = ? AND source_id < ?)))
-`
-		args = append(args, cursor.ActivityAt, cursor.ActivityAt, rank, rank, cursor.SourceID)
+		query = followingTimelineCursorSQL()
+		args = []interface{}{
+			viewerID, viewerID,
+			cursor.ActivityAt, cursor.ActivityAt, rank, rank, cursor.SourceID,
+			limit + 1,
+		}
 	}
-	query += `
-ORDER BY activity_at DESC, activity_rank DESC, source_id DESC
-LIMIT ?
-`
-	args = append(args, limit+1)
 
 	var rows []timelineActivityQueryRow
 	if err := db.Raw(query, args...).Scan(&rows).Error; err != nil {

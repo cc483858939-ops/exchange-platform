@@ -26,7 +26,6 @@ vi.mock('../storage/replyStorage', () => ({
   replyStorageKey: (viewerID: number, parentPostID: number) => `${viewerID}:${parentPostID}`,
   getReplyDraft: vi.fn(async (viewerID: number, parentPostID: number) => mocks.drafts.get(storageKey(viewerID, parentPostID)) ?? null),
   saveReplyDraft: vi.fn(async (record: any) => { mocks.drafts.set(record.key, record); }),
-  deleteReplyDraft: vi.fn(async (viewerID: number, parentPostID: number) => mocks.drafts.delete(storageKey(viewerID, parentPostID))),
   deleteReplyDraftIfUnchanged: vi.fn(async (
     viewerID: number,
     parentPostID: number,
@@ -635,23 +634,23 @@ describe('replySubmission store', () => {
     expect(conditionalDelete).toHaveBeenCalledWith(7, 42, 'same text', expect.any(Function));
   });
 
-  it('keeps a legacy reply draft and permits discard without adopting the current session', async () => {
-    const { viewerSessionID: _sessionID, ...legacy } = record({ phase: 'publishing' });
-    mocks.records.set('7:42', legacy);
+  it('reports invalid stored operations without adopting them or changing the working draft', async () => {
+    const { viewerSessionID: _sessionID, ...invalid } = record({ phase: 'publishing' });
+    mocks.records.set('7:42', invalid);
     drafts().setViewer(7);
-    drafts().setDraft(42, 'legacy reply draft');
+    drafts().setDraft(42, 'current reply draft');
+    const storageModule = await import('../storage/replyStorage');
+    vi.mocked(storageModule.listReplySubmissionOperations)
+      .mockRejectedValueOnce(new Error('The saved reply operation is invalid.'));
 
-    await store().activateViewer(7);
+    await expect(store().activateViewer(7)).rejects.toThrow('hydration failed');
     await flushPromises();
 
-    expect(store().getOperation(7, 42)).toMatchObject({
-      viewerSessionID: null, phase: 'failed', failureKind: 'auth_context_changed',
-    });
-    expect(mocks.records.get('7:42')?.viewerSessionID).toBeNull();
+    expect(store().getOperation(7, 42)).toBeNull();
+    expect(store().recoveryError).toContain('recovery could not be checked');
+    expect(mocks.records.get('7:42')).toBe(invalid);
     expect(mocks.createPostReply).not.toHaveBeenCalled();
-    expect(drafts().getDraft(42)).toBe('legacy reply draft');
-    expect(await store().abandonFailedOperation('operation-a')).toBe(true);
-    expect(drafts().getDraft(42)).toBe('legacy reply draft');
+    expect(drafts().getDraft(42)).toBe('current reply draft');
   });
 
   it('does not delete a saved source for an unsaved reply derivative', async () => {

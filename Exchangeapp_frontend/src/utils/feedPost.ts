@@ -10,16 +10,8 @@ import type {
 const safeLikeCount = (likes: number, fallback = 0) =>
   Number.isFinite(likes) ? Math.max(0, likes) : Math.max(0, fallback);
 
-const safeRepostCount = (reposts: number, fallback = 0) => {
-  const count = Number(reposts);
-  if (!Number.isFinite(count) || !Number.isInteger(count) || count < 0) {
-    return Math.max(0, Math.floor(Number(fallback) || 0));
-  }
-  return count;
-};
-
-const safeQuoteCount = (quotes: number, fallback = 0) => {
-  const count = Number(quotes);
+const safeAggregateCount = (value: number, fallback = 0) => {
+  const count = Number(value);
   if (!Number.isFinite(count) || !Number.isInteger(count) || count < 0) {
     return Math.max(0, Math.floor(Number(fallback) || 0));
   }
@@ -42,17 +34,28 @@ export function postToFeedPost(
     createdAt: post.published_at || post.created_at,
     likeCount: post.like_count ?? 0,
     replyCount: post.reply_count ?? 0,
-    quoteCount: safeQuoteCount(post.quote_count, 0),
+    quoteCount: safeAggregateCount(post.quote_count),
     viewCount: Math.max(0, post.view_count),
     liked: false,
     likeStatus: 'unknown',
-    repostCount: safeRepostCount(post.repost_count, 0),
+    repostCount: safeAggregateCount(post.repost_count),
     reposted: false,
     repostStatus: 'unknown',
     bookmarked: false,
     bookmarkStatus: 'unknown',
     ...(context.repostActor ? { repostContext: { actor: context.repostActor } } : {}),
   };
+}
+
+export function initializeGuestInteractionStates(posts: FeedPost[]): void {
+  posts.forEach((post) => {
+    post.liked = false;
+    post.likeStatus = 'ready';
+    post.reposted = false;
+    post.repostStatus = 'ready';
+    post.bookmarked = false;
+    post.bookmarkStatus = 'ready';
+  });
 }
 
 export function setFeedPostLikeReady(post: FeedPost, likes: number, liked: boolean): FeedPost {
@@ -83,7 +86,7 @@ export function applyFeedLikeStateUpdate(post: FeedPost, update: FeedLikeStateUp
 }
 
 export function setFeedPostRepostReady(post: FeedPost, reposts: number, reposted: boolean): FeedPost {
-  post.repostCount = safeRepostCount(reposts, post.repostCount);
+  post.repostCount = safeAggregateCount(reposts, post.repostCount);
   post.reposted = reposted;
   post.repostStatus = 'ready';
   return post;

@@ -199,11 +199,7 @@ func consumeRecommendationMetricsMessagesWithApply(
 			metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(commitErr))
 			return commitErr
 		}
-		backlog := int64(0)
-		if statsReader, ok := reader.(interface{ Stats() kafka.ReaderStats }); ok {
-			backlog = kafkaBacklog(statsReader)
-		}
-		PipelineCommit(PipelineRecommendationMetrics, time.Now().UTC(), backlog)
+		PipelineCommit(PipelineRecommendationMetrics, time.Now().UTC(), 0)
 	}
 }
 

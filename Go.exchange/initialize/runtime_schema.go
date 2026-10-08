@@ -17,15 +17,15 @@ import (
 )
 
 // RequiredSchemaVersion is the schema version required by this binary.
-// Schema 15 adds indexed media eligibility and durable published-media cleanup.
-const RequiredSchemaVersion int64 = 15
+// Schema 17 adds durable propagation of deleted Post Like state.
+const RequiredSchemaVersion int64 = 17
 
 // PublishedSchemaCurrentVersion and PublishedSchemaCompatibilityFloor are
 // migration-owned values. They are deliberately separate from the binary's
 // required version so a migration can publish a compatibility interval that
 // spans more than one release.
 const (
-	PublishedSchemaCurrentVersion     int64 = 15
+	PublishedSchemaCurrentVersion     int64 = 17
 	PublishedSchemaCompatibilityFloor int64 = 14
 )
 
@@ -66,29 +66,6 @@ type schemaObjectCanary struct {
 	Table       string
 	Constraints []string
 	Indexes     []string
-}
-
-type legacySchemaColumn struct {
-	Table  string
-	Column string
-}
-
-var legacyContentTableNames = []string{
-	"articles",
-	"post_articles",
-	"comments",
-	"article_reaction",
-	"article_reposts",
-	"article_embeddings",
-	"article_behaviors",
-	"user_article_reco_states",
-}
-
-var legacyRuntimeColumns = []legacySchemaColumn{
-	{Table: "notifications", Column: "article_id"},
-	{Table: "notifications", Column: "comment_id"},
-	{Table: "recommendation_result_traces", Column: "article_id"},
-	{Table: "recommendation_daily_metrics", Column: "article_id"},
 }
 
 var postSchemaObjectCanaries = []schemaObjectCanary{
@@ -151,6 +128,11 @@ var postSchemaObjectCanaries = []schemaObjectCanary{
 		Table:       "post_media_cleanup",
 		Constraints: []string{"chk_post_media_cleanup_identity", "chk_post_media_cleanup_error"},
 		Indexes:     []string{"post_media_cleanup_pkey", "idx_post_media_cleanup_due"},
+	},
+	{
+		Table:       "post_like_cleanups",
+		Constraints: []string{"chk_post_like_cleanup_post_positive"},
+		Indexes:     []string{"post_like_cleanups_pkey", "idx_post_like_cleanup_due"},
 	},
 	{
 		Table: "post_media_uploads",
@@ -234,6 +216,7 @@ var apiSchemaModels = []interface{}{
 	&models.PostMedia{},
 	&models.PostMediaUpload{},
 	&models.PostMediaCleanup{},
+	&models.PostLikeCleanup{},
 	&models.PostRepost{},
 	&models.PostBookmark{},
 	&models.PostReaction{},
@@ -361,9 +344,6 @@ func runtimeSchemaVersionsCompatible(current, floor, required int64) bool {
 func validateSchemaCanaries(ctx context.Context, db *gorm.DB, options SchemaValidationOptions) error {
 	if err := ctx.Err(); err != nil {
 		return schemaError("schema_check_timeout")
-	}
-	if err := validateLegacySchemaAbsence(ctx, db); err != nil {
-		return err
 	}
 	canaries, err := runtimeSchemaCanaries(db, options.IncludeWorkerTables)
 	if err != nil {
@@ -510,67 +490,6 @@ func validateSchemaObjects(canaries []schemaObjectCanary, constraintRows, indexR
 				return schemaError("schema_index_missing")
 			}
 		}
-	}
-	return nil
-}
-
-func validateLegacySchemaAbsence(ctx context.Context, db *gorm.DB) error {
-	if err := ctx.Err(); err != nil {
-		return schemaError("schema_check_timeout")
-	}
-
-	var tableRows []schemaMetadataRow
-	if err := db.WithContext(ctx).Raw(`
-SELECT class.relname AS table_name,
-       namespace.nspname AS table_schema,
-       class.relkind::text AS relation_kind
-FROM pg_namespace AS namespace
-JOIN pg_class AS class
-  ON class.relnamespace = namespace.oid
-WHERE namespace.nspname = ANY(current_schemas(false))
-  AND class.relname IN ?
-`, legacyContentTableNames).Scan(&tableRows).Error; err != nil {
-		if isSchemaCheckTimeout(ctx, err) {
-			return schemaError("schema_check_timeout")
-		}
-		return schemaError("schema_check_unavailable")
-	}
-
-	var columnRows []schemaMetadataRow
-	legacyColumnPredicates := make([]string, 0, len(legacyRuntimeColumns))
-	legacyColumnArgs := make([]interface{}, 0, len(legacyRuntimeColumns)*2)
-	for _, legacyColumn := range legacyRuntimeColumns {
-		legacyColumnPredicates = append(legacyColumnPredicates, "(class.relname = ? AND attribute.attname = ?)")
-		legacyColumnArgs = append(legacyColumnArgs, legacyColumn.Table, legacyColumn.Column)
-	}
-	legacyColumnQuery := `
-SELECT class.relname AS table_name,
-       namespace.nspname AS table_schema,
-       class.relkind::text AS relation_kind,
-       attribute.attname AS column_name
-FROM pg_namespace AS namespace
-JOIN pg_class AS class
-  ON class.relnamespace = namespace.oid
-JOIN pg_attribute AS attribute
-  ON attribute.attrelid = class.oid
- AND attribute.attnum > 0
- AND NOT attribute.attisdropped
-WHERE namespace.nspname = ANY(current_schemas(false))
-  AND (` + strings.Join(legacyColumnPredicates, " OR ") + `)
-`
-	if err := db.WithContext(ctx).Raw(legacyColumnQuery, legacyColumnArgs...).Scan(&columnRows).Error; err != nil {
-		if isSchemaCheckTimeout(ctx, err) {
-			return schemaError("schema_check_timeout")
-		}
-		return schemaError("schema_check_unavailable")
-	}
-
-	return validateLegacySchemaMetadata(tableRows, columnRows)
-}
-
-func validateLegacySchemaMetadata(tableRows, columnRows []schemaMetadataRow) error {
-	if len(tableRows) > 0 || len(columnRows) > 0 {
-		return schemaError("schema_legacy_content_present")
 	}
 	return nil
 }

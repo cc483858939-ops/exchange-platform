@@ -16,7 +16,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestPostMediaDeletionMigrationBackfillAndClaimsIntegration(t *testing.T) {
+func TestPostMediaDeletionMigrationAndClaimsIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
@@ -62,15 +62,19 @@ func TestPostMediaDeletionMigrationBackfillAndClaimsIntegration(t *testing.T) {
 	if err := tx.Delete(&deleted).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := applyPostMediaDeletionSchema(tx, 14); err != nil {
+	if err := applyPostMediaDeletionSchema(tx); err != nil {
 		t.Fatal(err)
 	}
-	var job models.PostMediaCleanup
-	if err := tx.First(&job).Error; err != nil {
-		t.Fatal(err)
+	var count int64
+	if err := tx.Model(&models.PostMediaCleanup{}).Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("schema initialization created cleanup work: count=%d err=%v", count, err)
 	}
-	if job.MediaID != id || job.OwnerID != owner.ID || job.MediumObjectKey != paths.MediumObjectKey {
-		t.Fatalf("backfill=%+v", job)
+	job := models.PostMediaCleanup{
+		MediaID: id, OwnerID: owner.ID, MediumObjectKey: paths.MediumObjectKey,
+		LargeObjectKey: paths.LargeObjectKey, CreatedAt: time.Now().UTC(), CleanupAfter: time.Now().UTC(),
+	}
+	if err := tx.Create(&job).Error; err != nil {
+		t.Fatal(err)
 	}
 	for _, index := range []string{"idx_post_media_url", "idx_post_media_large_url", "idx_post_media_cleanup_due"} {
 		var exists bool
@@ -103,7 +107,7 @@ func TestPostMediaDeletionMigrationBackfillAndClaimsIntegration(t *testing.T) {
 	if allowed, err := postmediacleanup.Unreferenced(context.Background(), tx, claims[0]); err != nil || !allowed {
 		t.Fatalf("deleted references retained=%t err=%v", !allowed, err)
 	}
-	if err := applyPostMediaDeletionSchema(tx, 15); err != nil {
+	if err := applyPostMediaDeletionSchema(tx); err != nil {
 		t.Fatal(err)
 	}
 	var preserved models.PostMediaCleanup
@@ -119,5 +123,11 @@ func TestPostMediaDeletionMigrationBackfillAndClaimsIntegration(t *testing.T) {
 	var remaining int64
 	if err := tx.Model(&models.PostMediaCleanup{}).Count(&remaining).Error; err != nil || remaining != 0 {
 		t.Fatalf("remaining=%d err=%v", remaining, err)
+	}
+	if err := applyPostMediaDeletionSchema(tx); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Model(&models.PostMediaCleanup{}).Count(&remaining).Error; err != nil || remaining != 0 {
+		t.Fatalf("completed work re-enqueued: remaining=%d err=%v", remaining, err)
 	}
 }

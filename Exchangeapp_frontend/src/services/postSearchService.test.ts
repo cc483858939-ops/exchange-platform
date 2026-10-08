@@ -9,6 +9,13 @@ import { searchPosts, type PostSearchPage, type PostSearchQuery } from './postSe
 describe('postSearchService', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('forwards the caller cancellation signal', async () => {
+    const signal = new AbortController().signal;
+    mocks.get.mockResolvedValue({ data: { items: [], next_cursor: null } });
+    await searchPosts({ q: 'yen' }, signal);
+    expect(mocks.get).toHaveBeenCalledExactlyOnceWith('/posts/search', { params: { q: 'yen' }, signal });
+  });
+
   it('requests the authenticated Post search endpoint with the complete criteria', async () => {
     const page: PostSearchPage = { items: [], next_cursor: 'opaque-next' };
     const query: PostSearchQuery = {

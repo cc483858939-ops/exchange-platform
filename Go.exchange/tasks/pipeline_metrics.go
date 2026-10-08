@@ -26,6 +26,7 @@ func startPipelineMetrics(ctx context.Context, wg *sync.WaitGroup) {
 	// Historical COUNTs must not hold up the fast health sampling loop.
 	startPipelineMetricsSampler(ctx, wg, pipelineHealthMetricsInterval, pipelineMetricsSampleTimeout, refreshPipelineMetrics)
 	startPipelineMetricsSampler(ctx, wg, pipelineRetainedMetricsInterval, pipelineMetricsSampleTimeout, refreshPipelineRetainedMetrics)
+	startPipelineMetricsSampler(ctx, wg, pipelineHealthMetricsInterval, pipelineMetricsSampleTimeout, refreshKafkaCommittedBacklogs)
 }
 
 func startPipelineMetricsSampler(ctx context.Context, wg *sync.WaitGroup, interval, timeout time.Duration, refresh func(context.Context)) {
@@ -55,14 +56,18 @@ func refreshPipelineMetrics(ctx context.Context) {
 	var oldest struct {
 		CreatedAt *time.Time `gorm:"column:created_at"`
 	}
-	if err := db.Model(&models.OutboxEvent{}).Select("MIN(created_at) AS created_at").Scan(&oldest).Error; err == nil && oldest.CreatedAt != nil {
-		age := time.Since(oldest.CreatedAt.UTC()).Seconds()
+	if err := db.Model(&models.OutboxEvent{}).Select("MIN(created_at) AS created_at").Scan(&oldest).Error; err != nil {
+		metrics.RecordOutboxOldestAgeSample(0, time.Now().UTC(), false)
+		log.Printf("[Metrics] read oldest outbox row: %v", err)
+	} else {
+		age := float64(0)
+		if oldest.CreatedAt != nil {
+			age = time.Since(oldest.CreatedAt.UTC()).Seconds()
+		}
 		if age < 0 {
 			age = 0
 		}
-		metrics.SetOutboxOldestRowAgeSeconds(age)
-	} else {
-		metrics.SetOutboxOldestRowAgeSeconds(0)
+		metrics.RecordOutboxOldestAgeSample(age, time.Now().UTC(), true)
 	}
 	refreshOutboxCDCMetrics(ctx, db)
 	var dirtyProfiles int64

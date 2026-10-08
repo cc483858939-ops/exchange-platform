@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,17 +27,20 @@ import (
 )
 
 const (
-	apiShutdownTimeout       = 10 * time.Second
-	defaultTraceDrainTimeout = 5 * time.Second
+	apiShutdownTimeout        = 10 * time.Second
+	defaultTraceDrainTimeout  = 5 * time.Second
+	forcedRequestDrainTimeout = 3 * time.Second
 )
 
 type APIRuntime struct {
-	Server             *http.Server
-	readiness          *runtimehealth.APIReadiness
-	traceDispatcher    recommendation.TraceDispatcher
-	traceDrainTimeout  time.Duration
-	translationService *translation.TranslationService
-	rateService        *services.RateService
+	Server              *http.Server
+	readiness           *runtimehealth.APIReadiness
+	traceDispatcher     recommendation.TraceDispatcher
+	traceDrainTimeout   time.Duration
+	translationService  *translation.TranslationService
+	rateService         *services.RateService
+	requests            *apiRequestLifecycle
+	httpShutdownTimeout time.Duration
 }
 
 func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher) (_ *APIRuntime, returnErr error) {
@@ -68,6 +72,8 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 		}),
 		translation.NewRedisCache(global.RedisDB),
 		translation.ServiceConfig{
+			MaxConcurrent:  translationConfig.MaxConcurrent,
+			MaxQueued:      translationConfig.MaxQueued,
 			Enabled:        translationConfig.Enabled,
 			Model:          translationConfig.Model,
 			PromptVersion:  translationConfig.PromptVersion,
@@ -141,18 +147,71 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 		return nil, fmt.Errorf("initialize HTTP router: %w", err)
 	}
 	readiness.Start(context.Background())
-	server := newAPIServer(port, handler)
+	runtime := newAPIHTTPRuntime(port, handler)
+	server := runtime.Server
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Listen: %s\n", err)
 		}
 	}()
-	return &APIRuntime{
-		Server: server, readiness: readiness, traceDispatcher: traceDispatcher,
-		traceDrainTimeout:  time.Duration(recommendationConfig.Trace.ShutdownDrainTimeoutMS) * time.Millisecond,
-		translationService: translationService,
-		rateService:        services.DefaultExchangeRateService(),
-	}, nil
+	runtime.readiness = readiness
+	runtime.traceDispatcher = traceDispatcher
+	runtime.traceDrainTimeout = time.Duration(recommendationConfig.Trace.ShutdownDrainTimeoutMS) * time.Millisecond
+	runtime.translationService = translationService
+	runtime.rateService = services.DefaultExchangeRateService()
+	return runtime, nil
+}
+
+// Once closing is set, no new handler may join the drain. Active requests are
+// cancelled together only after their graceful shutdown budget has expired.
+type apiRequestLifecycle struct {
+	handler http.Handler
+	cancel  context.CancelFunc
+	mu      sync.Mutex
+	active  int
+	closing bool
+	done    chan struct{}
+}
+
+func newAPIHTTPRuntime(addr string, handler http.Handler) *APIRuntime {
+	ctx, cancel := context.WithCancel(context.Background())
+	requests := &apiRequestLifecycle{handler: handler, cancel: cancel, done: make(chan struct{})}
+	server := newAPIServer(addr, requests)
+	server.BaseContext = func(net.Listener) context.Context { return ctx }
+	return &APIRuntime{Server: server, requests: requests}
+}
+
+func (requests *apiRequestLifecycle) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	requests.mu.Lock()
+	if requests.closing {
+		requests.mu.Unlock()
+		http.Error(writer, "Server is shutting down", http.StatusServiceUnavailable)
+		return
+	}
+	requests.active++
+	requests.mu.Unlock()
+	defer func() {
+		requests.mu.Lock()
+		requests.active--
+		if requests.closing && requests.active == 0 {
+			close(requests.done)
+		}
+		requests.mu.Unlock()
+	}()
+	requests.handler.ServeHTTP(writer, request)
+}
+
+func (requests *apiRequestLifecycle) stop() <-chan struct{} {
+	requests.mu.Lock()
+	if !requests.closing {
+		requests.closing = true
+		if requests.active == 0 {
+			close(requests.done)
+		}
+	}
+	requests.mu.Unlock()
+	requests.cancel()
+	return requests.done
 }
 
 func newAPIServer(addr string, handler http.Handler) *http.Server {
@@ -193,12 +252,31 @@ func shutdownAPIRuntime(cancel context.CancelFunc, runtime *APIRuntime, waitGrou
 		runtime.readiness.MarkShuttingDown()
 		runtime.readiness.Stop()
 	}
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), apiShutdownTimeout)
+	shutdownTimeout := runtime.httpShutdownTimeout
+	if shutdownTimeout <= 0 {
+		shutdownTimeout = apiShutdownTimeout
+	}
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
 	if runtime.Server != nil {
 		if err := runtime.Server.Shutdown(shutdownCtx); err != nil {
-			log.Printf("HTTP server forced to shut down: %v", err)
+			log.Printf("HTTP server graceful shutdown timed out: %v", err)
+			if runtime.requests != nil {
+				runtime.requests.stop()
+			}
+			if err := runtime.Server.Close(); err != nil {
+				log.Printf("close remaining HTTP connections: %v", err)
+			}
 		}
+	}
+	if runtime.requests != nil {
+		timer := time.NewTimer(forcedRequestDrainTimeout)
+		select {
+		case <-runtime.requests.stop():
+		case <-timer.C:
+			log.Println("cancelled HTTP handlers did not finish within shutdown budget; in-flight results may be unknown")
+		}
+		timer.Stop()
 	}
 	if runtime.translationService != nil {
 		runtime.translationService.Close()

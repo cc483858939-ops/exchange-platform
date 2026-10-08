@@ -33,7 +33,11 @@ func NewLikeSnapshotEnvelope(postID uint, count, version int64) (Envelope, error
 }
 
 func NewLikeBehaviorEnvelope(eventID string, userID, postID uint, action string, version int64, occurredAt time.Time) (Envelope, error) {
-	if strings.TrimSpace(eventID) == "" || userID == 0 || postID == 0 ||
+	eventID, err := NormalizeEventID(eventID)
+	if err != nil {
+		return Envelope{}, err
+	}
+	if userID == 0 || postID == 0 ||
 		(strings.TrimSpace(action) != "like" && strings.TrimSpace(action) != "unlike") ||
 		version <= 0 || occurredAt.IsZero() {
 		return Envelope{}, fmt.Errorf("invalid post like behavior")

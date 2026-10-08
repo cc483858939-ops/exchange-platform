@@ -16,6 +16,7 @@ import (
 
 type mediaDeletionFixture struct {
 	deleted, queued, pendingDeleted, pendingQueued bool
+	likeQueued, pendingLikeQueued, failLikeQueue   bool
 	failQueue                                      bool
 	commits, rollbacks                             int
 	medium, large                                  string
@@ -39,6 +40,7 @@ func (c mediaDeletionConn) Begin() (driver.Tx, error) {
 func (c mediaDeletionConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
 	c.fixture.pendingDeleted = c.fixture.deleted
 	c.fixture.pendingQueued = c.fixture.queued
+	c.fixture.pendingLikeQueued = c.fixture.likeQueued
 	return mediaDeletionTx{c.fixture}, nil
 }
 
@@ -47,12 +49,14 @@ type mediaDeletionTx struct{ fixture *mediaDeletionFixture }
 func (tx mediaDeletionTx) Commit() error {
 	tx.fixture.deleted = tx.fixture.pendingDeleted
 	tx.fixture.queued = tx.fixture.pendingQueued
+	tx.fixture.likeQueued = tx.fixture.pendingLikeQueued
 	tx.fixture.commits++
 	return nil
 }
 func (tx mediaDeletionTx) Rollback() error {
 	tx.fixture.pendingDeleted = tx.fixture.deleted
 	tx.fixture.pendingQueued = tx.fixture.queued
+	tx.fixture.pendingLikeQueued = tx.fixture.likeQueued
 	tx.fixture.rollbacks++
 	return nil
 }
@@ -88,6 +92,12 @@ func (c mediaDeletionConn) ExecContext(ctx context.Context, query string, args [
 		}
 		c.fixture.pendingQueued = true
 		return driver.RowsAffected(1), nil
+	case strings.HasPrefix(query, `INSERT INTO "post_like_cleanups"`):
+		if !c.fixture.pendingDeleted || c.fixture.failLikeQueue {
+			return nil, errors.New("Like deletion propagation unavailable")
+		}
+		c.fixture.pendingLikeQueued = true
+		return driver.RowsAffected(1), nil
 	default:
 		return nil, errors.New("unexpected exec: " + query)
 	}
@@ -95,12 +105,14 @@ func (c mediaDeletionConn) ExecContext(ctx context.Context, query string, args [
 
 func TestPostMediaDeletionAndCleanupRegistrationCommitTogether(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, test := range []string{"success", "queue failure", "wrong owner metadata", "DevData retained"} {
+	for _, test := range []string{"success", "queue failure", "Like queue failure", "wrong owner metadata", "DevData retained"} {
 		t.Run(test, func(t *testing.T) {
 			fixture := &mediaDeletionFixture{medium: "/api/files/post-media/users/v1/42/550e8400-e29b-41d4-a716-446655440000/medium.jpg", large: "/api/files/post-media/users/v1/42/550e8400-e29b-41d4-a716-446655440000/large.jpg"}
 			switch test {
 			case "queue failure":
 				fixture.failQueue = true
+			case "Like queue failure":
+				fixture.failLikeQueue = true
 			case "wrong owner metadata":
 				fixture.medium = strings.Replace(fixture.medium, "/42/", "/43/", 1)
 			case "DevData retained":
@@ -118,10 +130,10 @@ func TestPostMediaDeletionAndCleanupRegistrationCommitTogether(t *testing.T) {
 			t.Cleanup(func() { global.APIDb = previous })
 			_, err = deletePostInTransactionFromDB(context.Background(), 101, 42)
 			if test == "success" || test == "DevData retained" {
-				if err != nil || !fixture.deleted || fixture.commits != 1 || fixture.queued != (test == "success") {
+				if err != nil || !fixture.deleted || !fixture.likeQueued || fixture.commits != 1 || fixture.queued != (test == "success") {
 					t.Fatalf("fixture=%+v err=%v", fixture, err)
 				}
-			} else if err == nil || fixture.deleted || fixture.queued || fixture.rollbacks != 1 {
+			} else if err == nil || fixture.deleted || fixture.queued || fixture.likeQueued || fixture.rollbacks != 1 {
 				t.Fatalf("partial deletion committed: fixture=%+v err=%v", fixture, err)
 			}
 		})

@@ -193,7 +193,7 @@ func openPostDeleteIntegrationDatabase(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostRepost{}, &models.PostMedia{}, &models.PostMediaCleanup{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostRepost{}, &models.PostMedia{}, &models.PostMediaCleanup{}, &models.PostLikeCleanup{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -215,6 +215,7 @@ func TestDeletePostIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		db.Where("post_id IN (?)", db.Unscoped().Model(&models.Post{}).Select("id").Where("author_id IN ?", []uint{owner.ID, other.ID})).Delete(&models.PostLikeCleanup{})
 		db.Unscoped().Where("author_id IN ?", []uint{owner.ID, other.ID}).Delete(&models.Post{})
 		db.Unscoped().Where("id IN ?", []uint{owner.ID, other.ID}).Delete(&models.User{})
 	})
@@ -312,6 +313,7 @@ func TestDeletePostCancellationRollsBackReplyAndRepostChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		db.Where("post_id IN ?", []uint{parent.ID, child.ID}).Delete(&models.PostLikeCleanup{})
 		db.Unscoped().Where("post_id IN ?", []uint{parent.ID, child.ID}).Delete(&models.PostRepost{})
 		db.Unscoped().Where("id IN ?", []uint{parent.ID, child.ID}).Delete(&models.Post{})
 		db.Unscoped().Where("id IN ?", []uint{owner.ID, reposter.ID}).Delete(&models.User{})

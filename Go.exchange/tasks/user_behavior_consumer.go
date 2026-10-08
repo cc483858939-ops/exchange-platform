@@ -187,11 +187,7 @@ func consumeUserBehaviorMessagesWithApply(
 			metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(commitErr))
 			return commitErr
 		}
-		backlog := int64(0)
-		if statsReader, ok := reader.(interface{ Stats() kafka.ReaderStats }); ok {
-			backlog = kafkaBacklog(statsReader)
-		}
-		PipelineCommit(PipelineUserBehaviorProjection, time.Now().UTC(), backlog)
+		PipelineCommit(PipelineUserBehaviorProjection, time.Now().UTC(), 0)
 	}
 }
 

@@ -71,31 +71,11 @@ export const createCoverCropGeometry = (
   naturalHeight,
 );
 
-export const clampCoverCropState = (
-  state: CoverCropState,
-  geometry: CoverCropGeometry,
-): CoverCropState => clampImageCropState(state, geometry);
-
-export const centeredCoverCropState = (
-  geometry: CoverCropGeometry,
-): CoverCropState => centeredImageCropState(geometry);
-
-export const zoomCoverCropState = (
-  state: CoverCropState,
-  nextScale: number,
-  geometry: CoverCropGeometry,
-): CoverCropState => zoomImageCropState(state, nextScale, geometry);
-
-export const remapCoverCropState = (
-  state: CoverCropState,
-  oldGeometry: CoverCropGeometry,
-  newGeometry: CoverCropGeometry,
-): CoverCropState => remapImageCropState(state, oldGeometry, newGeometry);
-
-export const coverCropSourceRect = (
-  state: CoverCropState,
-  geometry: CoverCropGeometry,
-) => imageCropSourceRect(state, geometry);
+export const clampCoverCropState = clampImageCropState;
+export const centeredCoverCropState = centeredImageCropState;
+export const zoomCoverCropState = zoomImageCropState;
+export const remapCoverCropState = remapImageCropState;
+export const coverCropSourceRect = imageCropSourceRect;
 
 export const decodeCoverImage = async (source: Blob): Promise<CoverCropSource> => {
   try {

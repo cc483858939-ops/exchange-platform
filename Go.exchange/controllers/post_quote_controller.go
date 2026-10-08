@@ -16,6 +16,17 @@ type quoteListResponse struct {
 	NextCursor *string        `json:"next_cursor"`
 }
 
+func postQuotesPageQuery(db *gorm.DB, postID uint, now time.Time, cursor *postRelationCursor) *gorm.DB {
+	query := publicPostScope(db.Model(&models.Post{}), now).
+		Where("posts.quote_post_id = ?", postID)
+	if cursor != nil {
+		// A row comparison lets the ordered target index seek directly to the
+		// cursor instead of scanning newer quotes and filtering them afterwards.
+		query = query.Where("(posts.created_at, posts.id) < (?, ?)", cursor.CreatedAt, cursor.ID)
+	}
+	return query
+}
+
 func GetPostQuotes(ctx *gin.Context) {
 	postID, ok := postIDFromContext(ctx)
 	if !ok {
@@ -46,16 +57,7 @@ func GetPostQuotes(ctx *gin.Context) {
 		return
 	}
 
-	query := publicPostScope(db.Model(&models.Post{}), now).
-		Where("posts.quote_post_id = ?", postID)
-	if cursor != nil {
-		query = query.Where(
-			"(created_at < ?) OR (created_at = ? AND id < ?)",
-			cursor.CreatedAt,
-			cursor.CreatedAt,
-			cursor.ID,
-		)
-	}
+	query := postQuotesPageQuery(db, postID, now, cursor)
 	posts := make([]models.Post, 0, limit+1)
 	if err := query.
 		Preload("Author", func(tx *gorm.DB) *gorm.DB {

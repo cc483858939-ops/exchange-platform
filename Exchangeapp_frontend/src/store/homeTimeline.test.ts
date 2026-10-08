@@ -100,9 +100,6 @@ import {
   useHomeTimelineStore,
 } from './homeTimeline';
 import { useProfileSessionStore } from './profileSession';
-import {
-  isEngagementMutationLeased,
-} from './engagementMutationLease';
 import { GUEST_RECOMMENDATION_SESSION_STORAGE_KEY } from '../utils/guestRecommendationSession';
 
 const guestSessionID = '4ca3706b-197e-4f63-8f51-f99176f8b61c';
@@ -845,7 +842,6 @@ describe('home timeline session store', () => {
     expect(mocks.likePost).toHaveBeenCalledTimes(1);
     expect(homePost).toMatchObject({ liked: true, likeCount: 1 });
     expect(profilePost).toMatchObject({ liked: true, likeCount: 1 });
-    expect(isEngagementMutationLeased(7, 'like', 42)).toBe(true);
 
     await expect(profileStore.toggleLike(42, 7)).resolves.toBe('ignored');
     expect(mocks.likePost).toHaveBeenCalledTimes(1);
@@ -854,7 +850,6 @@ describe('home timeline session store', () => {
 
     pendingLike.resolve({ likes: 1, liked: true });
     await expect(homeMutation).resolves.toBe('succeeded');
-    expect(isEngagementMutationLeased(7, 'like', 42)).toBe(false);
 
     mocks.unlikePost.mockResolvedValueOnce({ likes: 0, liked: false });
     await expect(profileStore.toggleLike(42, 7)).resolves.toBe('succeeded');

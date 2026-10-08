@@ -3,7 +3,7 @@ import { reactive, ref, watch } from 'vue';
 import { useAuthStore } from './auth';
 import { useFeedStore } from './feed';
 import { getPostQuotes } from '../services/quoteService';
-import { getPostEngagementStates } from '../services/engagementService';
+import { hydratePostEngagement } from './engagementHydration';
 import type { Post } from '../types/Post';
 import type { FeedBookmarkStateUpdate, FeedLikeStateUpdate, FeedPost, FeedRepostStateUpdate } from '../types/Feed';
 import {
@@ -18,11 +18,9 @@ import {
   applyFeedBookmarkStateUpdate,
   applyFeedLikeStateUpdate,
   applyFeedRepostStateUpdate,
+  initializeGuestInteractionStates,
   postToFeedPost,
   invalidateFeedPostReferences,
-  setFeedPostBookmarkUnavailable,
-  setFeedPostLikeUnavailable,
-  setFeedPostRepostUnavailable,
 } from '../utils/feedPost';
 import { normalizePostQuoteCountUpdate } from '../utils/quoteCount';
 import {
@@ -94,17 +92,6 @@ export const useQuotesSessionStore = defineStore('quotesSession', () => {
     requestVersion.value === request && targetPostID.value === target
   );
 
-  const initializeGuestInteractionStates = (posts: FeedPost[]) => {
-    posts.forEach((post) => {
-      post.liked = false;
-      post.likeStatus = 'ready';
-      post.reposted = false;
-      post.repostStatus = 'ready';
-      post.bookmarked = false;
-      post.bookmarkStatus = 'ready';
-    });
-  };
-
   const appendPosts = (posts: Post[]) => {
     const additions: FeedPost[] = [];
     posts.forEach((post) => {
@@ -134,65 +121,10 @@ export const useQuotesSessionStore = defineStore('quotesSession', () => {
       initializeGuestInteractionStates(posts);
       return;
     }
-    const postIDs = Array.from(new Set(posts.map(post => post.id)));
-    if (postIDs.length === 0) return;
-
     const generation = viewerGeneration.value;
-    const revisions = {
-      like: new Map(postIDs.map(postID => [postID, engagementMutations.captureRevision('like', postID)])),
-      repost: new Map(postIDs.map(postID => [postID, engagementMutations.captureRevision('repost', postID)])),
-      bookmark: new Map(postIDs.map(postID => [postID, engagementMutations.captureRevision('bookmark', postID)])),
-    };
-    const current = () => canApplyHydration(target, request, capturedViewerID, generation);
-
-    void getPostEngagementStates(postIDs).then((response) => {
-      if (!current()) return;
-      const states = new Map((response.items ?? []).map(item => [item.post_id, item]));
-      postIDs.forEach((postID) => {
-        const post = findPost(postID);
-        if (!post) return;
-        const state = states.get(postID);
-        const likeRevision = revisions.like.get(postID);
-        if (likeRevision && engagementMutations.isRevisionCurrent('like', postID, likeRevision)) {
-          const like = state?.like;
-          if (like?.status === 'ready') {
-            applyFeedLikeStateUpdate(post, { postId: postID, likes: like.likes, liked: like.liked, status: 'ready' });
-          } else {
-            setFeedPostLikeUnavailable(post);
-          }
-        }
-        const repostRevision = revisions.repost.get(postID);
-        if (repostRevision && engagementMutations.isRevisionCurrent('repost', postID, repostRevision)) {
-          const repost = state?.repost;
-          if (repost?.status === 'ready') {
-            applyFeedRepostStateUpdate(post, { postId: postID, reposts: repost.reposts, reposted: repost.reposted, status: 'ready' });
-          } else {
-            setFeedPostRepostUnavailable(post);
-          }
-        }
-        const bookmarkRevision = revisions.bookmark.get(postID);
-        if (bookmarkRevision && engagementMutations.isRevisionCurrent('bookmark', postID, bookmarkRevision)) {
-          const bookmark = state?.bookmark;
-          if (bookmark?.status === 'ready') {
-            applyFeedBookmarkStateUpdate(post, { postId: postID, bookmarked: bookmark.bookmarked, status: 'ready' });
-          } else {
-            setFeedPostBookmarkUnavailable(post);
-          }
-        }
-      });
-    }).catch(() => {
-      if (!current()) return;
-      postIDs.forEach((postID) => {
-        const post = findPost(postID);
-        if (!post) return;
-        const likeRevision = revisions.like.get(postID);
-        if (likeRevision && engagementMutations.isRevisionCurrent('like', postID, likeRevision)) setFeedPostLikeUnavailable(post);
-        const repostRevision = revisions.repost.get(postID);
-        if (repostRevision && engagementMutations.isRevisionCurrent('repost', postID, repostRevision)) setFeedPostRepostUnavailable(post);
-        const bookmarkRevision = revisions.bookmark.get(postID);
-        if (bookmarkRevision && engagementMutations.isRevisionCurrent('bookmark', postID, bookmarkRevision)) setFeedPostBookmarkUnavailable(post);
-      });
-    });
+    hydratePostEngagement(posts, engagementMutations,
+      () => canApplyHydration(target, request, capturedViewerID, generation),
+      findPost);
   };
 
   const clearPageState = () => {

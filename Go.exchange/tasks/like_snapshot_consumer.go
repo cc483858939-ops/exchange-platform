@@ -124,11 +124,7 @@ func consumeLikeSnapshotMessagesWithApply(
 			}
 			return ctx.Err()
 		}
-		backlog := int64(0)
-		if statsReader, ok := reader.(interface{ Stats() kafka.ReaderStats }); ok {
-			backlog = kafkaBacklog(statsReader)
-		}
-		PipelineCommit(PipelineLikeSnapshotProjection, time.Now().UTC(), backlog)
+		PipelineCommit(PipelineLikeSnapshotProjection, time.Now().UTC(), 0)
 	}
 }
 

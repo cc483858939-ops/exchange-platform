@@ -40,7 +40,9 @@ var (
 		if global.RedisDB == nil {
 			return nil
 		}
-		return likes.NewStore(global.RedisDB).PurgePost(context.Background(), postID)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		return likes.NewStore(global.RedisDB).DeletePost(ctx, postID)
 	}
 )
 
@@ -121,6 +123,9 @@ func deletePostInTransactionFromDB(ctx context.Context, postID, viewerID uint) (
 		}
 		if result.RowsAffected != 1 {
 			return errPostDeleteConsistency
+		}
+		if err := tx.Create(&models.PostLikeCleanup{PostID: postID, RetryAfter: time.Now().UTC()}).Error; err != nil {
+			return err
 		}
 		return postmediacleanup.EnqueueDeletedPost(tx, postID, viewerID, time.Now())
 	})

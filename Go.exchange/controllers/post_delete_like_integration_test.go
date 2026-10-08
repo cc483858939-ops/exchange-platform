@@ -46,6 +46,7 @@ func TestDeletePostPurgesOnlyTargetRedisLikeStateIntegration(t *testing.T) {
 			t.Errorf("cleanup post-like Redis integration state: %v", err)
 		}
 		db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostReaction{})
+		db.Where("post_id IN ?", postIDs).Delete(&models.PostLikeCleanup{})
 		db.Unscoped().Where("id IN ?", postIDs).Delete(&models.Post{})
 		db.Unscoped().Where("id IN ?", []uint{owner.ID, other.ID}).Delete(&models.User{})
 	}
@@ -100,7 +101,10 @@ func TestDeletePostPurgesOnlyTargetRedisLikeStateIntegration(t *testing.T) {
 
 func assertTargetLikeKeysPurged(t *testing.T, client *redis.Client, postID uint) {
 	t.Helper()
-	for _, key := range []string{likes.ReadyKey(postID), likes.CountKey(postID), likes.UsersKey(postID), likes.VersionKey(postID)} {
+	if ready, err := client.Get(likes.ReadyKey(postID)).Result(); err != nil || ready != "deleted" {
+		t.Fatalf("deletion fence=%q err=%v", ready, err)
+	}
+	for _, key := range []string{likes.CountKey(postID), likes.UsersKey(postID), likes.VersionKey(postID)} {
 		if exists, err := client.Exists(key).Result(); err != nil || exists != 0 {
 			t.Fatalf("target key=%q exists=%d err=%v", key, exists, err)
 		}

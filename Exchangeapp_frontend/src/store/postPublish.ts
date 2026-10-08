@@ -13,9 +13,13 @@ import {
   getPostPublishOperation,
   restorePublishOperation,
   serializePublishOperation,
-  updatePostPublishOperation,
+  serializePublishOperationCheckpoint,
+  updatePostPublishOperationCheckpoint,
   type PersistedPublishFailureKind,
   type PersistedPublishPhase,
+  type PublishOperationMediaValue,
+  type PublishOperationValue,
+  type PublishSourceDraft,
 } from '../storage/postPublishRepository';
 import { useAuthStore } from './auth';
 import {
@@ -32,11 +36,9 @@ import {
   canMarkDurableSubmissionFailed,
   canRetryDurableSubmission,
   isPostIdempotencyConflictError,
-  recoveredSubmissionMustFailClosed,
 } from '../utils/durableSubmissionContract';
 import {
   createPostDraftSnapshot,
-  type DraftSnapshot,
 } from '../utils/postDraftSnapshot';
 import {
   captureBookmarkStateSyncVersion,
@@ -46,27 +48,8 @@ import {
 export type PublishPhase = PersistedPublishPhase;
 export type PublishFailureKind = PersistedPublishFailureKind;
 
-export type PublishOperationMedia = {
-  draftMediaID: string;
-  file: File;
-  uploadedURL: string;
-};
-
-export type PublishOperation = {
-  id: string;
-  publisherUserID: number;
-  publisherSessionID: string | null;
-  sourceDraftID: string | null;
-  sourceDraftSnapshot: DraftSnapshot | null;
-  content: string;
-  quotePostID: number | null;
-  media: PublishOperationMedia[];
-  phase: PublishPhase;
-  failureKind: PublishFailureKind;
-  error: string;
-  startedAt: number;
-  post: Post | null;
-};
+export type PublishOperationMedia = PublishOperationMediaValue;
+export type PublishOperation = PublishOperationValue;
 
 export type PublishSuccessNotice = Readonly<{
   operationID: string;
@@ -265,7 +248,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
   const persistRequired = async (operation: PublishOperation) => {
     let updated: boolean;
     try {
-      updated = await updatePostPublishOperation(serialize(operation));
+      updated = await updatePostPublishOperationCheckpoint(serializePublishOperationCheckpoint(operation));
     } catch (error) {
       throw new PublishPersistenceError(error instanceof Error ? error.message : 'Publish persistence failed.');
     }
@@ -274,7 +257,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
 
   const persistBestEffort = async (operation: PublishOperation) => {
     try {
-      await updatePostPublishOperation(serialize(operation));
+      await updatePostPublishOperationCheckpoint(serializePublishOperationCheckpoint(operation));
     } catch {
       // A durable prior phase remains safe to recover or replay with the same key.
     }
@@ -442,7 +425,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       void refreshAndSyncPostQuoteCount(operation.quotePostID);
     }
     let sourceDraftClean = operation.sourceDraftID === null;
-    if (operation.sourceDraftID) {
+    if (operation.sourceDraftID !== null) {
       try {
         await postDraft.resolvePublishedSourceDraft(
           operation.publisherUserID,
@@ -450,7 +433,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
           operation.sourceDraftSnapshot,
           () => operationMatchesCurrentSession(operation),
         );
-        // Deleted, missing, changed, and legacy-without-snapshot all resolve ownership.
+        // Deleted, missing, and changed drafts all resolve this operation's ownership.
         sourceDraftClean = true;
       } catch {
         sourceDraftClean = false;
@@ -635,8 +618,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
           if (operation.phase === 'succeeded' && !operation.post) {
             throw new Error('The successful publish record is incomplete.');
           }
-          if (recoveredSubmissionMustFailClosed(operation.phase, operation.publisherSessionID)
-            || (operation.phase !== 'succeeded' && !operationMatchesCurrentSession(operation))) {
+          if (operation.phase !== 'succeeded' && !operationMatchesCurrentSession(operation)) {
             operation.phase = 'failed';
             operation.failureKind = 'auth_context_changed';
             operation.error = publishFailureMessage;
@@ -818,23 +800,24 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       }
     }
 
-    const ownsSavedSource = postDraft.isSavedDraft
+    const sourceDraft: PublishSourceDraft = postDraft.isSavedDraft
       && !postDraft.hasUnsavedChanges
       && postDraft.draftID !== null
-      && postDraft.savedSnapshot !== null;
-    const sourceDraftSnapshot = ownsSavedSource && postDraft.savedSnapshot
-      ? createPostDraftSnapshot(
-        postDraft.savedSnapshot.content,
-        postDraft.savedSnapshot.media,
-        postDraft.savedSnapshot.quotePostID,
-      )
-      : null;
+      && postDraft.savedSnapshot !== null
+      ? {
+        sourceDraftID: postDraft.draftID,
+        sourceDraftSnapshot: createPostDraftSnapshot(
+          postDraft.savedSnapshot.content,
+          postDraft.savedSnapshot.media,
+          postDraft.savedSnapshot.quotePostID,
+        ),
+      }
+      : { sourceDraftID: null, sourceDraftSnapshot: null };
     const operation: PublishOperation = {
+      ...sourceDraft,
       id: createClientOperationID(),
       publisherUserID,
       publisherSessionID: authBinding.sessionID,
-      sourceDraftID: sourceDraftSnapshot ? postDraft.draftID : null,
-      sourceDraftSnapshot,
       content: postDraft.content.trim(),
       quotePostID: postDraft.quotePostID,
       media: postDraft.media.map(media => ({

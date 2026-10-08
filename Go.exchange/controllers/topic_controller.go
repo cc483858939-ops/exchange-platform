@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 
 	"Go.exchange/config"
@@ -111,16 +110,9 @@ func enabledTopicBySlug(catalog config.CuratedTopicsConfig, slug string) (config
 }
 
 func parseTopicPostPageQuery(ctx *gin.Context, topic config.CuratedTopic) (int, *topicPostCursorV2, error) {
-	limit := defaultTopicPostLimit
-	if raw, exists := ctx.GetQuery("limit"); exists {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed <= 0 {
-			return 0, nil, errors.New("invalid limit")
-		}
-		limit = parsed
-	}
-	if limit > maxTopicPostLimit {
-		limit = maxTopicPostLimit
+	limit, err := parsePageLimit(ctx, defaultTopicPostLimit, maxTopicPostLimit)
+	if err != nil {
+		return 0, nil, err
 	}
 	if raw, exists := ctx.GetQuery("cursor"); exists {
 		topicHash, err := topicCursorCriteriaHash(topic)

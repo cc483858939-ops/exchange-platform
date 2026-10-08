@@ -7,7 +7,6 @@ import {
   AuthRefreshCoordinationUnavailableError,
   clearPersistedAuthSession,
   createTokenRevision,
-  removeLegacyAuthCredentials,
   readPersistedAuthSession,
   runWithAuthMutationLock,
   subscribeToPersistedAuthChanges,
@@ -113,9 +112,7 @@ const readStoredIdentity = (expectedUserId: number): AuthIdentity | null => {
 
 const initializePersistedSession = (): PersistedAuthSession | null => {
   const session = readPersistedAuthSession();
-  if (session) {
-    removeLegacyAuthCredentials();
-  } else {
+  if (!session) {
     clearPersistedAuthSession();
     localStorage.removeItem(authUserKey);
   }

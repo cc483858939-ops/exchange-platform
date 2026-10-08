@@ -147,7 +147,7 @@ let storage: typeof import('./replyStorage');
 let indexedDBMock: FakeIndexedDB;
 
 const operation = (overrides: Partial<import('./replyStorage').PersistedReplySubmissionOperation> = {}) => ({
-  key: '7:42', id: 'op-a', viewerID: 7, parentPostID: 42, content: 'reply',
+  key: '7:42', id: 'op-a', viewerID: 7, viewerSessionID: 'session-7', parentPostID: 42, content: 'reply',
   sourceDraftContent: null, phase: 'publishing' as const, failureKind: null,
   error: '', startedAt: 1, updatedAt: 1, post: null, ...overrides,
 });
@@ -180,8 +180,8 @@ describe('replyStorage', () => {
     expect(await storage.getReplyDraft(7, 42)).toEqual(draft);
     expect(await storage.getReplyDraft(8, 42)).toBeNull();
     expect(await storage.getReplyDraft(7, 43)).toBeNull();
-    expect(await storage.deleteReplyDraft(8, 42)).toBe(false);
-    expect(await storage.deleteReplyDraft(7, 42)).toBe(true);
+    expect(await storage.deleteReplyDraftIfUnchanged(8, 42, draft.content)).toBe('missing');
+    expect(await storage.deleteReplyDraftIfUnchanged(7, 42, draft.content)).toBe('deleted');
     expect(await storage.getReplyDraft(7, 42)).toBeNull();
   });
 
@@ -288,6 +288,23 @@ describe('replyStorage', () => {
     await expect(storage.claimReplySubmissionOperation(operation({ id: 'candidate' })))
       .rejects.toThrow('saved reply operation is invalid');
     expect(indexedDBMock.database!.stores.get('reply_submission_operations')!.get('7:42')).toBe(corrupted);
+  });
+
+  it('requires a session owner on reads and writes without changing invalid saved records', async () => {
+    await storage.getReplySubmissionOperation(7, 42);
+    const records = indexedDBMock.database!.stores.get('reply_submission_operations')!;
+    for (const viewerSessionID of [undefined, null, '', '   ', 7]) {
+      const invalid = { ...operation(), viewerSessionID } as unknown as import('./replyStorage').PersistedReplySubmissionOperation;
+      records.set('7:42', invalid);
+      await expect(storage.claimReplySubmissionOperation(invalid)).rejects.toThrow('saved reply operation is invalid');
+      await expect(storage.getReplySubmissionOperation(7, 42)).rejects.toThrow('saved reply operation is invalid');
+      await expect(storage.listReplySubmissionOperations(7)).rejects.toThrow('saved reply operation is invalid');
+      await expect(storage.claimReplySubmissionOperation(operation({ id: 'candidate' })))
+        .rejects.toThrow('saved reply operation is invalid');
+      await expect(storage.updateReplySubmissionOperation(operation())).rejects.toThrow('saved reply operation is invalid');
+      await expect(storage.deleteReplySubmissionOperation(7, 42, 'op-a')).rejects.toThrow('saved reply operation is invalid');
+      expect(records.get('7:42')).toBe(invalid);
+    }
   });
 
   it('rejects invalid phase/failure combinations and accepts canonical failed records', async () => {

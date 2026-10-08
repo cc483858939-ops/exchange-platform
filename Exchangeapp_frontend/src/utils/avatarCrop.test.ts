@@ -70,15 +70,15 @@ describe('avatar crop geometry', () => {
     }, oldGeometry);
 
     const oldSourceCenter = {
-      x: (oldGeometry.cropSize / 2 - state.offsetX) / state.scale,
-      y: (oldGeometry.cropSize / 2 - state.offsetY) / state.scale,
+      x: (oldGeometry.viewportWidth / 2 - state.offsetX) / state.scale,
+      y: (oldGeometry.viewportHeight / 2 - state.offsetY) / state.scale,
     };
     const oldZoomRatio = (state.scale - oldGeometry.minScale)
       / (oldGeometry.maxScale - oldGeometry.minScale);
     const remapped = remapAvatarCropState(state, oldGeometry, newGeometry);
     const newSourceCenter = {
-      x: (newGeometry.cropSize / 2 - remapped.offsetX) / remapped.scale,
-      y: (newGeometry.cropSize / 2 - remapped.offsetY) / remapped.scale,
+      x: (newGeometry.viewportWidth / 2 - remapped.offsetX) / remapped.scale,
+      y: (newGeometry.viewportHeight / 2 - remapped.offsetY) / remapped.scale,
     };
     const newZoomRatio = (remapped.scale - newGeometry.minScale)
       / (newGeometry.maxScale - newGeometry.minScale);
@@ -101,12 +101,12 @@ describe('avatar crop geometry', () => {
     const displayWidth = newGeometry.naturalWidth * remapped.scale;
     const displayHeight = newGeometry.naturalHeight * remapped.scale;
 
-    expect(displayWidth).toBeGreaterThanOrEqual(newGeometry.cropSize);
-    expect(displayHeight).toBeGreaterThanOrEqual(newGeometry.cropSize);
+    expect(displayWidth).toBeGreaterThanOrEqual(newGeometry.viewportWidth);
+    expect(displayHeight).toBeGreaterThanOrEqual(newGeometry.viewportHeight);
     expect(remapped.offsetX).toBeLessThanOrEqual(0);
     expect(remapped.offsetY).toBeLessThanOrEqual(0);
-    expect(remapped.offsetX).toBeGreaterThanOrEqual(newGeometry.cropSize - displayWidth);
-    expect(remapped.offsetY).toBeGreaterThanOrEqual(newGeometry.cropSize - displayHeight);
+    expect(remapped.offsetX).toBeGreaterThanOrEqual(newGeometry.viewportWidth - displayWidth);
+    expect(remapped.offsetY).toBeGreaterThanOrEqual(newGeometry.viewportHeight - displayHeight);
   });
 });
 

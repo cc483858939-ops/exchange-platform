@@ -1,5 +1,7 @@
 import { isAxiosError } from 'axios';
 import apiClient from '../axios';
+import { createTelemetryPersistence } from './telemetryPersistence';
+import { createClientOperationID } from '../utils/clientOperationId';
 
 export type PostViewSource = 'post_detail' | 'feed';
 
@@ -96,17 +98,7 @@ const getRetryAfterMS = (error: unknown): number => {
   return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0;
 };
 
-export function createPostViewEventID(): string {
-  if (typeof globalThis.crypto?.randomUUID === 'function') {
-    return globalThis.crypto.randomUUID();
-  }
-
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, character => {
-    const random = Math.floor(Math.random() * 16);
-    const value = character === 'x' ? random : (random & 0x3) | 0x8;
-    return value.toString(16);
-  });
-}
+export const createPostViewEventID = createClientOperationID;
 
 export class PostViewTelemetryClient {
   private queue: QueuedPostViewEvent[] = [];
@@ -118,6 +110,13 @@ export class PostViewTelemetryClient {
   private feedObserver: IntersectionObserver | null = null;
   private feedObservations = new Map<HTMLElement, FeedObservation>();
   private emittedFeedPostsBySession = new Map<string, Set<number>>();
+  private queuePersistence = createTelemetryPersistence(() => this.saveQueue());
+
+  private readonly handlePageHide = () => {
+    this.queuePersistence.flush();
+    // Include events produced by pagehide handlers registered after this client.
+    void Promise.resolve().then(() => this.queuePersistence.flush());
+  };
 
   private readonly handleOnline = () => {
     this.clearRetryTimer();
@@ -126,6 +125,7 @@ export class PostViewTelemetryClient {
 
   private readonly handleVisibilityChange = () => {
     if (document.visibilityState === 'hidden') {
+      this.queuePersistence.flush();
       this.cancelFeedTimers();
       return;
     }
@@ -135,6 +135,7 @@ export class PostViewTelemetryClient {
   constructor(private readonly getCurrentUserID: CurrentUserIDGetter) {
     this.queue = this.loadQueue();
     this.persistQueue();
+    this.queuePersistence.flush();
   }
 
   start(): void {
@@ -143,6 +144,7 @@ export class PostViewTelemetryClient {
     }
     this.stopped = false;
     window.addEventListener('online', this.handleOnline);
+    window.addEventListener('pagehide', this.handlePageHide);
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
     this.startFeedObserver();
     if (this.hasCurrentUserEvents()) {
@@ -151,8 +153,10 @@ export class PostViewTelemetryClient {
   }
 
   stop(): void {
+    this.queuePersistence.flush();
     if (!this.stopped) {
       window.removeEventListener('online', this.handleOnline);
+      window.removeEventListener('pagehide', this.handlePageHide);
       document.removeEventListener('visibilitychange', this.handleVisibilityChange);
       this.clearRetryTimer();
       this.pendingFlush = false;
@@ -438,6 +442,7 @@ export class PostViewTelemetryClient {
   private removeEventIDs(eventIDs: Set<string>): void {
     this.queue = this.queue.filter(event => !eventIDs.has(event.event_id));
     this.persistQueue();
+    this.queuePersistence.flush();
   }
 
   private dropBatch(batch: QueuedPostViewEvent[]): void {
@@ -495,6 +500,10 @@ export class PostViewTelemetryClient {
   }
 
   private persistQueue(): void {
+    this.queuePersistence.schedule();
+  }
+
+  private saveQueue(): void {
     try {
       sessionStorage.setItem(storageKey, JSON.stringify(this.queue));
     } catch {
@@ -515,6 +524,10 @@ export function initializePostViewTelemetry(
 
 export function getPostViewTelemetry(): PostViewTelemetryClient {
   return sharedClient ?? initializePostViewTelemetry(() => null);
+}
+
+export function releasePostViewSession(viewSessionKey: string): void {
+  sharedClient?.releaseFeedViewSession(viewSessionKey);
 }
 
 export function resetPostViewTelemetryForTests(): void {

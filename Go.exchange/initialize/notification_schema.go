@@ -50,10 +50,8 @@ $$`,
 		"DROP TRIGGER IF EXISTS trg_outbox_events_append_only ON outbox_events",
 		"CREATE TRIGGER trg_outbox_events_append_only BEFORE UPDATE ON outbox_events FOR EACH ROW EXECUTE FUNCTION reject_outbox_event_update()",
 	}
-	for _, statement := range statements {
-		if err := tx.Exec(statement).Error; err != nil {
-			return fmt.Errorf("apply outbox schema: %w", err)
-		}
+	if err := applyMigrationStatements(tx, "apply outbox schema", statements); err != nil {
+		return fmt.Errorf("apply outbox schema: %w", err)
 	}
 	return nil
 }
@@ -88,10 +86,8 @@ func applyNotificationSchema(tx *gorm.DB) error {
 		"CREATE INDEX IF NOT EXISTS idx_notifications_recipient_activity ON notifications (recipient_id, activity_at DESC, id DESC)",
 		"CREATE INDEX IF NOT EXISTS idx_notifications_unread_recipient_activity ON notifications (recipient_id, activity_at DESC, id DESC) WHERE read_at IS NULL",
 	}
-	for _, statement := range statements {
-		if err := tx.Exec(statement).Error; err != nil {
-			return fmt.Errorf("apply notification schema: %w", err)
-		}
+	if err := applyMigrationStatements(tx, "apply notification schema", statements); err != nil {
+		return fmt.Errorf("apply notification schema: %w", err)
 	}
 	return nil
 }

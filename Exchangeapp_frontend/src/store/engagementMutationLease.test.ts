@@ -47,9 +47,10 @@ describe('engagement mutation lease registry', () => {
     const second = registry.tryBegin(7, 'like', 42)!;
 
     expect(registry.release(first)).toBe(false);
-    expect(registry.isLeased(7, 'like', 42)).toBe(true);
+    expect(registry.release({ ...second })).toBe(false);
+    expect(registry.tryBegin(7, 'like', 42)).toBeNull();
     expect(registry.release(second)).toBe(true);
-    expect(registry.isLeased(7, 'like', 42)).toBe(false);
+    expect(registry.tryBegin(7, 'like', 42)).not.toBeNull();
   });
 
   it('rejects invalid viewer and post identifiers without leasing them', () => {
@@ -60,6 +61,6 @@ describe('engagement mutation lease registry', () => {
       expect(registry.tryBegin(7, 'like', id)).toBeNull();
     }
     expect(registry.tryBegin(7, 'invalid' as never, 42)).toBeNull();
-    expect(registry.isLeased(7, 'like', 42)).toBe(false);
+    expect(registry.tryBegin(7, 'like', 42)).not.toBeNull();
   });
 });

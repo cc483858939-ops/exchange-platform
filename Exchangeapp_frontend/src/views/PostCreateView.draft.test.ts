@@ -36,7 +36,7 @@ const mocks = vi.hoisted(() => ({
   publishOperations: new Map<number, any>(),
   getPostPublishOperation: vi.fn(),
   claimPostPublishOperation: vi.fn(),
-  updatePostPublishOperation: vi.fn(),
+  updatePostPublishOperationCheckpoint: vi.fn(),
   deletePostPublishOperation: vi.fn(),
   serializePublishOperation: vi.fn(),
   restorePublishOperation: vi.fn(),
@@ -102,9 +102,13 @@ vi.mock('../storage/postDraftRepository', () => ({
 vi.mock('../storage/postPublishRepository', () => ({
   getPostPublishOperation: mocks.getPostPublishOperation,
   claimPostPublishOperation: mocks.claimPostPublishOperation,
-  updatePostPublishOperation: mocks.updatePostPublishOperation,
+  updatePostPublishOperationCheckpoint: mocks.updatePostPublishOperationCheckpoint,
   deletePostPublishOperation: mocks.deletePostPublishOperation,
   serializePublishOperation: mocks.serializePublishOperation,
+  serializePublishOperationCheckpoint: (operation: any) => {
+    const record = mocks.serializePublishOperation(operation);
+    return { ...record, media: record.media.map(({ blob: _blob, ...metadata }: any) => metadata) };
+  },
   restorePublishOperation: mocks.restorePublishOperation,
 }));
 vi.mock('../utils/localImagePreview', () => ({
@@ -248,9 +252,14 @@ describe('PostCreateView durable drafts and exit protection', () => {
       mocks.publishOperations.set(record.publisherUserID, record);
       return { status: 'claimed' };
     });
-    mocks.updatePostPublishOperation.mockReset().mockImplementation(async (record: any) => {
+    mocks.updatePostPublishOperationCheckpoint.mockReset().mockImplementation(async (record: any) => {
       if (mocks.publishOperations.get(record.publisherUserID)?.id !== record.id) return false;
-      mocks.publishOperations.set(record.publisherUserID, record);
+      mocks.publishOperations.set(record.publisherUserID, {
+        ...record,
+        media: record.media.map((metadata: any, index: number) => ({
+          ...metadata, blob: mocks.publishOperations.get(record.publisherUserID).media[index].blob,
+        })),
+      });
       return true;
     });
     mocks.deletePostPublishOperation.mockReset().mockImplementation(async (viewerID: number, id: string) => {

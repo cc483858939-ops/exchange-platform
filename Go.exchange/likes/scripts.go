@@ -8,7 +8,9 @@ local function type_matches(key, expected)
   return actual == 'none' or actual == expected
 end
 
-if redis.call('GET', KEYS[1]) ~= '1' then
+local ready = redis.call('GET', KEYS[1])
+if ready == 'deleted' then return redis.error_reply('LIKE_POST_DELETED') end
+if ready ~= '1' then
   return redis.error_reply('LIKE_NOT_READY')
 end
 local count_raw = redis.call('GET', KEYS[2])
@@ -64,6 +66,7 @@ end
 return {count, current, changed, version}
 `)
 var initializeScript = redis.NewScript(`
+if redis.call('TYPE', KEYS[1]).ok == 'string' and redis.call('GET', KEYS[1]) == 'deleted' then return redis.error_reply('LIKE_POST_DELETED') end
 local function type_matches(key, expected)
   local actual = redis.call('TYPE', key).ok
   return actual == 'none' or actual == expected
@@ -91,6 +94,7 @@ return 1
 `)
 
 var recoverScript = redis.NewScript(`
+if redis.call('TYPE', KEYS[1]).ok == 'string' and redis.call('GET', KEYS[1]) == 'deleted' then return redis.error_reply('LIKE_POST_DELETED') end
 local function type_matches(key, expected)
   local actual = redis.call('TYPE', key).ok
   return actual == 'none' or actual == expected
@@ -265,7 +269,8 @@ if not type_matches(KEYS[1], 'string') or
   return redis.error_reply('LIKE_TYPE_PRECHECK')
 end
 
-redis.call('DEL', KEYS[1], KEYS[2], KEYS[3], KEYS[4])
+if redis.call('GET', KEYS[1]) ~= 'deleted' then redis.call('DEL', KEYS[1]) end
+redis.call('DEL', KEYS[2], KEYS[3], KEYS[4])
 redis.call('SREM', KEYS[5], ARGV[1])
 redis.call('ZREM', KEYS[6], ARGV[1])
 redis.call('HDEL', KEYS[7], ARGV[1])

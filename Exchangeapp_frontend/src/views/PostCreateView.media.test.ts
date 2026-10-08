@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => ({
   publishRecords: new Map<number, any>(),
   getPostPublishOperation: vi.fn(),
   claimPostPublishOperation: vi.fn(),
-  updatePostPublishOperation: vi.fn(),
+  updatePostPublishOperationCheckpoint: vi.fn(),
   deletePostPublishOperation: vi.fn(),
   serializePublishOperation: vi.fn(),
   restorePublishOperation: vi.fn(),
@@ -108,9 +108,13 @@ vi.mock('../store/sessionSync', () => ({
 vi.mock('../storage/postPublishRepository', () => ({
   getPostPublishOperation: mocks.getPostPublishOperation,
   claimPostPublishOperation: mocks.claimPostPublishOperation,
-  updatePostPublishOperation: mocks.updatePostPublishOperation,
+  updatePostPublishOperationCheckpoint: mocks.updatePostPublishOperationCheckpoint,
   deletePostPublishOperation: mocks.deletePostPublishOperation,
   serializePublishOperation: mocks.serializePublishOperation,
+  serializePublishOperationCheckpoint: (operation: any) => {
+    const record = mocks.serializePublishOperation(operation);
+    return { ...record, media: record.media.map(({ blob: _blob, ...metadata }: any) => metadata) };
+  },
   restorePublishOperation: mocks.restorePublishOperation,
 }));
 
@@ -216,9 +220,14 @@ describe('PostCreateView media picker and retry behavior', () => {
       mocks.publishRecords.set(record.publisherUserID, record);
       return { status: 'claimed' };
     });
-    mocks.updatePostPublishOperation.mockImplementation(async (record: any) => {
+    mocks.updatePostPublishOperationCheckpoint.mockImplementation(async (record: any) => {
       if (mocks.publishRecords.get(record.publisherUserID)?.id !== record.id) return false;
-      mocks.publishRecords.set(record.publisherUserID, record);
+      mocks.publishRecords.set(record.publisherUserID, {
+        ...record,
+        media: record.media.map((metadata: any, index: number) => ({
+          ...metadata, blob: mocks.publishRecords.get(record.publisherUserID).media[index].blob,
+        })),
+      });
       return true;
     });
     mocks.deletePostPublishOperation.mockImplementation(async (viewerID: number, id: string) => {

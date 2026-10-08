@@ -181,6 +181,43 @@ func TestPipelineCountFailuresRetainPreviousValuesAndFreshness(t *testing.T) {
 	}
 }
 
+func TestOutboxAgeFailurePreservesSampleAndEmptySuccessClearsIt(t *testing.T) {
+	mode := "old"
+	pipelineMetricsDB(t, func(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+		if strings.Contains(query, "MIN(created_at)") {
+			if mode == "failure" {
+				return nil, context.DeadlineExceeded
+			}
+			var value driver.Value
+			if mode == "old" {
+				value = time.Now().Add(-48 * time.Hour)
+			}
+			return &pipelineMetricsRows{[]string{"created_at"}, []driver.Value{value}}, nil
+		}
+		if strings.Contains(query, "pg_replication_slots") {
+			return &pipelineMetricsRows{[]string{"active"}, []driver.Value{true}}, nil
+		}
+		return &pipelineMetricsRows{[]string{"count"}, []driver.Value{int64(0)}}, nil
+	})
+	refreshPipelineMetrics(context.Background())
+	age := pipelineMetricValue(t, "go_exchange_outbox_oldest_row_age_seconds")
+	stamp := pipelineMetricValue(t, "go_exchange_outbox_oldest_row_age_last_success_timestamp_seconds")
+	failures := pipelineMetricValue(t, "go_exchange_outbox_oldest_row_age_sample_failures_total")
+	if age < 172799 || stamp <= 0 {
+		t.Fatalf("age=%v stamp=%v", age, stamp)
+	}
+	mode = "failure"
+	refreshPipelineMetrics(context.Background())
+	if pipelineMetricValue(t, "go_exchange_outbox_oldest_row_age_seconds") != age || pipelineMetricValue(t, "go_exchange_outbox_oldest_row_age_last_success_timestamp_seconds") != stamp || pipelineMetricValue(t, "go_exchange_outbox_oldest_row_age_sample_valid") != 0 || pipelineMetricValue(t, "go_exchange_outbox_oldest_row_age_sample_failures_total") != failures+1 {
+		t.Fatal("failed sample was exported as cleared/fresh")
+	}
+	mode = "empty"
+	refreshPipelineMetrics(context.Background())
+	if pipelineMetricValue(t, "go_exchange_outbox_oldest_row_age_seconds") != 0 || pipelineMetricValue(t, "go_exchange_outbox_oldest_row_age_sample_valid") != 1 {
+		t.Fatal("successful empty sample not cleared")
+	}
+}
+
 func TestPipelineSlowCountDoesNotBlockInitialHealthSampleAndStopsOnCancel(t *testing.T) {
 	started, health := make(chan struct{}), make(chan struct{})
 	var slowOnce, healthOnce sync.Once

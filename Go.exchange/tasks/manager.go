@@ -17,6 +17,7 @@ func StartAll(ctx context.Context, wg *sync.WaitGroup) {
 	startLikeSnapshotRelay(ctx, wg)
 	startLikeSnapshotProjectionConsumer(ctx, wg)
 	startLikeStateMaintenance(ctx, wg)
+	startPostLikeCleanup(ctx, wg)
 	startWorkerReadinessProbe(ctx, wg)
 	startPipelineMetrics(ctx, wg)
 	startOutboxRetention(ctx, wg)

@@ -25,7 +25,7 @@ func TestCanonicalPostDeletePGRedisIdentityE2E(t *testing.T) {
 	}
 
 	db := openReplyIntegrationDatabase(t)
-	if err := db.AutoMigrate(&models.PostReaction{}, &models.PostRepost{}, &models.OutboxEvent{}); err != nil {
+	if err := db.AutoMigrate(&models.PostReaction{}, &models.PostRepost{}, &models.OutboxEvent{}, &models.PostLikeCleanup{}); err != nil {
 		t.Fatal(err)
 	}
 	redisClient := openPostLikeIntegrationRedis(t)
@@ -47,6 +47,7 @@ func TestCanonicalPostDeletePGRedisIdentityE2E(t *testing.T) {
 				stringIDs = append(stringIDs, strconvUint(postID))
 			}
 			db.Unscoped().Where("post_id IN ?", createdIDs).Delete(&models.PostReaction{})
+			db.Where("post_id IN ?", createdIDs).Delete(&models.PostLikeCleanup{})
 			db.Unscoped().Where("post_id IN ?", createdIDs).Delete(&models.PostRepost{})
 			db.Unscoped().Where("post_id IN ? OR user_id IN ?", createdIDs, userIDs).Delete(&models.PostBehavior{})
 			db.Unscoped().Where("aggregate_id IN ?", stringIDs).Delete(&models.OutboxEvent{})
@@ -292,7 +293,10 @@ func containsBytes(haystack, needle []byte) bool {
 
 func assertPurgedPostLikeStateForIdentityE2E(t *testing.T, client *redis.Client, postID uint) {
 	t.Helper()
-	for _, key := range []string{likes.ReadyKey(postID), likes.CountKey(postID), likes.UsersKey(postID), likes.VersionKey(postID)} {
+	if ready, err := client.Get(likes.ReadyKey(postID)).Result(); err != nil || ready != "deleted" {
+		t.Fatalf("deleted Post fence=%q err=%v", ready, err)
+	}
+	for _, key := range []string{likes.CountKey(postID), likes.UsersKey(postID), likes.VersionKey(postID)} {
 		if exists, err := client.Exists(key).Result(); err != nil || exists != 0 {
 			t.Fatalf("purged key=%q exists=%d err=%v", key, exists, err)
 		}

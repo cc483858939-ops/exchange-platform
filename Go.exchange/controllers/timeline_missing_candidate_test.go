@@ -143,7 +143,7 @@ func (fixture *timelineMissingFixture) install(t *testing.T) {
 	global.APIDb = visibilityRefreshDB(t, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 		var stage string
 		switch {
-		case strings.Contains(query, "WITH activities AS"):
+		case strings.Contains(query, "activities AS (") || strings.Contains(query, "WITH reposts AS ("):
 			stage = "candidates"
 		case strings.Contains(query, `FROM "posts"`):
 			stage = "posts"

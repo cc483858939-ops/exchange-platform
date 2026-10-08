@@ -167,10 +167,7 @@ const measureTopicRow = (element: Element | ComponentPublicInstance | null) => {
 };
 const firstMutationError = computed(() => Array.from(topicSession.mutationErrors.values())[0] ?? '');
 const topicTitle = computed(() => `#${topicSession.topic?.label ?? topicSession.activeSlug ?? 'Topic'}`);
-const viewSessionKey = computed(() => {
-  const viewerID = authStore.isAuthenticated ? authStore.currentIdentity?.id : null;
-  return `topic:${viewerID ?? 'anonymous'}:${topicSession.activeSlug ?? ''}`;
-});
+const viewSessionKey = computed(() => topicSession.viewSessionKey);
 
 const normalizeTopicSlug = (value: unknown): string => {
   const raw = Array.isArray(value) ? value[0] : value;

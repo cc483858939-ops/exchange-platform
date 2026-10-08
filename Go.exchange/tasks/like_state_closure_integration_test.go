@@ -3,6 +3,7 @@ package tasks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -58,6 +59,7 @@ func openLikeStateClosureIntegration(t *testing.T) *likeStateClosureIntegration 
 	if err := db.AutoMigrate(
 		&models.User{},
 		&models.Post{},
+		&models.PostLikeCleanup{},
 		&models.PostRepost{},
 		&models.PostReaction{},
 		&models.PostBehavior{},
@@ -123,6 +125,7 @@ func cleanupLikeStateClosureIntegration(env *likeStateClosureIntegration) error 
 		return cleanupErr
 	}
 	if len(env.posts) > 0 {
+		env.db.Where("post_id IN ?", env.posts).Delete(&models.PostLikeCleanup{})
 		env.db.Unscoped().Where("post_id IN ?", env.posts).Delete(&models.PostReaction{})
 		env.db.Unscoped().Where("post_id IN ?", env.posts).Delete(&models.PostBehavior{})
 		env.db.Unscoped().Where("post_id IN ?", env.posts).Delete(&models.PostRepost{})
@@ -187,9 +190,19 @@ func assertLikeStateClosureBehaviorQuiescent(t *testing.T, client *redis.Client,
 	}
 }
 
-func assertLikeStateClosureRedisPurged(t *testing.T, client *redis.Client, postID uint) {
+func assertLikeStateClosureRedisDeleted(t *testing.T, client *redis.Client, postID uint) {
 	t.Helper()
-	for _, key := range []string{likes.ReadyKey(postID), likes.CountKey(postID), likes.UsersKey(postID), likes.VersionKey(postID)} {
+	if ready, err := client.Get(likes.ReadyKey(postID)).Result(); err != nil || ready != "deleted" {
+		t.Fatalf("deleted fence=%q err=%v", ready, err)
+	}
+	store := likes.NewStore(client)
+	if _, err := store.Get(t.Context(), 1, postID); !errors.Is(err, likes.ErrPostLikeUnavailable) {
+		t.Fatalf("deleted state read=%v", err)
+	}
+	if _, err := store.Mutate(t.Context(), 1, postID, true); !errors.Is(err, likes.ErrPostLikeUnavailable) {
+		t.Fatalf("deleted state mutation=%v", err)
+	}
+	for _, key := range []string{likes.CountKey(postID), likes.UsersKey(postID), likes.VersionKey(postID)} {
 		if exists, err := client.Exists(key).Result(); err != nil || exists != 0 {
 			t.Fatalf("purged key=%q exists=%d err=%v", key, exists, err)
 		}
@@ -443,7 +456,7 @@ func TestPostLikeDeletePurgeFailureReconcilesIntegration(t *testing.T) {
 	if _, err := runLikeStateMaintenancePass(t.Context(), env.store, env.db, 0, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	assertLikeStateClosureRedisPurged(t, env.redis, env.post.ID)
+	assertLikeStateClosureRedisDeleted(t, env.redis, env.post.ID)
 	var reactionCount int64
 	if err := env.db.Model(&models.PostReaction{}).Where("user_id = ? AND post_id = ?", env.author.ID, env.post.ID).Count(&reactionCount).Error; err != nil {
 		t.Fatal(err)
@@ -499,6 +512,6 @@ func TestLikeStateMaintenanceRegistryLeavesActiveAndPurgesDeletedOrMissingIntegr
 	if exists, err := env.redis.Exists(likes.ReadyKey(posts[0].ID)).Result(); err != nil || exists != 1 {
 		t.Fatalf("active Ready exists=%d err=%v", exists, err)
 	}
-	assertLikeStateClosureRedisPurged(t, env.redis, posts[1].ID)
-	assertLikeStateClosureRedisPurged(t, env.redis, posts[2].ID)
+	assertLikeStateClosureRedisDeleted(t, env.redis, posts[1].ID)
+	assertLikeStateClosureRedisDeleted(t, env.redis, posts[2].ID)
 }

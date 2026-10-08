@@ -1,8 +1,8 @@
 import { defineStore } from 'pinia';
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onScopeDispose, reactive, ref, watch } from 'vue';
 import { useAuthStore } from './auth';
 import { useFeedStore } from './feed';
-import { getPostEngagementStates } from '../services/engagementService';
+import { hydratePostEngagement } from './engagementHydration';
 import { searchPosts } from '../services/postSearchService';
 import type { Post } from '../types/Post';
 import type { PublicAuthor } from '../types/User';
@@ -19,11 +19,9 @@ import {
   applyFeedBookmarkStateUpdate,
   applyFeedLikeStateUpdate,
   applyFeedRepostStateUpdate,
+  initializeGuestInteractionStates,
   postToFeedPost,
   invalidateFeedPostReferences,
-  setFeedPostBookmarkUnavailable,
-  setFeedPostLikeUnavailable,
-  setFeedPostRepostUnavailable,
 } from '../utils/feedPost';
 import { normalizePostQuoteCountUpdate } from '../utils/quoteCount';
 import {
@@ -130,20 +128,22 @@ export const usePostSearchSessionStore = defineStore('postSearchSession', () => 
   const mutationErrors = reactive(new Map<number, string>());
   const loadedPostIDs = new Set<number>();
   const deletedPostIDs = new Set<number>();
+  let initialReadController: AbortController | null = null;
+  let moreReadController: AbortController | null = null;
+  const cancelPageReads = () => {
+    initialReadController?.abort();
+    moreReadController?.abort();
+    initialReadController = null;
+    moreReadController = null;
+  };
+  onScopeDispose(() => {
+    requestVersion.value += 1;
+    pagingVersion.value += 1;
+    cancelPageReads();
+  });
 
   const findPost = (postID: number) => items.value.find(post => post.id === postID);
   const hasMore = computed(() => nextCursor.value !== null);
-
-  const initializeGuestInteractionStates = (posts: FeedPost[]) => {
-    posts.forEach((post) => {
-      post.liked = false;
-      post.likeStatus = 'ready';
-      post.reposted = false;
-      post.repostStatus = 'ready';
-      post.bookmarked = false;
-      post.bookmarkStatus = 'ready';
-    });
-  };
 
   const initializeUnknownInteractionStates = (posts: FeedPost[]) => {
     posts.forEach((post) => {
@@ -156,6 +156,7 @@ export const usePostSearchSessionStore = defineStore('postSearchSession', () => 
   const clearPageState = () => {
     requestVersion.value += 1;
     pagingVersion.value += 1;
+    cancelPageReads();
     items.value = [];
     loaded.value = false;
     initialLoading.value = false;
@@ -198,66 +199,10 @@ export const usePostSearchSessionStore = defineStore('postSearchSession', () => 
       initializeGuestInteractionStates(posts);
       return;
     }
-    const postIDs = Array.from(new Set(posts.map(post => post.id)));
-    if (postIDs.length === 0) return;
-
     const generation = viewerGeneration.value;
-    const revisions = {
-      like: new Map(postIDs.map(postID => [postID, engagementMutations.captureRevision('like', postID)])),
-      repost: new Map(postIDs.map(postID => [postID, engagementMutations.captureRevision('repost', postID)])),
-      bookmark: new Map(postIDs.map(postID => [postID, engagementMutations.captureRevision('bookmark', postID)])),
-    };
-    const current = () => isCurrentRequest(request, key, capturedViewerID, generation)
-      && authStore.isAuthenticated;
-
-    void getPostEngagementStates(postIDs).then((response) => {
-      if (!current()) return;
-      const states = new Map((response.items ?? []).map(item => [item.post_id, item]));
-      postIDs.forEach((postID) => {
-        const post = findPost(postID);
-        if (!post) return;
-        const state = states.get(postID);
-        const likeRevision = revisions.like.get(postID);
-        if (likeRevision && engagementMutations.isRevisionCurrent('like', postID, likeRevision)) {
-          const like = state?.like;
-          if (like?.status === 'ready') {
-            applyFeedLikeStateUpdate(post, { postId: postID, likes: like.likes, liked: like.liked, status: 'ready' });
-          } else {
-            setFeedPostLikeUnavailable(post);
-          }
-        }
-        const repostRevision = revisions.repost.get(postID);
-        if (repostRevision && engagementMutations.isRevisionCurrent('repost', postID, repostRevision)) {
-          const repost = state?.repost;
-          if (repost?.status === 'ready') {
-            applyFeedRepostStateUpdate(post, { postId: postID, reposts: repost.reposts, reposted: repost.reposted, status: 'ready' });
-          } else {
-            setFeedPostRepostUnavailable(post);
-          }
-        }
-        const bookmarkRevision = revisions.bookmark.get(postID);
-        if (bookmarkRevision && engagementMutations.isRevisionCurrent('bookmark', postID, bookmarkRevision)) {
-          const bookmark = state?.bookmark;
-          if (bookmark?.status === 'ready') {
-            applyFeedBookmarkStateUpdate(post, { postId: postID, bookmarked: bookmark.bookmarked, status: 'ready' });
-          } else {
-            setFeedPostBookmarkUnavailable(post);
-          }
-        }
-      });
-    }).catch(() => {
-      if (!current()) return;
-      postIDs.forEach((postID) => {
-        const post = findPost(postID);
-        if (!post) return;
-        const likeRevision = revisions.like.get(postID);
-        if (likeRevision && engagementMutations.isRevisionCurrent('like', postID, likeRevision)) setFeedPostLikeUnavailable(post);
-        const repostRevision = revisions.repost.get(postID);
-        if (repostRevision && engagementMutations.isRevisionCurrent('repost', postID, repostRevision)) setFeedPostRepostUnavailable(post);
-        const bookmarkRevision = revisions.bookmark.get(postID);
-        if (bookmarkRevision && engagementMutations.isRevisionCurrent('bookmark', postID, bookmarkRevision)) setFeedPostBookmarkUnavailable(post);
-      });
-    });
+    hydratePostEngagement(posts, engagementMutations,
+      () => isCurrentRequest(request, key, capturedViewerID, generation) && authStore.isAuthenticated,
+      findPost);
   };
 
   const criteriaQueryValid = () => postSearchQueryError(criteria.value.query) === '' && criteria.value.query !== '';
@@ -280,20 +225,23 @@ export const usePostSearchSessionStore = defineStore('postSearchSession', () => 
     const request = requestVersion.value;
     const generation = viewerGeneration.value;
     initialLoading.value = true;
+    const controller = new AbortController();
+    initialReadController = controller;
     initialError.value = '';
     loadMoreError.value = '';
     try {
-      const page = await searchPosts(requestOptions());
+      const page = await searchPosts(requestOptions(), controller.signal);
       if (!isCurrentRequest(request, capturedKey, capturedViewerID, generation)) return;
       const additions = appendPosts(page.items ?? []);
       nextCursor.value = page.next_cursor;
       loaded.value = true;
       hydrateEngagement(additions, request, capturedKey);
     } catch {
-      if (isCurrentRequest(request, capturedKey, capturedViewerID, generation)) {
+      if (!controller.signal.aborted && isCurrentRequest(request, capturedKey, capturedViewerID, generation)) {
         initialError.value = 'Could not search posts.';
       }
     } finally {
+      if (initialReadController === controller) initialReadController = null;
       if (isCurrentRequest(request, capturedKey, capturedViewerID, generation)) initialLoading.value = false;
     }
   };
@@ -375,9 +323,11 @@ export const usePostSearchSessionStore = defineStore('postSearchSession', () => 
     const generation = viewerGeneration.value;
     const paging = ++pagingVersion.value;
     loadingMore.value = true;
+    const controller = new AbortController();
+    moreReadController = controller;
     loadMoreError.value = '';
     try {
-      const page = await searchPosts(requestOptions(cursor));
+      const page = await searchPosts(requestOptions(cursor), controller.signal);
       if (
         !isCurrentRequest(request, capturedKey, capturedViewerID, generation)
         || paging !== pagingVersion.value
@@ -387,10 +337,11 @@ export const usePostSearchSessionStore = defineStore('postSearchSession', () => 
       nextCursor.value = page.next_cursor;
       hydrateEngagement(additions, request, capturedKey);
     } catch {
-      if (isCurrentRequest(request, capturedKey, capturedViewerID, generation) && paging === pagingVersion.value) {
+      if (!controller.signal.aborted && isCurrentRequest(request, capturedKey, capturedViewerID, generation) && paging === pagingVersion.value) {
         loadMoreError.value = 'Could not load more posts.';
       }
     } finally {
+      if (moreReadController === controller) moreReadController = null;
       if (isCurrentRequest(request, capturedKey, capturedViewerID, generation) && paging === pagingVersion.value) {
         loadingMore.value = false;
       }
@@ -404,6 +355,7 @@ export const usePostSearchSessionStore = defineStore('postSearchSession', () => 
     viewerGeneration.value += 1;
     requestVersion.value += 1;
     pagingVersion.value += 1;
+    cancelPageReads();
     initialLoading.value = false;
     loadingMore.value = false;
     loadMoreError.value = '';

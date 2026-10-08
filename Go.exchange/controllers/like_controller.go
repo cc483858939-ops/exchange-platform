@@ -100,8 +100,8 @@ func GetPostLikes(ctx *gin.Context) {
 
 func GetPostLikeStates(ctx *gin.Context) {
 	var request postLikeStatesRequest
-	if err := ctx.ShouldBindJSON(&request); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid post_ids"})
+	if err := bindBoundedPostStates(ctx, &request); err != nil {
+		writeJSONRequestError(ctx, err, "Invalid post_ids")
 		return
 	}
 	if len(request.PostIDs) == 0 || len(request.PostIDs) > maxPostLikeStateIDs {

@@ -103,8 +103,8 @@ ORDER BY idx.relname`).Scan(&indexes).Error; err != nil {
 	if err := tx.First(&state, runtimeSchemaStateID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if state.CurrentVersion != 15 || state.CompatibilityFloor != 14 {
-		t.Fatalf("runtime schema=%d/%d, want 15/14", state.CurrentVersion, state.CompatibilityFloor)
+	if state.CurrentVersion != 17 || state.CompatibilityFloor != 14 {
+		t.Fatalf("runtime schema=%d/%d, want 16/14", state.CurrentVersion, state.CompatibilityFloor)
 	}
 	if time.Since(state.AppliedAt) > time.Minute {
 		t.Fatalf("schema migration did not publish a fresh applied_at: %s", state.AppliedAt)

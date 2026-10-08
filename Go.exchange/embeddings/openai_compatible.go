@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"net/http"
@@ -17,10 +18,11 @@ import (
 )
 
 type OpenAICompatibleEmbedder struct {
-	endpoint string
-	apiKey   string
-	model    string
-	client   *http.Client
+	maxResponseBytes int64
+	endpoint         string
+	apiKey           string
+	model            string
+	client           *http.Client
 }
 
 type ProviderHTTPError struct {
@@ -104,6 +106,10 @@ type embeddingResponse struct {
 }
 
 func NewOpenAICompatibleEmbedder(cfg config.EmbeddingConfig) (*OpenAICompatibleEmbedder, error) {
+	maxResponseBytes := cfg.MaxResponseBytes
+	if maxResponseBytes <= 0 {
+		maxResponseBytes = 8 << 20
+	}
 	endpoint, err := resolveEmbeddingEndpoint(cfg.BaseURL)
 	if err != nil {
 		return nil, err
@@ -120,7 +126,10 @@ func NewOpenAICompatibleEmbedder(cfg config.EmbeddingConfig) (*OpenAICompatibleE
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
-	return &OpenAICompatibleEmbedder{endpoint: endpoint, apiKey: apiKey, model: model, client: &http.Client{Timeout: timeout}}, nil
+	if maxResponseBytes == math.MaxInt64 {
+		return nil, errors.New("embedding response budget is too large")
+	}
+	return &OpenAICompatibleEmbedder{endpoint: endpoint, apiKey: apiKey, model: model, client: &http.Client{Timeout: timeout}, maxResponseBytes: maxResponseBytes}, nil
 }
 
 func resolveEmbeddingEndpoint(baseURL string) (string, error) {
@@ -167,8 +176,18 @@ func (e *OpenAICompatibleEmbedder) Embed(ctx context.Context, texts []string) (E
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return EmbedResult{}, &ProviderHTTPError{StatusCode: response.StatusCode}
 	}
+	if response.ContentLength > e.maxResponseBytes {
+		return EmbedResult{}, newProviderContractError(errors.New("embedding response exceeds byte budget"))
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, e.maxResponseBytes+1))
+	if err != nil {
+		return EmbedResult{}, fmt.Errorf("read embedding provider response: %w", err)
+	}
+	if int64(len(raw)) > e.maxResponseBytes {
+		return EmbedResult{}, newProviderContractError(errors.New("embedding response exceeds byte budget"))
+	}
 	var payload embeddingResponse
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+	if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&payload); err != nil {
 		return EmbedResult{}, newProviderContractError(fmt.Errorf("decode embedding provider response: %w", err))
 	}
 	vectors, err := validateEmbeddingData(payload.Data, len(texts))

@@ -6,7 +6,6 @@ import {
   hasValidDurableSubmissionFailureShape,
   isDurableSubmissionFailureKind,
   isPostIdempotencyConflictError,
-  recoveredSubmissionMustFailClosed,
 } from './durableSubmissionContract';
 import { matchesDurableAuthOwner } from '../auth/authRequestBinding';
 
@@ -48,16 +47,6 @@ describe('durable submission contract', () => {
     ['succeeded', false],
   ])('marks phase %s as eligible for a failure transition: %s', (phase, expected) => {
     expect(canMarkDurableSubmissionFailed(phase)).toBe(expected);
-  });
-
-  it.each([
-    ['publishing', null, true],
-    ['failed', null, true],
-    ['uploading', '', true],
-    ['succeeded', null, false],
-    ['publishing', 'session-a', false],
-  ] as const)('fails recovered %s operation closed when session is %s', (phase, sessionID, expected) => {
-    expect(recoveredSubmissionMustFailClosed(phase, sessionID)).toBe(expected);
   });
 
   it('matches durable auth ownership by user and session without comparing sessionVersion', () => {

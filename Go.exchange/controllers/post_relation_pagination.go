@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"strconv"
 	"strings"
 	"time"
 
@@ -22,18 +21,7 @@ type postRelationCursor struct {
 }
 
 func parsePostRelationLimit(ctx *gin.Context) (int, error) {
-	limit := defaultPostRelationLimit
-	if raw, exists := ctx.GetQuery("limit"); exists {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed <= 0 {
-			return 0, errors.New("invalid limit")
-		}
-		limit = parsed
-	}
-	if limit > maxPostRelationLimit {
-		limit = maxPostRelationLimit
-	}
-	return limit, nil
+	return parsePageLimit(ctx, defaultPostRelationLimit, maxPostRelationLimit)
 }
 
 func parsePostRelationCursor(ctx *gin.Context) (*postRelationCursor, error) {

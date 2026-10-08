@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -25,16 +24,9 @@ type bookmarkHistoryCursor struct {
 }
 
 func parseBookmarkHistoryPageQuery(ctx *gin.Context) (int, *bookmarkHistoryCursor, error) {
-	limit := defaultBookmarkHistoryLimit
-	if raw, exists := ctx.GetQuery("limit"); exists {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed <= 0 {
-			return 0, nil, errors.New("invalid limit")
-		}
-		limit = parsed
-	}
-	if limit > maxBookmarkHistoryLimit {
-		limit = maxBookmarkHistoryLimit
+	limit, err := parsePageLimit(ctx, defaultBookmarkHistoryLimit, maxBookmarkHistoryLimit)
+	if err != nil {
+		return 0, nil, err
 	}
 
 	raw, exists := ctx.GetQuery("cursor")

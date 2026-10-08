@@ -345,7 +345,7 @@ describe('postDraft store', () => {
     const expectedSnapshot = store.savedSnapshot;
     store.bindPublishOperation('publish-source');
 
-    await expect(store.resolvePublishedSourceDraft(7, draftID, expectedSnapshot))
+    await expect(store.resolvePublishedSourceDraft(7, draftID, expectedSnapshot!))
       .resolves.toBe('deleted');
 
     expect(repositoryMocks.deletePostDraftIfUnchanged).toHaveBeenCalledWith(
@@ -375,7 +375,7 @@ describe('postDraft store', () => {
     const newerSnapshot = store.savedSnapshot;
     const mediaBeforeCleanup = [...store.media];
 
-    await expect(store.resolvePublishedSourceDraft(7, draftID, oldSnapshot))
+    await expect(store.resolvePublishedSourceDraft(7, draftID, oldSnapshot!))
       .resolves.toBe('changed');
 
     expect(store.content).toBe('Version two');
@@ -383,15 +383,6 @@ describe('postDraft store', () => {
     expect(store.draftID).toBe(draftID);
     expect(store.savedSnapshot).toEqual(newerSnapshot);
     expect(store.hasUnsavedChanges).toBe(false);
-  });
-
-  it('preserves legacy source drafts when an operation has no version snapshot', async () => {
-    const store = usePostDraftStore();
-    store.setViewer(7);
-
-    await expect(store.resolvePublishedSourceDraft(7, 'legacy-source', null))
-      .resolves.toBe('changed');
-    expect(repositoryMocks.deletePostDraftIfUnchanged).not.toHaveBeenCalled();
   });
 
   it('binds and clears a publish operation only for its viewer', () => {

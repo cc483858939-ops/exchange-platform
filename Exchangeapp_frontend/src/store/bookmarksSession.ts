@@ -3,7 +3,7 @@ import { reactive, ref, watch } from 'vue';
 import {
   getBookmarks,
 } from '../services/bookmarkService';
-import { getPostEngagementStates } from '../services/engagementService';
+import { loadPostEngagementIndex } from './engagementHydration';
 import type { Post } from '../types/Post';
 import type {
   FeedBookmarkStateUpdate,
@@ -168,26 +168,24 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
   };
 
   const markLikeUnavailable = (
-    posts: FeedPost[],
+    postIDs: number[],
     revisions: Map<number, EngagementMutationRevision>,
   ) => {
-    posts.forEach((post) => {
-      const revision = revisions.get(post.id);
-      if (!revision || !engagementMutations.isRevisionCurrent('like', post.id, revision)) return;
-      const current = findPost(post.id);
+    postIDs.forEach((postID) => {
+      const revision = revisions.get(postID);
+      if (!revision || !engagementMutations.isRevisionCurrent('like', postID, revision)) return;
+      const current = findPost(postID);
       if (current && current.likeStatus === 'unknown') setFeedPostLikeUnavailable(current);
     });
   };
 
   const hydrateLikeStates = async (
-    posts: FeedPost[],
+    postIDs: number[],
     capturedRequestVersion: number,
     capturedViewerID: number,
     capturedGeneration: number,
-    responsePromise: ReturnType<typeof getPostEngagementStates>,
+    responsePromise: ReturnType<typeof loadPostEngagementIndex>,
   ) => {
-    const postIDs = Array.from(new Set(posts.map(post => post.id)));
-    if (postIDs.length === 0) return;
     const hydrationGeneration = likeHydrationGeneration.value;
     const revisions = new Map(postIDs.map(postID => [
       postID,
@@ -196,9 +194,8 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
     const current = () => isCurrentRequest(capturedRequestVersion, capturedViewerID, capturedGeneration)
       && hydrationGeneration === likeHydrationGeneration.value;
     try {
-      const response = await responsePromise;
+      const states = await responsePromise;
       if (!current()) return;
-      const states = new Map(response.items.map(item => [item.post_id, item]));
       postIDs.forEach((postID) => {
         const revision = revisions.get(postID);
         if (!revision || !engagementMutations.isRevisionCurrent('like', postID, revision)) return;
@@ -213,31 +210,29 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
         });
       });
     } catch {
-      if (current()) markLikeUnavailable(posts, revisions);
+      if (current()) markLikeUnavailable(postIDs, revisions);
     }
   };
 
   const markRepostUnavailable = (
-    posts: FeedPost[],
+    postIDs: number[],
     revisions: Map<number, EngagementMutationRevision>,
   ) => {
-    posts.forEach((post) => {
-      const revision = revisions.get(post.id);
-      if (!revision || !engagementMutations.isRevisionCurrent('repost', post.id, revision)) return;
-      const current = findPost(post.id);
+    postIDs.forEach((postID) => {
+      const revision = revisions.get(postID);
+      if (!revision || !engagementMutations.isRevisionCurrent('repost', postID, revision)) return;
+      const current = findPost(postID);
       if (current && current.repostStatus === 'unknown') setFeedPostRepostUnavailable(current);
     });
   };
 
   const hydrateRepostStates = async (
-    posts: FeedPost[],
+    postIDs: number[],
     capturedRequestVersion: number,
     capturedViewerID: number,
     capturedGeneration: number,
-    responsePromise: ReturnType<typeof getPostEngagementStates>,
+    responsePromise: ReturnType<typeof loadPostEngagementIndex>,
   ) => {
-    const postIDs = Array.from(new Set(posts.map(post => post.id)));
-    if (postIDs.length === 0) return;
     const hydrationGeneration = repostHydrationGeneration.value;
     const revisions = new Map(postIDs.map(postID => [
       postID,
@@ -246,9 +241,8 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
     const current = () => isCurrentRequest(capturedRequestVersion, capturedViewerID, capturedGeneration)
       && hydrationGeneration === repostHydrationGeneration.value;
     try {
-      const response = await responsePromise;
+      const states = await responsePromise;
       if (!current()) return;
-      const states = new Map(response.items.map(item => [item.post_id, item]));
       postIDs.forEach((postID) => {
         const revision = revisions.get(postID);
         if (!revision || !engagementMutations.isRevisionCurrent('repost', postID, revision)) return;
@@ -263,31 +257,29 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
         });
       });
     } catch {
-      if (current()) markRepostUnavailable(posts, revisions);
+      if (current()) markRepostUnavailable(postIDs, revisions);
     }
   };
 
   const markBookmarkUnavailable = (
-    posts: FeedPost[],
+    postIDs: number[],
     revisions: Map<number, EngagementMutationRevision>,
   ) => {
-    posts.forEach((post) => {
-      const revision = revisions.get(post.id);
-      if (!revision || !engagementMutations.isRevisionCurrent('bookmark', post.id, revision)) return;
-      const current = findPost(post.id);
+    postIDs.forEach((postID) => {
+      const revision = revisions.get(postID);
+      if (!revision || !engagementMutations.isRevisionCurrent('bookmark', postID, revision)) return;
+      const current = findPost(postID);
       if (current && current.bookmarkStatus === 'unknown') setFeedPostBookmarkUnavailable(current);
     });
   };
 
   const hydrateBookmarkStates = async (
-    posts: FeedPost[],
+    postIDs: number[],
     capturedRequestVersion: number,
     capturedViewerID: number,
     capturedGeneration: number,
-    responsePromise: ReturnType<typeof getPostEngagementStates>,
+    responsePromise: ReturnType<typeof loadPostEngagementIndex>,
   ) => {
-    const postIDs = Array.from(new Set(posts.map(post => post.id)));
-    if (postIDs.length === 0) return;
     const hydrationGeneration = bookmarkHydrationGeneration.value;
     const revisions = new Map(postIDs.map(postID => [
       postID,
@@ -296,9 +288,8 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
     const current = () => isCurrentRequest(capturedRequestVersion, capturedViewerID, capturedGeneration)
       && hydrationGeneration === bookmarkHydrationGeneration.value;
     try {
-      const response = await responsePromise;
+      const states = await responsePromise;
       if (!current()) return;
-      const states = new Map(response.items.map(item => [item.post_id, item]));
       postIDs.forEach((postID) => {
         const revision = revisions.get(postID);
         if (!revision || !engagementMutations.isRevisionCurrent('bookmark', postID, revision)) return;
@@ -318,7 +309,7 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
         });
       });
     } catch {
-      if (current()) markBookmarkUnavailable(posts, revisions);
+      if (current()) markBookmarkUnavailable(postIDs, revisions);
     }
   };
 
@@ -330,10 +321,10 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
   ) => {
     const postIDs = Array.from(new Set(posts.map(post => post.id)));
     if (postIDs.length === 0) return;
-    const responsePromise = getPostEngagementStates(postIDs);
-    void hydrateLikeStates(posts, capturedRequestVersion, capturedViewerID, capturedGeneration, responsePromise);
-    void hydrateRepostStates(posts, capturedRequestVersion, capturedViewerID, capturedGeneration, responsePromise);
-    void hydrateBookmarkStates(posts, capturedRequestVersion, capturedViewerID, capturedGeneration, responsePromise);
+    const responsePromise = loadPostEngagementIndex(postIDs);
+    void hydrateLikeStates(postIDs, capturedRequestVersion, capturedViewerID, capturedGeneration, responsePromise);
+    void hydrateRepostStates(postIDs, capturedRequestVersion, capturedViewerID, capturedGeneration, responsePromise);
+    void hydrateBookmarkStates(postIDs, capturedRequestVersion, capturedViewerID, capturedGeneration, responsePromise);
   };
 
   const loadInitial = async (force = false) => {

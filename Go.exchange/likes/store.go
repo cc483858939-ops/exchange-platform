@@ -87,6 +87,9 @@ func (s *Store) get(ctx context.Context, userID, postID uint, ttl, renewalThresh
 		pttl = pipe.PTTL(ReadyKey(postID))
 	}
 	_, execErr := pipe.ExecContext(ctx)
+	if ready.Err() == nil && ready.Val() == "deleted" {
+		return State{}, ErrPostLikeUnavailable
+	}
 	if execErr != nil && execErr != redis.Nil && pttl == nil {
 		return State{}, execErr
 	}
@@ -183,16 +186,20 @@ func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint, ttl, r
 		batch = append(batch, command)
 	}
 	_, execErr := pipe.ExecContext(ctx)
-	if execErr != nil && execErr != redis.Nil && !renewalEnabled {
-		return nil, nil, execErr
-	}
-
 	var renewCandidates []expiryLeaseCandidate
+	ignoredDeletedError := false
 	var renewCandidateIDs map[uint]struct{}
 	if renewalEnabled {
 		renewCandidateIDs = make(map[uint]struct{})
 	}
 	for _, command := range batch {
+		if command.ready.Err() == nil && command.ready.Val() == "deleted" {
+			unavailable = append(unavailable, command.postID)
+			if command.count.Err() != nil && command.count.Err() != redis.Nil || command.version.Err() != nil && command.version.Err() != redis.Nil || command.cardinality.Err() != nil && command.cardinality.Err() != redis.Nil || command.member.Err() != nil && command.member.Err() != redis.Nil {
+				ignoredDeletedError = true
+			}
+			continue
+		}
 		for _, commandErr := range []error{command.ready.Err(), command.count.Err(), command.version.Err(), command.cardinality.Err(), command.member.Err()} {
 			if commandErr != nil && commandErr != redis.Nil {
 				return nil, nil, commandErr
@@ -225,7 +232,7 @@ func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint, ttl, r
 			break
 		}
 	}
-	if execErr != nil && execErr != redis.Nil && !hasPTTLError {
+	if execErr != nil && execErr != redis.Nil && !hasPTTLError && !ignoredDeletedError {
 		return nil, nil, execErr
 	}
 	if renewalEnabled && len(renewCandidates) > 0 {
@@ -385,7 +392,24 @@ func durationMillisecondsCeil(duration time.Duration) int64 {
 	return millis
 }
 
-// PurgePost removes all Redis-owned Like state for a deleted Post. Relational
+// DeletePost first fences the identity using the existing Ready key, so partial
+// cleanup cannot serve old state or let a pre-deletion recovery reinstall it.
+// Keep the fence until Redis loses its state; SQL recovery then rejects the
+// deleted Post. Failed propagation is retried from the durable deletion queue.
+func (s *Store) DeletePost(ctx context.Context, postID uint) error {
+	if s == nil || s.client == nil {
+		return errors.New("redis is not initialized")
+	}
+	if postID == 0 {
+		return errors.New("invalid post id")
+	}
+	if err := s.client.WithContext(ctx).Set(ReadyKey(postID), "deleted", 0).Err(); err != nil {
+		return err
+	}
+	return s.PurgePost(ctx, postID)
+}
+
+// PurgePost removes live Redis-owned Like state, preserving a deletion fence. Relational
 // PostReaction rows and behavior-relay keys are intentionally outside this
 // cleanup contract.
 func (s *Store) PurgePost(ctx context.Context, postID uint) error {
@@ -421,8 +445,12 @@ func (s *Store) LoadFullState(ctx context.Context, postID uint) (FullState, erro
 	count := pipe.Get(CountKey(postID))
 	version := pipe.Get(VersionKey(postID))
 	users := pipe.SMembers(UsersKey(postID))
-	if _, err := pipe.ExecContext(ctx); err != nil && err != redis.Nil {
-		return FullState{}, err
+	_, execErr := pipe.ExecContext(ctx)
+	if ready.Err() == nil && ready.Val() == "deleted" {
+		return FullState{}, ErrPostLikeUnavailable
+	}
+	if execErr != nil && execErr != redis.Nil {
+		return FullState{}, execErr
 	}
 	if err := commandErrorOrNotReady(ready.Err()); err != nil {
 		return FullState{}, err
@@ -806,6 +834,8 @@ func mapScriptError(err error) error {
 	}
 	message := err.Error()
 	switch {
+	case strings.Contains(message, "LIKE_POST_DELETED"):
+		return ErrPostLikeUnavailable
 	case strings.Contains(message, "LIKE_NOT_READY"):
 		return ErrNotReady
 	case strings.Contains(message, "LIKE_RECOVERY_UNSAFE"):

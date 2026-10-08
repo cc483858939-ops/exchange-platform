@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref, watch } from 'vue';
 import { getLikedHistory } from '../services/historyService';
-import { getPostEngagementStates } from '../services/engagementService';
+import { loadPostEngagementIndex } from './engagementHydration';
 import type { Post } from '../types/Post';
 import type {
   FeedBookmarkStateUpdate,
@@ -221,17 +221,12 @@ export const useHistorySessionStore = defineStore('historySession', () => {
   };
 
   const hydrateLikeStates = async (
-    posts: FeedPost[],
+    postIDs: number[],
     capturedRequestVersion: number,
     capturedViewerID: number,
     capturedGeneration: number,
-    responsePromise: ReturnType<typeof getPostEngagementStates>,
+    responsePromise: ReturnType<typeof loadPostEngagementIndex>,
   ) => {
-    const postIDs = Array.from(new Set(posts.map(post => post.id)));
-    if (postIDs.length === 0) {
-      return;
-    }
-
     const hydrationGeneration = likeHydrationGeneration.value;
     const revisions = new Map(postIDs.map(postID => [
       postID,
@@ -243,12 +238,11 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     );
 
     try {
-      const response = await responsePromise;
+      const states = await responsePromise;
       if (!current()) {
         return;
       }
 
-      const states = new Map(response.items.map(item => [item.post_id, item]));
       postIDs.forEach((postID) => {
         if (deletedPostIDs.has(postID)) {
           return;
@@ -302,16 +296,16 @@ export const useHistorySessionStore = defineStore('historySession', () => {
   };
 
   const markRepostUnavailableLocal = (
-    posts: FeedPost[],
+    postIDs: number[],
     revisions: Map<number, EngagementMutationRevision>,
   ) => {
-    posts.forEach((post) => {
-      const revision = revisions.get(post.id);
+    postIDs.forEach((postID) => {
+      const revision = revisions.get(postID);
       if (
         !revision
-        || !engagementMutations.isRevisionCurrent('repost', post.id, revision)
+        || !engagementMutations.isRevisionCurrent('repost', postID, revision)
       ) return;
-      const currentPost = findPost(post.id);
+      const currentPost = findPost(postID);
       if (currentPost && currentPost.repostStatus === 'unknown') {
         setFeedPostRepostUnavailable(currentPost);
       }
@@ -319,15 +313,12 @@ export const useHistorySessionStore = defineStore('historySession', () => {
   };
 
   const hydrateRepostStates = async (
-    posts: FeedPost[],
+    postIDs: number[],
     capturedRequestVersion: number,
     capturedViewerID: number,
     capturedGeneration: number,
-    responsePromise: ReturnType<typeof getPostEngagementStates>,
+    responsePromise: ReturnType<typeof loadPostEngagementIndex>,
   ) => {
-    const postIDs = Array.from(new Set(posts.map(post => post.id)));
-    if (postIDs.length === 0) return;
-
     const hydrationGeneration = repostHydrationGeneration.value;
     const revisions = new Map(postIDs.map(postID => [
       postID,
@@ -339,9 +330,8 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     );
 
     try {
-      const response = await responsePromise;
+      const states = await responsePromise;
       if (!current()) return;
-      const states = new Map(response.items.map(item => [item.post_id, item]));
       postIDs.forEach((postID) => {
         const revision = revisions.get(postID);
         const post = findPost(postID);
@@ -359,21 +349,21 @@ export const useHistorySessionStore = defineStore('historySession', () => {
         });
       });
     } catch {
-      if (current()) markRepostUnavailableLocal(posts, revisions);
+      if (current()) markRepostUnavailableLocal(postIDs, revisions);
     }
   };
 
   const markBookmarkUnavailableLocal = (
-    posts: FeedPost[],
+    postIDs: number[],
     revisions: Map<number, EngagementMutationRevision>,
   ) => {
-    posts.forEach((post) => {
-      const revision = revisions.get(post.id);
+    postIDs.forEach((postID) => {
+      const revision = revisions.get(postID);
       if (
         !revision
-        || !engagementMutations.isRevisionCurrent('bookmark', post.id, revision)
+        || !engagementMutations.isRevisionCurrent('bookmark', postID, revision)
       ) return;
-      const currentPost = findPost(post.id);
+      const currentPost = findPost(postID);
       if (currentPost && currentPost.bookmarkStatus === 'unknown') {
         setFeedPostBookmarkUnavailable(currentPost);
       }
@@ -381,15 +371,12 @@ export const useHistorySessionStore = defineStore('historySession', () => {
   };
 
   const hydrateBookmarkStates = async (
-    posts: FeedPost[],
+    postIDs: number[],
     capturedRequestVersion: number,
     capturedViewerID: number,
     capturedGeneration: number,
-    responsePromise: ReturnType<typeof getPostEngagementStates>,
+    responsePromise: ReturnType<typeof loadPostEngagementIndex>,
   ) => {
-    const postIDs = Array.from(new Set(posts.map(post => post.id)));
-    if (postIDs.length === 0) return;
-
     const hydrationGeneration = bookmarkHydrationGeneration.value;
     const revisions = new Map(postIDs.map(postID => [
       postID,
@@ -401,9 +388,8 @@ export const useHistorySessionStore = defineStore('historySession', () => {
     );
 
     try {
-      const response = await responsePromise;
+      const states = await responsePromise;
       if (!current()) return;
-      const states = new Map(response.items.map(item => [item.post_id, item]));
       postIDs.forEach((postID) => {
         const revision = revisions.get(postID);
         const post = findPost(postID);
@@ -420,7 +406,7 @@ export const useHistorySessionStore = defineStore('historySession', () => {
         });
       });
     } catch {
-      if (current()) markBookmarkUnavailableLocal(posts, revisions);
+      if (current()) markBookmarkUnavailableLocal(postIDs, revisions);
     }
   };
 
@@ -432,10 +418,10 @@ export const useHistorySessionStore = defineStore('historySession', () => {
   ) => {
     const postIDs = Array.from(new Set(posts.map(post => post.id)));
     if (postIDs.length === 0) return;
-    const responsePromise = getPostEngagementStates(postIDs);
-    void hydrateLikeStates(posts, capturedRequestVersion, capturedViewerID, capturedGeneration, responsePromise);
-    void hydrateRepostStates(posts, capturedRequestVersion, capturedViewerID, capturedGeneration, responsePromise);
-    void hydrateBookmarkStates(posts, capturedRequestVersion, capturedViewerID, capturedGeneration, responsePromise);
+    const responsePromise = loadPostEngagementIndex(postIDs);
+    void hydrateLikeStates(postIDs, capturedRequestVersion, capturedViewerID, capturedGeneration, responsePromise);
+    void hydrateRepostStates(postIDs, capturedRequestVersion, capturedViewerID, capturedGeneration, responsePromise);
+    void hydrateBookmarkStates(postIDs, capturedRequestVersion, capturedViewerID, capturedGeneration, responsePromise);
   };
 
   const loadInitial = async (force = false) => {

@@ -1,5 +1,6 @@
 import { isAxiosError } from 'axios';
 import axiosClient from '../axios';
+import { createTelemetryPersistence } from './telemetryPersistence';
 import type { RecommendationTracking } from '../types/Recommendation';
 
 export type RecommendationEventType = 'impression' | 'click' | 'read_end' | 'feed_dwell' | 'not_interested';
@@ -68,8 +69,7 @@ let sharedClient: RecommendationTelemetryClient | null = null;
 const clamp = (value: number, minimum: number, maximum: number) =>
   Math.min(maximum, Math.max(minimum, value));
 
-export function calculateViewportVisibility(element: Element): number {
-  const rect = element.getBoundingClientRect();
+export function calculateRectVisibility(rect: DOMRect): number {
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
   const cardWidth = Number.isFinite(rect.width) && rect.width > 0
@@ -128,6 +128,7 @@ export class RecommendationTelemetryClient {
   private observed = new WeakMap<Element, ObservedRecommendation>();
   private feedDwellByElement = new WeakMap<Element, string>();
   private feedDwellStates = new Map<string, FeedDwellState>();
+  private intersectingFeedDwells = new Set<FeedDwellState>();
   private activeFeedDwellKey: string | null = null;
   private qualifyingElements = new Set<Element>();
   private visibilityTimers = new Map<Element, number>();
@@ -145,6 +146,7 @@ export class RecommendationTelemetryClient {
   private reconciliationFrame: number | null = null;
   private reconciliationFrameUsesRAF = false;
   private stopped = true;
+  private queuePersistence = createTelemetryPersistence(() => this.saveQueue());
 
   constructor(private readonly getAccessToken: () => string | null) {
     this.queue = this.loadQueue();
@@ -166,9 +168,11 @@ export class RecommendationTelemetryClient {
 
   stop() {
     if (this.stopped) {
+      this.queuePersistence.flush();
       return;
     }
     this.resetObservedCards(true);
+    this.queuePersistence.flush();
     void this.flush(true);
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     window.removeEventListener('pagehide', this.handlePageHide);
@@ -197,6 +201,7 @@ export class RecommendationTelemetryClient {
     this.observed = new WeakMap<Element, ObservedRecommendation>();
     this.feedDwellByElement = new WeakMap<Element, string>();
     this.feedDwellStates.clear();
+    this.intersectingFeedDwells.clear();
     this.activeFeedDwellKey = null;
   }
 
@@ -209,6 +214,7 @@ export class RecommendationTelemetryClient {
     this.seenNotInterested.clear();
     this.seenFeedDwells.clear();
     this.persistQueue();
+    this.queuePersistence.flush();
     this.clearScheduledFlush();
     this.clearRetry();
   }
@@ -229,6 +235,11 @@ export class RecommendationTelemetryClient {
 
     this.ensureObserver();
     const key = this.businessKey(postID, tracking);
+    const previousKey = this.feedDwellByElement.get(element);
+    if (previousKey !== undefined && previousKey !== key) {
+      const previous = this.feedDwellStates.get(previousKey);
+      if (previous) this.detachFeedDwellState(previous);
+    }
     let state = this.feedDwellStates.get(key);
     if (!state) {
       state = {
@@ -301,6 +312,7 @@ export class RecommendationTelemetryClient {
     }
 
     state.finalized = true;
+    this.intersectingFeedDwells.delete(state);
     this.scheduleFeedDwellReconciliation();
     const accumulated = Number.isFinite(state.accumulatedVisibleMS)
       ? Math.max(0, state.accumulatedVisibleMS)
@@ -354,6 +366,7 @@ export class RecommendationTelemetryClient {
 
   async flush(keepalive = false): Promise<void> {
     if (keepalive) {
+      this.queuePersistence.flush();
       await this.flushKeepalive();
       return;
     }
@@ -460,6 +473,11 @@ export class RecommendationTelemetryClient {
       const state = this.feedDwellStates.get(key);
       if (state?.element === entry.target) {
         state.intersecting = entry.isIntersecting;
+        if (state.intersecting && !state.finalized) {
+          this.intersectingFeedDwells.add(state);
+        } else {
+          this.intersectingFeedDwells.delete(state);
+        }
       }
     });
     this.reconcileActiveFeedDwell();
@@ -540,6 +558,7 @@ export class RecommendationTelemetryClient {
   }
 
   private detachFeedDwellState(state: FeedDwellState) {
+    this.intersectingFeedDwells.delete(state);
     if (this.activeFeedDwellKey === state.key) {
       this.settleFeedDwellState(state);
       this.activeFeedDwellKey = null;
@@ -553,6 +572,9 @@ export class RecommendationTelemetryClient {
   }
 
   private forgetObservedElement(element: Element) {
+    const key = this.feedDwellByElement.get(element);
+    const state = key === undefined ? undefined : this.feedDwellStates.get(key);
+    if (state?.element === element) this.intersectingFeedDwells.delete(state);
     this.observer?.unobserve(element);
     this.clearVisibilityTimer(element);
     this.qualifyingElements.delete(element);
@@ -562,21 +584,20 @@ export class RecommendationTelemetryClient {
 
   private reconcileActiveFeedDwell() {
     const candidates = document.visibilityState === 'visible'
-      ? Array.from(this.feedDwellStates.values())
+      ? Array.from(this.intersectingFeedDwells)
         .filter(state =>
           !state.finalized
           && state.element !== null
           && state.intersecting
         )
-        .map(state => ({
-          state,
-          visibility: calculateViewportVisibility(state.element as Element),
-          distance: Math.abs(
-            ((state.element as Element).getBoundingClientRect().top
-              + (state.element as Element).getBoundingClientRect().bottom) / 2
-            - window.innerHeight / 2,
-          ),
-        }))
+        .map(state => {
+          const rect = (state.element as Element).getBoundingClientRect();
+          return {
+            state,
+            visibility: calculateRectVisibility(rect),
+            distance: Math.abs((rect.top + rect.bottom) / 2 - window.innerHeight / 2),
+          };
+        })
         .filter(candidate => candidate.visibility >= 0.5)
         .sort((left, right) => {
           if (left.visibility !== right.visibility) {
@@ -696,12 +717,14 @@ export class RecommendationTelemetryClient {
     }
     this.queue = this.queue.filter(event => !terminalIDs.has(event.event_id));
     this.persistQueue();
+    this.queuePersistence.flush();
   }
 
   private dropBatch(batch: QueuedRecommendationEvent[]) {
     const eventIDs = new Set(batch.map(event => event.event_id));
     this.queue = this.queue.filter(event => !eventIDs.has(event.event_id));
     this.persistQueue();
+    this.queuePersistence.flush();
   }
 
   private scheduleFlush(delayMs: number) {
@@ -758,6 +781,10 @@ export class RecommendationTelemetryClient {
   }
 
   private persistQueue() {
+    this.queuePersistence.schedule();
+  }
+
+  private saveQueue() {
     try {
       sessionStorage.setItem(storageKey, JSON.stringify(this.queue));
     } catch {

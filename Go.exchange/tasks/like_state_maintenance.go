@@ -97,7 +97,7 @@ func reconcileLikeStateRegistry(ctx context.Context, store *likes.Store, db *gor
 		if _, ok := active[postID]; ok {
 			continue
 		}
-		if err := store.PurgePost(ctx, postID); err != nil {
+		if err := store.DeletePost(ctx, postID); err != nil {
 			log.Printf("[LikeStateMaintenance] like_state_lua_type_preflight_failed post=%d purge: %v", postID, err)
 			return cursor, err
 		}
@@ -125,7 +125,7 @@ func verifyIdleLikeStates(ctx context.Context, store *likes.Store, db *gorm.DB, 
 	for _, postID := range postIDs {
 		baseline, active := baselines[postID]
 		if !active {
-			if err := store.PurgePost(ctx, postID); err != nil {
+			if err := store.DeletePost(ctx, postID); err != nil {
 				return err
 			}
 			log.Printf("[LikeStateMaintenance] like_state_deleted_reconciled post=%d", postID)

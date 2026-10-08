@@ -3,19 +3,17 @@ import type {
   PostBatchBookmarkStatesResponse,
 } from '../services/bookmarkService';
 import type {
-  PostBatchLikeStateItem,
-  PostBatchLikeStatesResponse,
-} from '../services/likeService';
-import type {
-  PostBatchRepostStateItem,
-  PostBatchRepostStatesResponse,
-} from '../services/repostService';
-import type {
   BookmarkEngagementState,
   LikeEngagementState,
   PostEngagementStatesResponse,
   RepostEngagementState,
 } from '../services/engagementService';
+
+type PostBatchLikeStateItem = { post_id: number; likes: number; liked: boolean };
+type PostBatchRepostStateItem = { post_id: number; reposts: number; reposted: boolean };
+type BatchResponse<T> = { items: T[]; unavailable_post_ids: number[] };
+type PostBatchLikeStatesResponse = BatchResponse<PostBatchLikeStateItem>;
+type PostBatchRepostStatesResponse = BatchResponse<PostBatchRepostStateItem>;
 
 type BatchLoaders = Partial<{
   likes: (postIDs: number[]) => Promise<PostBatchLikeStatesResponse>;

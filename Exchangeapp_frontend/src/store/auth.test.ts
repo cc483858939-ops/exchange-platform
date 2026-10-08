@@ -361,9 +361,7 @@ describe('auth store cross-tab session coordination', () => {
     });
   });
 
-  it('requires re-login when only legacy credentials are present', () => {
-    localStorage.setItem('token', tokenFor('alice-access'));
-    localStorage.setItem('refresh_token', 'alice-refresh');
+  it('requires login and clears cached profile data when there is no credential snapshot', () => {
     localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(fullIdentity));
     const store = createAuthStore();
 
@@ -372,8 +370,6 @@ describe('auth store cross-tab session coordination', () => {
     expect(store.currentIdentity).toBeNull();
     expect(store.isAuthenticated).toBe(false);
     expect(readStoredSession()).toBeNull();
-    expect(localStorage.getItem('token')).toBeNull();
-    expect(localStorage.getItem('refresh_token')).toBeNull();
     expect(localStorage.getItem(AUTH_USER_STORAGE_KEY)).toBeNull();
   });
 
@@ -388,23 +384,17 @@ describe('auth store cross-tab session coordination', () => {
     });
   });
 
-  it('keeps a v2 snapshot authoritative and removes leftover legacy keys', () => {
+  it('restores the current credential snapshot', () => {
     seedV2Auth();
-    localStorage.setItem('token', tokenFor('stale-access'));
-    localStorage.setItem('refresh_token', 'stale-refresh');
 
     const store = createAuthStore();
 
     expect(store.token).toBe(bearerFor('alice-access'));
     expect(store.refreshToken).toBe('alice-refresh');
-    expect(localStorage.getItem('token')).toBeNull();
-    expect(localStorage.getItem('refresh_token')).toBeNull();
   });
 
-  it('does not fall back to valid legacy credentials when a v2 snapshot is malformed', () => {
+  it('rejects a malformed credential snapshot and clears cached profile data', () => {
     localStorage.setItem(AUTH_SESSION_STORAGE_KEY, '{');
-    localStorage.setItem('token', tokenFor('alice-access'));
-    localStorage.setItem('refresh_token', 'alice-refresh');
     localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(fullIdentity));
 
     const store = createAuthStore();
@@ -412,24 +402,6 @@ describe('auth store cross-tab session coordination', () => {
     expect(store.isAuthenticated).toBe(false);
     expect(store.token).toBeNull();
     expect(readStoredSession()).toBeNull();
-    expect(localStorage.getItem('token')).toBeNull();
-    expect(localStorage.getItem('refresh_token')).toBeNull();
-    expect(localStorage.getItem(AUTH_USER_STORAGE_KEY)).toBeNull();
-  });
-
-  it('clears incomplete legacy credentials and profile state', () => {
-    localStorage.setItem('token', tokenFor('orphan-access'));
-    localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(fullIdentity));
-
-    const store = createAuthStore();
-
-    expect(store.isAuthenticated).toBe(false);
-    expect(store.token).toBeNull();
-    expect(store.refreshToken).toBeNull();
-    expect(store.currentIdentity).toBeNull();
-    expect(localStorage.getItem(AUTH_SESSION_STORAGE_KEY)).toBeNull();
-    expect(localStorage.getItem('token')).toBeNull();
-    expect(localStorage.getItem('refresh_token')).toBeNull();
     expect(localStorage.getItem(AUTH_USER_STORAGE_KEY)).toBeNull();
   });
 
@@ -445,8 +417,6 @@ describe('auth store cross-tab session coordination', () => {
     expect(readStoredSession()).toMatchObject({
       sessionId: 'sid-7', userId: 7, accessToken: tokenFor('access-token'), refreshToken: 'refresh-token',
     });
-    expect(localStorage.getItem('token')).toBeNull();
-    expect(localStorage.getItem('refresh_token')).toBeNull();
     expect(JSON.parse(localStorage.getItem(AUTH_USER_STORAGE_KEY) || 'null')).toEqual(fullIdentity);
     expect(lockRequest).toHaveBeenCalledWith(expect.any(String), { mode: 'exclusive', signal: expect.any(AbortSignal) }, expect.any(Function));
   });

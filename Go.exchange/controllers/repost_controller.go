@@ -107,8 +107,8 @@ func mutatePostRepostRequest(ctx *gin.Context, reposted bool) {
 
 func GetPostRepostStates(ctx *gin.Context) {
 	var request postRepostStatesRequest
-	if err := ctx.ShouldBindJSON(&request); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid post_ids"})
+	if err := bindBoundedPostStates(ctx, &request); err != nil {
+		writeJSONRequestError(ctx, err, "Invalid post_ids")
 		return
 	}
 	if len(request.PostIDs) == 0 || len(request.PostIDs) > maxPostRepostStateIDs {
@@ -277,10 +277,8 @@ func loadPostRepostStatesFromDB(ctx context.Context, userID uint, postIDs []uint
 	db := global.APIDb.WithContext(ctx)
 
 	now := time.Now().UTC()
-	var availableIDs []uint
-	if err := publicPostScope(db.Model(&models.Post{}), now).
-		Where("posts.id IN ?", postIDs).
-		Pluck("posts.id", &availableIDs).Error; err != nil {
+	availableIDs, err := loadPublicPostIDs(ctx, db, postIDs, now)
+	if err != nil {
 		return postRepostStatesLoadResult{}, err
 	}
 	available := make(map[uint]struct{}, len(availableIDs))

@@ -102,8 +102,8 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	if err := tx.Where("id = ?", runtimeSchemaStateID).Take(&publishedState).Error; err != nil {
 		t.Fatalf("load published runtime schema state: %v", err)
 	}
-	if publishedState.CurrentVersion != 15 || publishedState.CompatibilityFloor != 14 {
-		t.Fatalf("published schema contract=%d/%d want=15/14", publishedState.CurrentVersion, publishedState.CompatibilityFloor)
+	if publishedState.CurrentVersion != 17 || publishedState.CompatibilityFloor != 14 {
+		t.Fatalf("published schema contract=%d/%d want=16/14", publishedState.CurrentVersion, publishedState.CompatibilityFloor)
 	}
 	if err := applyPostSchemaConstraints(tx); err != nil {
 		t.Fatalf("apply Post schema constraints: %v", err)
@@ -117,7 +117,7 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	if err := applyPostMediaUploadConstraints(tx); err != nil {
 		t.Fatalf("apply PostMedia upload constraints: %v", err)
 	}
-	if err := applyPostMediaDeletionSchema(tx, 15); err != nil {
+	if err := applyPostMediaDeletionSchema(tx); err != nil {
 		t.Fatalf("apply PostMedia deletion schema: %v", err)
 	}
 	if err := applyPostEmbeddingConstraints(tx); err != nil {
@@ -217,20 +217,6 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 			t.Fatalf("drop Post media cleanup claim constraint: %v", err)
 		}
 		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_constraint_missing")
-	})
-
-	withIntegrationSavepoint(t, tx, "legacy_content_table", func() {
-		if err := tx.Exec("CREATE TABLE " + qualifiedIntegrationTable(primarySchema, "articles") + " (id BIGINT)").Error; err != nil {
-			t.Fatalf("create legacy articles table: %v", err)
-		}
-		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_legacy_content_present")
-	})
-
-	withIntegrationSavepoint(t, tx, "legacy_runtime_column", func() {
-		if err := tx.Exec("ALTER TABLE " + qualifiedIntegrationTable(primarySchema, "notifications") + " ADD COLUMN article_id BIGINT").Error; err != nil {
-			t.Fatalf("add legacy notification column: %v", err)
-		}
-		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_legacy_content_present")
 	})
 
 	withIntegrationSavepoint(t, tx, "missing_state", func() {

@@ -107,22 +107,15 @@ func normalizeUserSearchQuery(raw string) (string, error) {
 }
 
 func parseUserSearchPagination(ctx *gin.Context) (int, int, error) {
-	limit := defaultUserSearchLimit
-	if raw, exists := ctx.GetQuery("limit"); exists {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed <= 0 {
-			return 0, 0, errors.New("invalid limit")
-		}
-		limit = parsed
-	}
-	if limit > maxUserSearchLimit {
-		limit = maxUserSearchLimit
+	limit, err := parsePageLimit(ctx, defaultUserSearchLimit, maxUserSearchLimit)
+	if err != nil {
+		return 0, 0, err
 	}
 
 	offset := 0
 	if raw, exists := ctx.GetQuery("offset"); exists {
 		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 0 {
+		if err != nil || parsed < 0 || parsed > maxUserListOffset {
 			return 0, 0, errors.New("invalid offset")
 		}
 		offset = parsed
@@ -167,7 +160,7 @@ func searchUsersFromDB(ctx context.Context, viewerID uint, query string, limit, 
 	}
 	page := userConnectionPageResponse{Items: make([]userConnectionResponse, 0, len(rows))}
 	if len(rows) > limit {
-		page.HasMore = true
+		page.HasMore = offset <= maxUserListOffset-limit
 		rows = rows[:limit]
 	}
 	for _, row := range rows {
@@ -194,10 +187,16 @@ func decodeUserProfilePatch(reader io.Reader, viewerID uint) (map[string]any, er
 	decoder := json.NewDecoder(reader)
 	var raw json.RawMessage
 	if err := decoder.Decode(&raw); err != nil {
+		if isRequestBodyTooLarge(err) {
+			return nil, err
+		}
 		return nil, errors.New("malformed JSON body")
 	}
 	var trailing json.RawMessage
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if isRequestBodyTooLarge(err) {
+			return nil, err
+		}
 		return nil, errors.New("malformed JSON body")
 	}
 
@@ -327,9 +326,13 @@ func UpdateUserProfile(ctx *gin.Context) {
 		return
 	}
 
+	if err := limitJSONRequest(ctx, profilePatchMaxBytes); err != nil {
+		writeJSONRequestError(ctx, err, "malformed JSON body")
+		return
+	}
 	updates, err := decodeUserProfilePatch(ctx.Request.Body, viewerID)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeJSONRequestError(ctx, err, err.Error())
 		return
 	}
 	if global.APIDb == nil {

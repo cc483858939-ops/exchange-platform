@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"Go.exchange/models"
@@ -13,14 +14,17 @@ import (
 )
 
 type GormProfileRepository struct {
-	db *gorm.DB
+	db               *gorm.DB
+	recoveryMu       sync.Mutex
+	recoveryQueued   map[uint]time.Time
+	recoveryPrunedAt time.Time
 }
 
 func NewGormProfileRepository(db *gorm.DB) (*GormProfileRepository, error) {
 	if db == nil {
 		return nil, errors.New("recommendation profile repository database is nil")
 	}
-	return &GormProfileRepository{db: db}, nil
+	return &GormProfileRepository{db: db, recoveryQueued: make(map[uint]time.Time)}, nil
 }
 
 func (r *GormProfileRepository) Load(ctx context.Context, query ProfileLoadQuery) (ProfileLoadResult, error) {
@@ -82,17 +86,49 @@ func (r *GormProfileRepository) Load(ctx context.Context, query ProfileLoadQuery
 	result := ProfileLoadResult{Profile: profile}
 	if profile.ProfileStatus == ProfileStatusStale {
 		result = r.withRecovery(ctx, profile, query.UserID, "serving_stale", query.Now)
+	} else {
+		r.recoveryMu.Lock()
+		delete(r.recoveryQueued, query.UserID)
+		r.recoveryMu.Unlock()
 	}
 	return result, nil
 }
 
 func (r *GormProfileRepository) withRecovery(ctx context.Context, profile Profile, userID uint, reason string, now time.Time) ProfileLoadResult {
 	result := ProfileLoadResult{Profile: profile, RecoveryReason: reason}
+	if ctx != nil && ctx.Err() != nil {
+		result.RecoveryError = ctx.Err()
+		return result
+	}
+	// Only successful idempotent serving recovery is suppressed briefly.
+	// Behavior invalidations always increment dirty_version independently.
+	wallNow := time.Now()
+	r.recoveryMu.Lock()
+	queuedUntil := r.recoveryQueued[userID]
+	r.recoveryMu.Unlock()
+	if queuedUntil.After(wallNow) {
+		return result
+	}
 	dirty, err := NewGormDirtyProfileRepository(r.db)
 	if err == nil {
 		result.RecoveryError = dirty.EnsureProfilesQueued(ctx, []uint{userID}, reason, now)
 	} else {
 		result.RecoveryError = err
+	}
+	if result.RecoveryError == nil {
+		r.recoveryMu.Lock()
+		if len(r.recoveryQueued) >= 1024 && wallNow.Sub(r.recoveryPrunedAt) >= time.Second {
+			for id, deadline := range r.recoveryQueued {
+				if !deadline.After(wallNow) {
+					delete(r.recoveryQueued, id)
+				}
+			}
+			r.recoveryPrunedAt = wallNow
+		}
+		if len(r.recoveryQueued) < 1024 {
+			r.recoveryQueued[userID] = time.Now().Add(time.Second)
+		}
+		r.recoveryMu.Unlock()
 	}
 	return result
 }

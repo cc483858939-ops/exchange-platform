@@ -8,22 +8,12 @@ import {
   remapImageCropState,
   zoomImageCropState,
   type ImageCropGeometry,
+  type ImageCropState,
   type ImageCropSource,
 } from './imageCrop';
 
-export type AvatarCropState = {
-  scale: number;
-  offsetX: number;
-  offsetY: number;
-};
-
-export type AvatarCropGeometry = {
-  cropSize: number;
-  naturalWidth: number;
-  naturalHeight: number;
-  minScale: number;
-  maxScale: number;
-};
+export type AvatarCropState = ImageCropState;
+export type AvatarCropGeometry = ImageCropGeometry;
 
 export type AvatarCropSource = ImageCropSource;
 
@@ -61,60 +51,17 @@ const maxSourceDimension = 8192;
 const maxSourcePixels = 20_000_000;
 const avatarDecodeLimits = { maxDimension: maxSourceDimension, maxPixels: maxSourcePixels };
 
-const toImageCropGeometry = (geometry: AvatarCropGeometry): ImageCropGeometry => ({
-  viewportWidth: geometry.cropSize,
-  viewportHeight: geometry.cropSize,
-  naturalWidth: geometry.naturalWidth,
-  naturalHeight: geometry.naturalHeight,
-  minScale: geometry.minScale,
-  maxScale: geometry.maxScale,
-});
-
 export const createAvatarCropGeometry = (
   cropSize: number,
   naturalWidth: number,
   naturalHeight: number,
-): AvatarCropGeometry | null => {
-  const geometry = createImageCropGeometry(cropSize, cropSize, naturalWidth, naturalHeight);
-  if (!geometry) return null;
-  return {
-    cropSize,
-    naturalWidth,
-    naturalHeight,
-    minScale: geometry.minScale,
-    maxScale: geometry.maxScale,
-  };
-};
+): AvatarCropGeometry | null => createImageCropGeometry(cropSize, cropSize, naturalWidth, naturalHeight);
 
-export const clampAvatarCropState = (
-  state: AvatarCropState,
-  geometry: AvatarCropGeometry,
-): AvatarCropState => clampImageCropState(state, toImageCropGeometry(geometry));
-
-export const centeredAvatarCropState = (
-  geometry: AvatarCropGeometry,
-): AvatarCropState => centeredImageCropState(toImageCropGeometry(geometry));
-
-export const zoomAvatarCropState = (
-  state: AvatarCropState,
-  nextScale: number,
-  geometry: AvatarCropGeometry,
-): AvatarCropState => zoomImageCropState(state, nextScale, toImageCropGeometry(geometry));
-
-export const remapAvatarCropState = (
-  state: AvatarCropState,
-  oldGeometry: AvatarCropGeometry,
-  newGeometry: AvatarCropGeometry,
-): AvatarCropState => remapImageCropState(
-  state,
-  toImageCropGeometry(oldGeometry),
-  toImageCropGeometry(newGeometry),
-);
-
-export const avatarCropSourceRect = (
-  state: AvatarCropState,
-  geometry: AvatarCropGeometry,
-) => imageCropSourceRect(state, toImageCropGeometry(geometry));
+export const clampAvatarCropState = clampImageCropState;
+export const centeredAvatarCropState = centeredImageCropState;
+export const zoomAvatarCropState = zoomImageCropState;
+export const remapAvatarCropState = remapImageCropState;
+export const avatarCropSourceRect = imageCropSourceRect;
 
 export const decodeAvatarImage = async (source: Blob): Promise<AvatarCropSource> => {
   try {

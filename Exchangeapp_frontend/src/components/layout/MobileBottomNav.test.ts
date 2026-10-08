@@ -170,6 +170,7 @@ describe('MobileBottomNav', () => {
   it('gates anonymous protected destinations without fabricating a profile id', () => {
     setState(false);
     mocks.searchSession.query = 'alice';
+    rememberSearchRoute({ tab: 'people', q: 'alice' });
     const wrapper = mountNav();
     const links = wrapper.findAll('.mobile-bottom-nav__item');
 
@@ -213,6 +214,7 @@ describe('MobileBottomNav', () => {
 
   it('preserves the active search query in the Search destination', () => {
     mocks.searchSession.query = 'alice';
+    rememberSearchRoute({ tab: 'people', q: 'alice' });
     const wrapper = mountNav();
     const search = wrapper.findAll('.mobile-bottom-nav__item')[1];
 
@@ -245,7 +247,7 @@ describe('MobileBottomNav', () => {
     expect(search.attributes('data-route-query-to')).toBe(to);
   });
 
-  it('restores People Search and falls back to the legacy People query', () => {
+  it('restores People Search and keeps a later bare Search visit', () => {
     setState(true, 'PostDetail');
     rememberSearchRoute({ tab: 'people', q: 'alice' });
     const remembered = mountNav().findAll('.mobile-bottom-nav__item')[1];
@@ -254,12 +256,13 @@ describe('MobileBottomNav', () => {
 
     rememberSearchRoute({});
     mocks.searchSession.query = 'legacy bob';
-    const legacy = mountNav().findAll('.mobile-bottom-nav__item')[1];
-    expect(legacy.attributes('data-route-query-tab')).toBe('people');
-    expect(legacy.attributes('data-route-query-q')).toBe('legacy bob');
+    const bareSearch = mountNav().findAll('.mobile-bottom-nav__item')[1];
+    expect(bareSearch.attributes('data-route-name')).toBe('UserSearch');
+    expect(bareSearch.attributes('data-route-query-tab')).toBeUndefined();
+    expect(bareSearch.attributes('data-route-query-q')).toBeUndefined();
   });
 
-  it('uses bare Search when no route snapshot or legacy People query exists', () => {
+  it('uses bare Search when no route snapshot exists', () => {
     setState(true, 'PostDetail');
     rememberSearchRoute({});
     const search = mountNav().findAll('.mobile-bottom-nav__item')[1];

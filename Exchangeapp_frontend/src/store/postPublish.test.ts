@@ -31,7 +31,7 @@ const mocks = vi.hoisted(() => ({
   savePostDraft: vi.fn(),
   getPostPublishOperation: vi.fn(),
   claimPostPublishOperation: vi.fn(),
-  updatePostPublishOperation: vi.fn(),
+  updatePostPublishOperationCheckpoint: vi.fn(),
   deletePostPublishOperation: vi.fn(),
   serializePublishOperation: vi.fn(),
   restorePublishOperation: vi.fn(),
@@ -79,9 +79,13 @@ vi.mock('../storage/postDraftRepository', () => ({
 vi.mock('../storage/postPublishRepository', () => ({
   getPostPublishOperation: mocks.getPostPublishOperation,
   claimPostPublishOperation: mocks.claimPostPublishOperation,
-  updatePostPublishOperation: mocks.updatePostPublishOperation,
+  updatePostPublishOperationCheckpoint: mocks.updatePostPublishOperationCheckpoint,
   deletePostPublishOperation: mocks.deletePostPublishOperation,
   serializePublishOperation: mocks.serializePublishOperation,
+  serializePublishOperationCheckpoint: (operation: any) => {
+    const record = mocks.serializePublishOperation(operation);
+    return { ...record, media: record.media.map(({ blob: _blob, ...metadata }: any) => metadata) };
+  },
   restorePublishOperation: mocks.restorePublishOperation,
 }));
 
@@ -119,20 +123,37 @@ const publishedPost = (authorID = 7) => ({
 
 const file = (name: string) => new File(['image'], name, { type: 'image/png' });
 
-const persistedPublishOperation = (overrides: Record<string, any> = {}) => mocks.serializePublishOperation({
-  id: operationUUID(901),
-  publisherUserID: 7,
-  sourceDraftID: null,
-  sourceDraftSnapshot: null,
-  content: 'Recovered post',
-  media: [],
-  phase: 'publishing',
-  failureKind: null,
-  error: '',
-  startedAt: 901,
-  post: null,
-  ...overrides,
-});
+const persistedPublishOperation = (overrides: Record<string, any> = {}) => {
+  const operation = {
+    id: operationUUID(901),
+    publisherUserID: 7,
+    sourceDraftID: null,
+    sourceDraftSnapshot: null,
+    content: 'Recovered post',
+    quotePostID: null,
+    media: [],
+    phase: 'publishing',
+    failureKind: null,
+    error: '',
+    startedAt: 901,
+    post: null,
+    ...overrides,
+  } as any;
+  if (operation.sourceDraftID !== null && overrides.sourceDraftSnapshot === undefined) {
+    operation.sourceDraftSnapshot = {
+      content: operation.content,
+      quotePostID: operation.quotePostID,
+      media: operation.media.map((item: any) => ({
+        id: item.draftMediaID,
+        name: item.file.name,
+        type: item.file.type,
+        size: item.file.size,
+        lastModified: item.file.lastModified,
+      })),
+    };
+  }
+  return mocks.serializePublishOperation(operation);
+};
 
 const persistedFailedOperation = (overrides: Record<string, any> = {}) => persistedPublishOperation({
   phase: 'failed',
@@ -260,10 +281,15 @@ describe('postPublish store', () => {
       mocks.publishRecords.set(record.publisherUserID, record);
       return { status: 'claimed' };
     });
-    mocks.updatePostPublishOperation.mockImplementation(async (record: any) => {
+    mocks.updatePostPublishOperationCheckpoint.mockImplementation(async (record: any) => {
       const current = mocks.publishRecords.get(record.publisherUserID);
       if (!current || current.id !== record.id) return false;
-      mocks.publishRecords.set(record.publisherUserID, record);
+      mocks.publishRecords.set(record.publisherUserID, {
+        ...record,
+        media: record.media.map((metadata: any, index: number) => ({
+          ...metadata, blob: mocks.publishRecords.get(record.publisherUserID).media[index].blob,
+        })),
+      });
       return true;
     });
     mocks.deletePostPublishOperation.mockImplementation(async (viewerID: number, operationID: string) => {
@@ -288,17 +314,22 @@ describe('postPublish store', () => {
       })),
       updatedAt: Date.now(),
     }));
-    mocks.restorePublishOperation.mockImplementation((record: any) => ({
-      ...record,
-      publisherSessionID: record.publisherSessionID ?? null,
-      quotePostID: record.quotePostID ?? null,
-      sourceDraftSnapshot: record.sourceDraftSnapshot ?? null,
-      media: record.media.map((item: any) => ({
-        draftMediaID: item.draftMediaID,
-        file: new File([item.blob], item.name, { type: item.type, lastModified: item.lastModified }),
-        uploadedURL: item.uploadedURL,
-      })),
-    }));
+    mocks.restorePublishOperation.mockImplementation((record: any) => {
+      if ((record.sourceDraftID === null) !== (record.sourceDraftSnapshot === null)) {
+        throw new Error('The saved publish source draft ID and snapshot must be present together.');
+      }
+      return {
+        ...record,
+        publisherSessionID: record.publisherSessionID ?? null,
+        quotePostID: record.quotePostID ?? null,
+        sourceDraftSnapshot: record.sourceDraftSnapshot,
+        media: record.media.map((item: any) => ({
+          draftMediaID: item.draftMediaID,
+          file: new File([item.blob], item.name, { type: item.type, lastModified: item.lastModified }),
+          uploadedURL: item.uploadedURL,
+        })),
+      };
+    });
     const draft = usePostDraftStore();
     draft.clear();
     draft.setViewer(7);
@@ -1106,7 +1137,7 @@ describe('postPublish store', () => {
     expect(mocks.claimPostPublishOperation).toHaveBeenCalledTimes(1);
     expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
     expect(mocks.createPost).not.toHaveBeenCalled();
-    expect(mocks.updatePostPublishOperation).not.toHaveBeenCalled();
+    expect(mocks.updatePostPublishOperationCheckpoint).not.toHaveBeenCalled();
   });
 
   it('does not retry an occupied failed retryable publish during the losing action', async () => {
@@ -1131,7 +1162,7 @@ describe('postPublish store', () => {
     expect(store.latestOperation?.id).toBe(owner.id);
     expect(draft.publishOperationID).toBeNull();
     expect(mocks.claimPostPublishOperation).toHaveBeenCalledTimes(1);
-    expect(mocks.updatePostPublishOperation).not.toHaveBeenCalled();
+    expect(mocks.updatePostPublishOperationCheckpoint).not.toHaveBeenCalled();
     expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
     expect(mocks.createPost).not.toHaveBeenCalled();
   });
@@ -1459,6 +1490,7 @@ describe('postPublish store', () => {
     mocks.getPostDraft.mockResolvedValueOnce({
       id: 'saved-source',
       viewerID: 7,
+      quotePostID: null,
       content: 'Saved exact content',
       media: [persistedDraftMedia('saved-media-1', reopenedFile)],
       createdAt: 1,
@@ -1504,6 +1536,7 @@ describe('postPublish store', () => {
     mocks.getPostDraft.mockResolvedValueOnce({
       id: 'saved-source',
       viewerID: 7,
+      quotePostID: null,
       content: 'Status retry source',
       media: [],
       createdAt: 1,
@@ -1540,6 +1573,7 @@ describe('postPublish store', () => {
     mocks.getPostDraft.mockResolvedValueOnce({
       id: 'saved-source',
       viewerID: 7,
+      quotePostID: null,
       content: 'Original saved content',
       media: [],
       createdAt: 1,
@@ -1624,6 +1658,7 @@ describe('postPublish store', () => {
       mocks.getPostDraft.mockResolvedValueOnce({
         id: 'saved-source',
         viewerID: 7,
+        quotePostID: null,
         content: 'Same source content',
         media: sourceMedia,
         createdAt: 1,
@@ -1654,6 +1689,7 @@ describe('postPublish store', () => {
     mocks.getPostDraft.mockResolvedValueOnce({
       id: 'saved-source-y',
       viewerID: 7,
+      quotePostID: null,
       content: 'Same text',
       media: [],
       createdAt: 1,
@@ -1841,13 +1877,14 @@ describe('postPublish store', () => {
     const sourceDraftRecord = {
       id: sourceDraftID,
       viewerID: 7,
+      quotePostID: null,
       content: 'Newer saved version',
       media: [],
       createdAt: 1,
       updatedAt: 3,
     };
     mocks.sourceDraftRecords.set(sourceDraftID, sourceDraftRecord);
-    const oldSnapshot = { content: 'Published version', media: [] };
+    const oldSnapshot = { content: 'Published version', quotePostID: null, media: [] };
     const operation = persistedFailedOperation({
       id: operationUUID(910),
       sourceDraftID,
@@ -1869,12 +1906,13 @@ describe('postPublish store', () => {
     expect(mocks.createPost).not.toHaveBeenCalled();
   });
 
-  it('preserves a legacy source draft whose succeeded operation has no snapshot', async () => {
-    const sourceDraftID = 'legacy-source';
+  it('pauses recovery and preserves both records when a saved source draft has no snapshot', async () => {
+    const sourceDraftID = 'unknown-source-snapshot';
     mocks.sourceDraftRecords.set(sourceDraftID, {
       id: sourceDraftID,
       viewerID: 7,
-      content: 'Keep legacy draft',
+      quotePostID: null,
+      content: 'Keep source draft',
       media: [],
       createdAt: 1,
       updatedAt: 2,
@@ -1882,13 +1920,12 @@ describe('postPublish store', () => {
     const operation = persistedFailedOperation({
       id: operationUUID(911),
       sourceDraftID,
+      sourceDraftSnapshot: null,
       phase: 'succeeded',
       failureKind: null,
       error: '',
       post: publishedPost(),
     });
-    delete operation.schemaVersion;
-    delete operation.sourceDraftSnapshot;
     mocks.publishRecords.set(7, operation);
     const store = usePostPublishStore();
 
@@ -1896,8 +1933,12 @@ describe('postPublish store', () => {
     await flushPromises();
 
     expect(mocks.deletePostDraftIfUnchanged).not.toHaveBeenCalled();
-    expect(mocks.sourceDraftRecords.get(sourceDraftID)?.content).toBe('Keep legacy draft');
-    expect(mocks.deletePostPublishOperation).toHaveBeenCalledWith(7, operation.id);
+    expect(mocks.sourceDraftRecords.get(sourceDraftID)?.content).toBe('Keep source draft');
+    expect(mocks.deletePostPublishOperation).not.toHaveBeenCalled();
+    expect(mocks.publishRecords.get(7)).toBe(operation);
+    expect(store.latestOperation).toBeNull();
+    expect(store.recoveryError).toContain('Couldn’t restore the pending post');
+    expect(mocks.createPost).not.toHaveBeenCalled();
   });
 
   it('keeps a successful operation unresolved when its durable delete fails', async () => {
@@ -2065,7 +2106,7 @@ describe('postPublish store', () => {
   });
 
   it('does not send the post if the exact pre-POST checkpoint fails', async () => {
-    mocks.updatePostPublishOperation.mockRejectedValueOnce(new Error('quota exceeded'));
+    mocks.updatePostPublishOperationCheckpoint.mockRejectedValueOnce(new Error('quota exceeded'));
     usePostDraftStore().setContent('Checkpoint before network');
 
     const result = await usePostPublishStore().startOrRetryDraft();
@@ -2087,7 +2128,7 @@ describe('postPublish store', () => {
     if (result.status !== 'accepted') throw new Error('publish was not accepted');
     await flushPromises();
     expect(result.operation.phase).toBe('failed');
-    mocks.updatePostPublishOperation.mockRejectedValueOnce(new Error('quota exceeded'));
+    mocks.updatePostPublishOperationCheckpoint.mockRejectedValueOnce(new Error('quota exceeded'));
 
     await expect(store.retry(result.operation.id)).resolves.toBe(false);
 
@@ -2321,38 +2362,6 @@ describe('postPublish store', () => {
     expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
     expect(mocks.createPost).not.toHaveBeenCalled();
     expect(mocks.publishRecords.get(7)).toEqual(record);
-  });
-
-  it('blocks a legacy schema 2 operation without rebinding it and preserves its draft for discard', async () => {
-    const legacy = mocks.serializePublishOperation({
-      id: operationUUID(913),
-      publisherUserID: 7,
-      sourceDraftID: null,
-      sourceDraftSnapshot: null,
-      content: 'Legacy text draft',
-      media: [],
-      phase: 'publishing',
-      failureKind: null,
-      error: '',
-      startedAt: 913,
-      post: null,
-    });
-    const { publisherSessionID: _untrusted, ...legacyRecord } = legacy;
-    mocks.publishRecords.set(7, { ...legacyRecord, schemaVersion: 2 });
-    const draft = usePostDraftStore();
-    draft.setContent('Legacy text draft');
-    const store = usePostPublishStore();
-
-    await store.activateViewer(7);
-    await flushPromises();
-
-    expect(store.latestOperation).toMatchObject({ publisherSessionID: null, phase: 'failed', failureKind: 'auth_context_changed' });
-    expect(mocks.publishRecords.get(7)).not.toHaveProperty('publisherSessionID');
-    expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
-    expect(mocks.createPost).not.toHaveBeenCalled();
-    expect(draft.content).toBe('Legacy text draft');
-    expect(await store.abandonFailedOperation(operationUUID(913))).toBe(true);
-    expect(draft.content).toBe('Legacy text draft');
   });
 
   it('rejects a create response from another author without reconciling caches', async () => {

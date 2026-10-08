@@ -184,3 +184,58 @@ func TestAPIRuntimeDrainsTraceDispatcherAfterHTTPHandlersFinish(t *testing.T) {
 		t.Fatal("API runtime shutdown did not finish")
 	}
 }
+
+func TestAPIRuntimeTimeoutCancelsAndDrainsHandlersBeforeTrace(t *testing.T) {
+	var active atomic.Int32
+	started := make(chan struct{})
+	finished := make(chan struct{})
+	handler := http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		active.Add(1)
+		defer active.Add(-1)
+		defer close(finished)
+		close(started)
+		<-request.Context().Done()
+	})
+	runtime := newAPIHTTPRuntime("", handler)
+	runtime.httpShutdownTimeout = 20 * time.Millisecond
+	dispatcher := &shutdownOrderTraceDispatcher{activeAtShutdown: make(chan int32, 1), activeHandlers: &active}
+	runtime.traceDispatcher = dispatcher
+	server := httptest.NewUnstartedServer(runtime.Server.Handler)
+	server.Config = runtime.Server
+	server.Start()
+	t.Cleanup(server.Close)
+	responseDone := make(chan error, 1)
+	go func() {
+		response, err := http.Get(server.URL)
+		if response != nil {
+			response.Body.Close()
+		}
+		responseDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("HTTP handler did not start")
+	}
+	shutdownAPIRuntime(nil, runtime, nil)
+	select {
+	case <-finished:
+	default:
+		t.Fatal("cancelled handler has not finished")
+	}
+	if count := <-dispatcher.activeAtShutdown; count != 0 {
+		t.Fatalf("trace closed with %d active handlers", count)
+	}
+	select {
+	case <-responseDone:
+	case <-time.After(time.Second):
+		t.Fatal("HTTP connection not closed")
+	}
+	writer := httptest.NewRecorder()
+	runtime.requests.ServeHTTP(writer, httptest.NewRequest(http.MethodGet, "/", nil))
+	if writer.Code != http.StatusServiceUnavailable {
+		t.Fatalf("late request status=%d", writer.Code)
+	}
+	// Repeated cancellation must not close the drain channel twice.
+	runtime.requests.stop()
+}

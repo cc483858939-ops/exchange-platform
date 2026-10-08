@@ -31,10 +31,8 @@ func applyRecommendationLanguageAffinityConstraints(tx *gorm.DB) error {
 		"ALTER TABLE recommendation_result_traces DROP CONSTRAINT IF EXISTS chk_recommendation_result_trace_language_component",
 		"ALTER TABLE recommendation_result_traces ADD CONSTRAINT chk_recommendation_result_trace_language_component CHECK (language_component >= 0 AND language_component <> 'NaN'::double precision AND language_component < 'Infinity'::double precision)",
 	}
-	for _, statement := range statements {
-		if err := tx.Exec(statement).Error; err != nil {
-			return fmt.Errorf("apply recommendation language affinity constraints: %w", err)
-		}
+	if err := applyMigrationStatements(tx, "apply recommendation language affinity constraints", statements); err != nil {
+		return fmt.Errorf("apply recommendation language affinity constraints: %w", err)
 	}
 	return nil
 }

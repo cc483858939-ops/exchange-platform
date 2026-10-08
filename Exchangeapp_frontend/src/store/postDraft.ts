@@ -241,7 +241,7 @@ export const usePostDraftStore = defineStore('postDraft', () => {
 
     workingStateVersion += 1;
     content.value = record.content;
-    quotePostID.value = record.quotePostID ?? null;
+    quotePostID.value = record.quotePostID;
     media.value = restoredMedia;
     draftID.value = record.id;
     draftCreatedAt.value = record.createdAt;
@@ -277,18 +277,13 @@ export const usePostDraftStore = defineStore('postDraft', () => {
   const resolvePublishedSourceDraft = async (
     sourceViewerID: number,
     id: string,
-    expectedSnapshot: DraftSnapshot | null,
+    expectedSnapshot: DraftSnapshot,
     shouldReconcileWorkingState: () => boolean = () => true,
   ): Promise<'deleted' | 'missing' | 'changed'> => {
     const normalizedViewerID = normalizeViewerID(sourceViewerID);
     if (normalizedViewerID === null || !id.trim()) {
       return 'missing';
     }
-    if (expectedSnapshot === null) {
-      // Legacy operations have no safe version identity, so preserve the draft.
-      return 'changed';
-    }
-
     const result = await deletePostDraftIfUnchanged(normalizedViewerID, id, expectedSnapshot);
     if (
       result === 'deleted'

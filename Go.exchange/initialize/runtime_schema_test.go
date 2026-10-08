@@ -112,42 +112,6 @@ func TestValidateResolvedSchemaRelationKindsAndCanaryErrors(t *testing.T) {
 	}
 }
 
-func TestValidateLegacySchemaMetadataRejectsLegacyContent(t *testing.T) {
-	tests := []struct {
-		name       string
-		tableRows  []schemaMetadataRow
-		columnRows []schemaMetadataRow
-		wantErr    string
-	}{
-		{name: "clean schema"},
-		{
-			name:      "legacy content table",
-			tableRows: []schemaMetadataRow{{TableName: "articles", TableSchema: "public", RelationKind: "r"}},
-			wantErr:   "schema_legacy_content_present",
-		},
-		{
-			name:       "legacy notification column",
-			columnRows: []schemaMetadataRow{{TableName: "notifications", TableSchema: "public", RelationKind: "r", ColumnName: "article_id"}},
-			wantErr:    "schema_legacy_content_present",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			err := validateLegacySchemaMetadata(test.tableRows, test.columnRows)
-			if test.wantErr == "" {
-				if err != nil {
-					t.Fatalf("expected clean legacy schema check, got %v", err)
-				}
-				return
-			}
-			if got := SchemaReasonCode(err); got != test.wantErr {
-				t.Fatalf("expected schema reason %q, got %q (err=%v)", test.wantErr, got, err)
-			}
-		})
-	}
-}
-
 func TestValidateSchemaObjectsRequiresEveryPostContractObject(t *testing.T) {
 	canaries := []schemaObjectCanary{{
 		Table:       "posts",
@@ -311,11 +275,16 @@ func TestPublishedSchemaVersionContractIsIndependentAndValid(t *testing.T) {
 	if err := validatePublishedSchemaVersions(); err != nil {
 		t.Fatalf("published schema version contract is invalid: %v", err)
 	}
-	if PublishedSchemaCurrentVersion != 15 || PublishedSchemaCompatibilityFloor != 14 || RequiredSchemaVersion != 15 {
+	if PublishedSchemaCurrentVersion != 17 || PublishedSchemaCompatibilityFloor != 14 || RequiredSchemaVersion != 17 {
 		t.Fatalf("unexpected initial published schema interval: current=%d floor=%d required=%d", PublishedSchemaCurrentVersion, PublishedSchemaCompatibilityFloor, RequiredSchemaVersion)
 	}
-	if !runtimeSchemaVersionsCompatible(15, 14, 15) || !runtimeSchemaVersionsCompatible(15, 14, 14) || runtimeSchemaVersionsCompatible(15, 14, 13) {
-		t.Fatal("schema 15 must accept schema 14/15 and reject schema-13 binaries")
+	for _, version := range []int64{14, 15, 16, 17} {
+		if !runtimeSchemaVersionsCompatible(17, 14, version) {
+			t.Fatalf("schema 17 rejected compatible binary %d", version)
+		}
+	}
+	if runtimeSchemaVersionsCompatible(17, 14, 13) {
+		t.Fatal("schema 17 must reject schema-13 binaries")
 	}
 }
 

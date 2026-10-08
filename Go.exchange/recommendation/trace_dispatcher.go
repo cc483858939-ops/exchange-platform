@@ -111,8 +111,6 @@ func (dispatcher *AsyncTraceDispatcher) TryEnqueue(job TracePersistJob) TraceEnq
 	if dispatcher == nil {
 		return TraceEnqueueDroppedStopping
 	}
-	job.Results = append([]models.RecommendationResultTrace(nil), job.Results...)
-
 	dispatcher.mu.RLock()
 	if !dispatcher.accepting {
 		dispatcher.mu.RUnlock()
@@ -122,12 +120,15 @@ func (dispatcher *AsyncTraceDispatcher) TryEnqueue(job TracePersistJob) TraceEnq
 
 	dispatcher.depthMu.Lock()
 	result := TraceEnqueueDroppedFull
-	select {
-	case dispatcher.jobs <- job:
+	// Producers hold depthMu through admission. A worker can only free space,
+	// so a free slot stays available while we copy the accepted job's results.
+	// Rejected jobs do not need an ownership copy at all.
+	if len(dispatcher.jobs) < cap(dispatcher.jobs) {
+		job.Results = append([]models.RecommendationResultTrace(nil), job.Results...)
+		dispatcher.jobs <- job
 		dispatcher.queueDepth++
 		dispatcher.metrics.SetTraceQueueDepth(dispatcher.queueDepth)
 		result = TraceEnqueueQueued
-	default:
 	}
 	dispatcher.depthMu.Unlock()
 	dispatcher.mu.RUnlock()

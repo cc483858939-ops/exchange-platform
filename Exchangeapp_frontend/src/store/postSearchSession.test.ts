@@ -111,7 +111,31 @@ describe('postSearchSession', () => {
       to: '2026-10-01T00:00:00.000Z',
       sort: 'latest',
       limit: 20,
-    });
+    }, expect.any(AbortSignal));
+  });
+
+  it('keeps an identical criteria request but cancels reload, account change and disposal', async () => {
+    const pending = deferred<ReturnType<typeof page>>();
+    mocks.searchPosts.mockReturnValue(pending.promise);
+    const store = usePostSearchSessionStore();
+    store.activateCriteria(criteria('yen'));
+    const first = mocks.searchPosts.mock.calls[0][1] as AbortSignal;
+    store.activateCriteria(criteria('yen'));
+    expect(first.aborted).toBe(false);
+    expect(mocks.searchPosts).toHaveBeenCalledTimes(1);
+    store.reload();
+    expect(first.aborted).toBe(true);
+    const second = mocks.searchPosts.mock.calls[1][1] as AbortSignal;
+    mocks.authStore.currentIdentity = { id: 9 };
+    await nextTick();
+    expect(second.aborted).toBe(true);
+    const third = mocks.searchPosts.mock.calls[2][1] as AbortSignal;
+    store.$dispose();
+    expect(third.aborted).toBe(true);
+    pending.resolve(page([1]));
+    await settle();
+    expect(store.items).toEqual([]);
+    expect(store.initialError).toBe('');
   });
 
   it('applies only valid absolute quote counts to the loaded search result', async () => {
@@ -134,7 +158,9 @@ describe('postSearchSession', () => {
     const store = usePostSearchSessionStore();
 
     store.activateCriteria(criteria('alpha'));
+    const signal = mocks.searchPosts.mock.calls[0][1] as AbortSignal;
     store.activateCriteria(criteria('beta'));
+    expect(signal.aborted).toBe(true);
     await settle();
     stale.resolve(page([1]));
     await settle();
@@ -152,7 +178,9 @@ describe('postSearchSession', () => {
     await settle();
 
     const pendingPage = store.loadMore();
+    const signal = mocks.searchPosts.mock.calls[1][1] as AbortSignal;
     store.activateCriteria(criteria('beta'));
+    expect(signal.aborted).toBe(true);
     await settle();
     pageTwo.resolve(page([2]));
     await pendingPage;

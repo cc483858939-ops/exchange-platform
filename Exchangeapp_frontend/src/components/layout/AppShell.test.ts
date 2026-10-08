@@ -106,6 +106,7 @@ const deferred = <T>() => {
 describe('AppShell mobile structure and notification freshness', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
     setVisibility('visible');
     mocks.authStore = reactive({
       isAuthenticated: true,
@@ -132,6 +133,7 @@ describe('AppShell mobile structure and notification freshness', () => {
     mountedWrappers.splice(0).forEach(wrapper => wrapper.unmount());
     vi.clearAllTimers();
     vi.useRealTimers();
+    vi.restoreAllMocks();
     setVisibility('visible');
   });
 
@@ -296,7 +298,7 @@ describe('AppShell mobile structure and notification freshness', () => {
     unmountShell(wrapper);
   });
 
-  it('continues polling after a refresh failure settles', async () => {
+  it('backs off after a failure and resets the interval after success', async () => {
     const wrapper = await mountAfterInitialRefresh();
     mocks.notificationStore.refreshUnreadCount.mockRejectedValueOnce(new Error('network error'));
 
@@ -306,7 +308,30 @@ describe('AppShell mobile structure and notification freshness', () => {
 
     await vi.advanceTimersByTimeAsync(NOTIFICATION_POLL_INTERVAL_MS);
     await flushAsync();
+    expect(mocks.notificationStore.refreshUnreadCount).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(NOTIFICATION_POLL_INTERVAL_MS);
     expect(mocks.notificationStore.refreshUnreadCount).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(NOTIFICATION_POLL_INTERVAL_MS);
+    expect(mocks.notificationStore.refreshUnreadCount).toHaveBeenCalledTimes(3);
+    unmountShell(wrapper);
+  });
+
+  it('bounds repeated failures and lets online recovery bypass backoff', async () => {
+    const wrapper = await mountAfterInitialRefresh();
+    mocks.notificationStore.refreshUnreadCount.mockRejectedValue(new Error('offline'));
+    for (const delay of [60_000, 120_000, 240_000, 480_000, 900_000, 900_000]) {
+      const before = mocks.notificationStore.refreshUnreadCount.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(mocks.notificationStore.refreshUnreadCount).toHaveBeenCalledTimes(before);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mocks.notificationStore.refreshUnreadCount).toHaveBeenCalledTimes(before + 1);
+    }
+    mocks.notificationStore.refreshUnreadCount.mockResolvedValue(undefined);
+    window.dispatchEvent(new Event('online'));
+    await flushAsync();
+    expect(mocks.notificationStore.refreshUnreadCount).toHaveBeenCalledTimes(7);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mocks.notificationStore.refreshUnreadCount).toHaveBeenCalledTimes(8);
     unmountShell(wrapper);
   });
 

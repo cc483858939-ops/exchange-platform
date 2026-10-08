@@ -104,16 +104,6 @@ export const isScenarioViewportValid = (scenario: PerfRawRun['scenario']): boole
   );
 };
 
-export const isExecutionEnvironmentConsistent = (
-  run: PerfRawRun,
-  environment: PerfEnvironment,
-): boolean => (
-  run.executionContext.userAgent === environment.userAgent
-  && Number.isFinite(run.executionContext.devicePixelRatio)
-  && Math.abs(run.executionContext.devicePixelRatio - environment.devicePixelRatio)
-    <= PERF_DPR_TOLERANCE
-);
-
 export const executionContextValidationIssues = (
   run: PerfRawRun,
   environment: PerfEnvironment,
@@ -381,10 +371,6 @@ export const parseSuiteSession = (serialized: string | null): PerfTopLevelSuiteS
     return null;
   }
 };
-
-export const serializePendingScenarioEnvelope = (envelope: PerfPendingScenarioEnvelope): string => (
-  JSON.stringify(envelope)
-);
 
 export const isPerfPendingScenarioEnvelope = (
   value: unknown,

@@ -76,11 +76,6 @@ export const rememberSearchRoute = (
   return lastSearchRouteSnapshot.value;
 };
 
-const legacyPeopleSnapshot = (query: string | null | undefined): SearchRouteSnapshot | null => {
-  const q = typeof query === 'string' ? query.trim() : '';
-  return q ? { tab: 'people', q } : null;
-};
-
 const routeToPath = (snapshot: SearchRouteSnapshot | null): string => {
   if (!snapshot) return '/search';
   const params = new URLSearchParams();
@@ -100,11 +95,10 @@ const routeToPath = (snapshot: SearchRouteSnapshot | null): string => {
 export const searchNavigationDestination = (
   isAuthenticated: boolean,
   route: SearchRouteLike,
-  legacyPeopleQuery?: string | null,
 ) => {
   const snapshot = route.name === 'UserSearch'
     ? normalizeSearchRouteSnapshot(route.query)
-    : lastSearchRouteSnapshot.value ?? legacyPeopleSnapshot(legacyPeopleQuery);
+    : lastSearchRouteSnapshot.value;
 
   if (isAuthenticated) {
     return snapshot

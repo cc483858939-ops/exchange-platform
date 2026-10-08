@@ -45,9 +45,7 @@ const isPersistedPostDraft = (value: unknown): value is PersistedPostDraft => {
     && Number.isSafeInteger(draft.viewerID)
     && (draft.viewerID as number) > 0
     && typeof draft.content === 'string'
-    && (draft.quotePostID === undefined
-      || draft.quotePostID === null
-      || isValidQuotePostID(draft.quotePostID))
+    && (draft.quotePostID === null || isValidQuotePostID(draft.quotePostID))
     && Number.isFinite(draft.createdAt)
     && Number.isFinite(draft.updatedAt)
     && Array.isArray(draft.media)
@@ -67,15 +65,6 @@ const isPersistedPostDraft = (value: unknown): value is PersistedPostDraft => {
   );
 };
 
-const normalizePersistedPostDraft = (value: unknown): PersistedPostDraft | null => {
-  if (!isPersistedPostDraft(value)) return null;
-  return {
-    ...value,
-    // Older records predate quote identity and remain normal drafts.
-    quotePostID: value.quotePostID ?? null,
-  };
-};
-
 const openDatabase = (): Promise<IDBDatabase> => new Promise((resolve, reject) => {
   if (typeof indexedDB === 'undefined') {
     reject(new Error('IndexedDB is unavailable in this browser.'));
@@ -92,20 +81,9 @@ const openDatabase = (): Promise<IDBDatabase> => new Promise((resolve, reject) =
 
   request.onupgradeneeded = () => {
     const database = request.result;
-    if (!database.objectStoreNames.contains(objectStoreName)) {
-      const store = database.createObjectStore(objectStoreName, { keyPath: 'id' });
-      store.createIndex(viewerIndexName, viewerIndexName, { unique: false });
-      store.createIndex('updatedAt', 'updatedAt', { unique: false });
-      return;
-    }
-
-    const store = request.transaction?.objectStore(objectStoreName);
-    if (store && !store.indexNames.contains(viewerIndexName)) {
-      store.createIndex(viewerIndexName, viewerIndexName, { unique: false });
-    }
-    if (store && !store.indexNames.contains('updatedAt')) {
-      store.createIndex('updatedAt', 'updatedAt', { unique: false });
-    }
+    const store = database.createObjectStore(objectStoreName, { keyPath: 'id' });
+    store.createIndex(viewerIndexName, viewerIndexName, { unique: false });
+    store.createIndex('updatedAt', 'updatedAt', { unique: false });
   };
   request.onsuccess = () => resolve(request.result);
   request.onerror = () => reject(request.error || new Error('Could not open the post draft database.'));
@@ -141,8 +119,8 @@ export const listPostDrafts = (viewerID: number): Promise<PersistedPostDraft[]> 
     });
     await completed;
     return records
-      .map(normalizePersistedPostDraft)
-      .filter((record): record is PersistedPostDraft => Boolean(record && record.viewerID === viewerID))
+      .filter(isPersistedPostDraft)
+      .filter(record => record.viewerID === viewerID)
       .sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id));
   });
 };
@@ -161,8 +139,7 @@ export const getPostDraft = (
       request.onerror = () => reject(request.error || new Error('Could not read the post draft.'));
     });
     await completed;
-    const normalized = normalizePersistedPostDraft(record);
-    return normalized?.viewerID === viewerID ? normalized : null;
+    return isPersistedPostDraft(record) && record.viewerID === viewerID ? record : null;
   });
 };
 
@@ -171,7 +148,7 @@ export const savePostDraft = (draft: PersistedPostDraft): Promise<void> => {
   if (!draft.id.trim()) {
     throw new TypeError('A post draft ID is required.');
   }
-  if (draft.quotePostID === undefined || !isPersistedPostDraft(draft)) {
+  if (!isPersistedPostDraft(draft)) {
     throw new TypeError('The post draft record is invalid.');
   }
 
@@ -209,8 +186,8 @@ export const deletePostDraft = (viewerID: number, draftID: string): Promise<bool
       const getRequest = store.get(draftID);
       getRequest.onerror = () => reject(getRequest.error || new Error('Could not check the post draft owner.'));
       getRequest.onsuccess = () => {
-        const record = normalizePersistedPostDraft(getRequest.result);
-        if (!record || record.viewerID !== viewerID) {
+        const record = getRequest.result;
+        if (!isPersistedPostDraft(record) || record.viewerID !== viewerID) {
           resolve(false);
           return;
         }
@@ -244,8 +221,8 @@ export const deletePostDraftIfUnchanged = (
       const getRequest = store.get(draftID);
       getRequest.onerror = () => reject(getRequest.error || new Error('Could not check the post draft version.'));
       getRequest.onsuccess = () => {
-        const record = normalizePersistedPostDraft(getRequest.result);
-        if (!record || record.viewerID !== viewerID) {
+        const record = getRequest.result;
+        if (!isPersistedPostDraft(record) || record.viewerID !== viewerID) {
           resolve('missing');
           return;
         }

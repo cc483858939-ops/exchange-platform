@@ -234,6 +234,7 @@ WHERE schemaname = current_schema()
 		"idx_posts_reply_to_created":          {"reply_to_post_id", "created_atdesc", "iddesc"},
 		"idx_posts_conversation_created":      {"conversation_id", "created_atdesc", "iddesc"},
 		"idx_posts_quote":                     {"quote_post_id"},
+		"idx_posts_quotes_public_created":     {"quote_post_id", "created_atdesc", "iddesc", "deleted_atisnull", "visibility", "'public'", "quote_post_idisnotnull"},
 		"uidx_posts_author_client_publish_id": {"unique", "author_id", "client_publish_id"},
 	}
 	for name, requiredParts := range indexRequirements {

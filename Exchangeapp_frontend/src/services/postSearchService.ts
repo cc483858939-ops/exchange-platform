@@ -16,7 +16,7 @@ export type PostSearchPage = {
   next_cursor: string | null;
 };
 
-export async function searchPosts(options: PostSearchQuery): Promise<PostSearchPage> {
-  const response = await apiClient.get<PostSearchPage>('/posts/search', { params: options });
+export async function searchPosts(options: PostSearchQuery, signal?: AbortSignal): Promise<PostSearchPage> {
+  const response = await apiClient.get<PostSearchPage>('/posts/search', { params: options, ...(signal ? { signal } : {}) });
   return response.data;
 }

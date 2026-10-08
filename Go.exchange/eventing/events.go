@@ -271,6 +271,11 @@ func NewPostEmbeddingRequestedEnvelope(eventID string, postID uint, occurredAt t
 // NewOutboxEvent materializes one immutable row from the complete canonical
 // envelope. It intentionally does not publish or mutate delivery metadata.
 func NewOutboxEvent(kafkaConfig config.KafkaConfig, envelope Envelope) (models.OutboxEvent, error) {
+	id, err := NormalizeEventID(envelope.ID)
+	if err != nil {
+		return models.OutboxEvent{}, err
+	}
+	envelope.ID = id
 	if err := validateOutboxEnvelope(envelope); err != nil {
 		return models.OutboxEvent{}, err
 	}
@@ -393,9 +398,14 @@ func DecodeEnvelope(raw []byte) (Envelope, error) {
 	if err := json.Unmarshal(raw, &event); err != nil {
 		return Envelope{}, fmt.Errorf("decode event envelope: %w", err)
 	}
-	if strings.TrimSpace(event.ID) == "" || strings.TrimSpace(event.Type) == "" {
-		return Envelope{}, errors.New("event id and type are required")
+	id, err := NormalizeEventID(event.ID)
+	if err != nil {
+		return Envelope{}, err
 	}
+	if strings.TrimSpace(event.Type) == "" {
+		return Envelope{}, errors.New("event type is required")
+	}
+	event.ID = id
 	return event, nil
 }
 

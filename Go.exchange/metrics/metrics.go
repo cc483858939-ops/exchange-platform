@@ -25,7 +25,7 @@ var (
 	outboxRowsTotal                              = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_rows_total", Help: "Last successfully sampled exact retained outbox row count; sampled every 5 minutes."})
 	outboxRowsLastSuccess                        = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_rows_last_success_timestamp_seconds", Help: "Unix timestamp of the last successful exact retained outbox row count sample; zero until the first success."})
 	outboxOldestRowAgeSeconds                    = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_oldest_row_age_seconds", Help: "Age of the oldest retained outbox row in seconds."})
-	notificationConsumerLag                      = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_notification_consumer_lag", Help: "Notification projection consumer lag."})
+	notificationConsumerLag                      = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_notification_consumer_lag", Help: "Notification group committed lag summed over all partitions; check the group lag sample validity and freshness."})
 	consumerInboxRows                            = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "go_exchange_consumer_inbox_rows_total", Help: "Last successfully sampled exact ConsumerInbox deduplication history rows retained for a consumer, not consumer lag; sampled every 5 minutes."}, []string{"consumer"})
 	consumerInboxRowsLastSuccess                 = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "go_exchange_consumer_inbox_rows_last_success_timestamp_seconds", Help: "Unix timestamp of the last successful exact retained ConsumerInbox row count sample."}, []string{"consumer"})
 	notificationProjectionFailures               = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_notification_projection_failures_total", Help: "Notification projection failures by stage."}, []string{"stage"})
@@ -393,9 +393,6 @@ func SetWorkerPipelineLastSuccess(pipeline string, timestamp time.Time) {
 }
 
 func SetWorkerPipelineBacklog(pipeline string, backlog int64) {
-	if backlog < 0 {
-		backlog = 0
-	}
 	workerPipelineBacklog.WithLabelValues(pipeline).Set(float64(backlog))
 }
 

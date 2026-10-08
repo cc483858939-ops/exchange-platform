@@ -58,6 +58,10 @@ func MarkInboxProcessed(tx *gorm.DB, consumerName, eventID string) (bool, error)
 	if tx == nil {
 		return false, errors.New("database transaction is nil")
 	}
+	eventID, err := NormalizeEventID(eventID)
+	if err != nil {
+		return false, err
+	}
 	result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&models.ConsumerInbox{
 		ConsumerName: consumerName,
 		EventID:      eventID,
@@ -71,7 +75,8 @@ func MarkInboxProcessed(tx *gorm.DB, consumerName, eventID string) (bool, error)
 
 // MarkInboxProcessedBatch inserts a deduplicated set of inbox keys in one
 // PostgreSQL INSERT ... ON CONFLICT ... RETURNING statement. The returned map
-// contains only event IDs delivered for the first time to this consumer.
+// contains only normalized IDs delivered for the first time to this consumer.
+// Callers must use the same normalized IDs when filtering projection records.
 func MarkInboxProcessedBatch(tx *gorm.DB, consumerName string, eventIDs []string) (map[string]struct{}, error) {
 	if tx == nil {
 		return nil, errors.New("database transaction is nil")
@@ -83,9 +88,9 @@ func MarkInboxProcessedBatch(tx *gorm.DB, consumerName string, eventIDs []string
 	uniqueIDs := make([]string, 0, len(eventIDs))
 	seen := make(map[string]struct{}, len(eventIDs))
 	for _, eventID := range eventIDs {
-		eventID = strings.TrimSpace(eventID)
-		if eventID == "" {
-			continue
+		eventID, err := NormalizeEventID(eventID)
+		if err != nil {
+			return nil, err
 		}
 		if _, exists := seen[eventID]; exists {
 			continue

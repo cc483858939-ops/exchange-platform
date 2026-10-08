@@ -11,7 +11,7 @@ import {
   getPostRecommendations,
   getPublicPostRecommendations,
 } from '../services/recommendationService';
-import { getPostEngagementStates } from '../services/engagementService';
+import { loadPostEngagementIndex } from './engagementHydration';
 import type { UserFollowState } from '../services/userService';
 import type { RecommendedPost } from '../types/Recommendation';
 import type {
@@ -418,22 +418,18 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   };
 
   const hydrateLikeStates = async (
-    postIds: number[],
+    uniqueIDs: number[],
     isCurrent: () => boolean,
-    responsePromise: ReturnType<typeof getPostEngagementStates>,
+    responsePromise: ReturnType<typeof loadPostEngagementIndex>,
   ) => {
-    const uniqueIDs = Array.from(new Set(postIds));
-    if (uniqueIDs.length === 0) return;
-
     const revisions = new Map(uniqueIDs.map((id) => [
       id,
       engagementMutations.captureRevision('like', id),
     ]));
     try {
-      const response = await responsePromise;
+      const states = await responsePromise;
       if (!isCurrent()) return;
 
-      const states = new Map(response.items.map(item => [item.post_id, item]));
       uniqueIDs.forEach((postId) => {
         const revision = revisions.get(postId);
         if (
@@ -488,22 +484,18 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   };
 
   const hydrateRepostStates = async (
-    postIds: number[],
+    uniqueIDs: number[],
     isCurrent: () => boolean,
-    responsePromise: ReturnType<typeof getPostEngagementStates>,
+    responsePromise: ReturnType<typeof loadPostEngagementIndex>,
   ) => {
-    const uniqueIDs = Array.from(new Set(postIds));
-    if (uniqueIDs.length === 0) return;
-
     const revisions = new Map(uniqueIDs.map((id) => [
       id,
       engagementMutations.captureRevision('repost', id),
     ]));
     try {
-      const response = await responsePromise;
+      const states = await responsePromise;
       if (!isCurrent()) return;
 
-      const states = new Map(response.items.map(item => [item.post_id, item]));
       uniqueIDs.forEach((postId) => {
         const revision = revisions.get(postId);
         if (
@@ -554,20 +546,17 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   };
 
   const hydrateBookmarkStates = async (
-    postIds: number[],
+    uniqueIDs: number[],
     isCurrent: () => boolean,
-    responsePromise: ReturnType<typeof getPostEngagementStates>,
+    responsePromise: ReturnType<typeof loadPostEngagementIndex>,
   ) => {
-    const uniqueIDs = Array.from(new Set(postIds));
-    if (uniqueIDs.length === 0) return;
     const revisions = new Map(uniqueIDs.map((id) => [
       id,
       engagementMutations.captureRevision('bookmark', id),
     ]));
     try {
-      const response = await responsePromise;
+      const states = await responsePromise;
       if (!isCurrent()) return;
-      const states = new Map(response.items.map(item => [item.post_id, item]));
       uniqueIDs.forEach((postId) => {
         const revision = revisions.get(postId);
         if (
@@ -592,7 +581,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   const hydrateEngagementStates = (postIds: number[], isCurrent: () => boolean) => {
     const uniqueIDs = Array.from(new Set(postIds));
     if (uniqueIDs.length === 0) return;
-    const responsePromise = getPostEngagementStates(uniqueIDs);
+    const responsePromise = loadPostEngagementIndex(uniqueIDs);
     void hydrateLikeStates(uniqueIDs, isCurrent, responsePromise);
     void hydrateRepostStates(uniqueIDs, isCurrent, responsePromise);
     void hydrateBookmarkStates(uniqueIDs, isCurrent, responsePromise);

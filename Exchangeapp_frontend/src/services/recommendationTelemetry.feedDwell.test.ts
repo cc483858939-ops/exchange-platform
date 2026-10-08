@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   RecommendationTelemetryClient,
-  calculateViewportVisibility,
+  calculateRectVisibility,
   type RecommendationReadEndPayload,
 } from './recommendationTelemetry';
 
@@ -114,17 +114,11 @@ describe('Feed dwell viewport helper', () => {
   });
 
   it('normalizes visibility for cards larger than the viewport', () => {
-    const card = document.createElement('article');
-    vi.spyOn(card, 'getBoundingClientRect').mockReturnValue(makeRect(0, 200, 1000, 1600));
-
-    expect(calculateViewportVisibility(card)).toBeCloseTo(0.75);
+    expect(calculateRectVisibility(makeRect(0, 200, 1000, 1600))).toBeCloseTo(0.75);
   });
 
   it('returns zero for an invalid denominator', () => {
-    const card = document.createElement('article');
-    vi.spyOn(card, 'getBoundingClientRect').mockReturnValue(makeRect(0, 0, 0, 100));
-
-    expect(calculateViewportVisibility(card)).toBe(0);
+    expect(calculateRectVisibility(makeRect(0, 0, 0, 100))).toBe(0);
   });
 });
 

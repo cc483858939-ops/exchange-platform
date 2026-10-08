@@ -17,23 +17,33 @@ describe('Search route state', () => {
     })).toEqual({ tab: 'posts', q: '日元', author: '42', time: 'custom', from, to });
   });
 
-  it('prefers the remembered Post route over legacy People query state', () => {
+  it('restores the remembered Post route', () => {
     rememberSearchRoute({ tab: 'posts', q: '日元', author: '42', time: '7d' });
-    expect(searchNavigationDestination(true, { name: 'PostDetail' }, 'alice')).toEqual({
+    expect(searchNavigationDestination(true, { name: 'PostDetail' })).toEqual({
       name: 'UserSearch',
       query: { tab: 'posts', q: '日元', author: '42', time: '7d' },
     });
   });
 
-  it('preserves the legacy People query when no route snapshot is available', () => {
-    expect(searchNavigationDestination(true, { name: 'PostDetail' }, 'alice')).toEqual({
+  it('restores the remembered People route', () => {
+    rememberSearchRoute({ tab: 'people', q: 'alice' });
+    expect(searchNavigationDestination(true, { name: 'PostDetail' })).toEqual({
       name: 'UserSearch',
       query: { tab: 'people', q: 'alice' },
     });
   });
 
   it('uses bare Search as the final fallback', () => {
-    expect(searchNavigationDestination(true, { name: 'PostDetail' }, '')).toEqual({ name: 'UserSearch' });
+    expect(searchNavigationDestination(true, { name: 'PostDetail' })).toEqual({ name: 'UserSearch' });
+  });
+
+  it('keeps a bare Search visit after previously searching for People', () => {
+    rememberSearchRoute({ tab: 'people', q: 'alice' });
+    rememberSearchRoute({});
+    expect(searchNavigationDestination(true, { name: 'Home' })).toEqual({ name: 'UserSearch' });
+    expect(searchNavigationDestination(false, { name: 'Home' })).toEqual({
+      name: 'Login', query: { returnTo: '/search' },
+    });
   });
 
   it('preserves custom dates in a guest returnTo and keeps an active guest route verbatim', () => {

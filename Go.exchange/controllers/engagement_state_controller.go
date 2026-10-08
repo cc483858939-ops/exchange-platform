@@ -40,8 +40,8 @@ type engagementStatesResponse struct {
 // one authenticated transport response without coupling their failure domains.
 func GetPostEngagementStates(ctx *gin.Context) {
 	var request postLikeStatesRequest
-	if err := ctx.ShouldBindJSON(&request); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid post_ids"})
+	if err := bindBoundedPostStates(ctx, &request); err != nil {
+		writeJSONRequestError(ctx, err, "Invalid post_ids")
 		return
 	}
 	if len(request.PostIDs) == 0 || len(request.PostIDs) > maxPostLikeStateIDs {
@@ -77,7 +77,7 @@ func GetPostEngagementStates(ctx *gin.Context) {
 	var bookmarkErr error
 	var loaders sync.WaitGroup
 	loaders.Add(3)
-	requestContext := ctx.Request.Context()
+	requestContext := withSharedPublicPostIDs(ctx.Request.Context(), uniqueIDs)
 	go func() {
 		defer loaders.Done()
 		likeResult, likeErr = loadPostLikeStates(requestContext, userID, uniqueIDs)

@@ -65,18 +65,25 @@ const createSession = (overrides: Record<string, unknown> = {}) => {
   return session;
 };
 
-const mountView = () => mount(PostQuotesView, {
+const wrappers: Array<ReturnType<typeof mount>> = [];
+const mountView = () => {
+  const wrapper = mount(PostQuotesView, {
+  attachTo: document.body,
   global: {
     stubs: {
       AppIcon: { props: ['name'], template: '<span :data-icon="name" />' },
       MobileAccountMenu: { template: '<div class="test-account-menu" />' },
       PostCard: {
         props: ['post', 'trackView', 'requiresAuthForActions', 'likePending', 'repostPending', 'bookmarkPending'],
-        template: '<article class="test-post-card" :data-id="post.id" :data-track-view="String(trackView)" :data-requires-auth="String(requiresAuthForActions)">{{ post.content }}</article>',
+        emits: ['toggle-like'],
+        template: '<article class="test-post-card" :data-id="post.id" :data-track-view="String(trackView)" :data-requires-auth="String(requiresAuthForActions)">{{ post.content }}<button @click="$emit(\'toggle-like\', post.id)">Like</button></article>',
       },
     },
   },
-});
+  });
+  wrappers.push(wrapper);
+  return wrapper;
+};
 
 describe('PostQuotesView', () => {
   let originalHistoryState: unknown;
@@ -90,11 +97,68 @@ describe('PostQuotesView', () => {
     mocks.router.push.mockReset();
     mocks.authStore = reactive({ isAuthenticated: false, currentIdentity: null });
     mocks.session = createSession();
+    vi.stubGlobal('scrollY', 0);
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
+    wrappers.splice(0).forEach(wrapper => wrapper.unmount());
     window.history.replaceState(originalHistoryState, '', window.location.href);
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  const installRowGeometry = () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(240);
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(640);
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const rowStart = Number.parseFloat(this.style.transform.match(/translateY\(([-\d.]+)px\)/)?.[1] ?? '0');
+      const top = 64 + rowStart - window.scrollY;
+      return { x: 0, y: top, top, bottom: top + 240, left: 0, right: 640, width: 640, height: 240, toJSON: () => ({}) };
+    });
+  };
+
+  it('bounds mounted cards while preserving deep-scroll order and interaction identity', async () => {
+    installRowGeometry();
+    mocks.session.items = Array.from({ length: 1000 }, (_, index) => post(index + 1));
+    mocks.session.loaded = true;
+    const wrapper = mountView();
+    await flushPromises();
+    expect(wrapper.findAll('.test-post-card').length).toBeLessThan(25);
+    expect(wrapper.find('[data-id="1"]').exists()).toBe(true);
+    expect(wrapper.find('[data-id="500"]').exists()).toBe(false);
+    vi.stubGlobal('scrollY', 64 + 499 * 240);
+    window.dispatchEvent(new Event('scroll'));
+    await flushPromises();
+    expect(wrapper.findAll('.test-post-card').length).toBeLessThan(25);
+    expect(wrapper.find('[data-id="500"]').exists()).toBe(true);
+    expect(wrapper.find('[data-id="1"]').exists()).toBe(false);
+    await wrapper.get('[data-id="500"] button').trigger('click');
+    expect(mocks.session.toggleLike).toHaveBeenCalledWith(500);
+    mocks.session.items = mocks.session.items.filter((item: FeedPost) => item.id !== 500);
+    await flushPromises();
+    expect(wrapper.find('[data-id="500"]').exists()).toBe(false);
+    expect(wrapper.find('[data-id="501"]').exists()).toBe(true);
+  });
+
+  it('keeps a keyboard-focused row mounted outside the visible range until focus leaves it', async () => {
+    installRowGeometry();
+    mocks.session.items = Array.from({ length: 1000 }, (_, index) => post(index + 1));
+    mocks.session.loaded = true;
+    const wrapper = mountView();
+    await flushPromises();
+    const focused = wrapper.get('[data-id="1"] button').element as HTMLButtonElement;
+    focused.focus();
+    await flushPromises();
+    vi.stubGlobal('scrollY', 64 + 499 * 240);
+    window.dispatchEvent(new Event('scroll'));
+    await flushPromises();
+    expect(wrapper.find('[data-id="1"]').exists()).toBe(true);
+    expect(document.activeElement).toBe(focused);
+    expect(wrapper.findAll('.test-post-card').length).toBeLessThan(25);
+    focused.blur();
+    await flushPromises();
+    expect(wrapper.find('[data-id="1"]').exists()).toBe(false);
   });
 
   it('shows a Post-card skeleton without flashing the empty state during initial loading', () => {

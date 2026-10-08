@@ -163,7 +163,7 @@ func loadUserConnectionsFromDB(ctx context.Context, viewerID, targetID uint, kin
 	}
 	page := userConnectionPageResponse{Items: make([]userConnectionResponse, 0, len(rows))}
 	if len(rows) > limit {
-		page.HasMore = true
+		page.HasMore = offset <= maxUserListOffset-limit
 		rows = rows[:limit]
 	}
 	for _, row := range rows {
@@ -278,21 +278,14 @@ func validateFollowParticipants(ctx *gin.Context) (uint, uint, bool) {
 }
 
 func parseFollowListPagination(ctx *gin.Context) (int, int, error) {
-	limit := defaultFollowListLimit
-	if raw, exists := ctx.GetQuery("limit"); exists {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed <= 0 {
-			return 0, 0, errors.New("invalid limit")
-		}
-		limit = parsed
-	}
-	if limit > maxFollowListLimit {
-		limit = maxFollowListLimit
+	limit, err := parsePageLimit(ctx, defaultFollowListLimit, maxFollowListLimit)
+	if err != nil {
+		return 0, 0, err
 	}
 	offset := 0
 	if raw, exists := ctx.GetQuery("offset"); exists {
 		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 0 {
+		if err != nil || parsed < 0 || parsed > maxUserListOffset {
 			return 0, 0, errors.New("invalid offset")
 		}
 		offset = parsed

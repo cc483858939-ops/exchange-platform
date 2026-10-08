@@ -92,16 +92,9 @@ func visibleNotificationsForViewer(db *gorm.DB, viewerID uint, now time.Time) *g
 }
 
 func parseNotificationQuery(ctx *gin.Context) (int, *notificationCursor, error) {
-	limit := defaultNotificationLimit
-	if raw, exists := ctx.GetQuery("limit"); exists {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed <= 0 {
-			return 0, nil, errors.New("invalid limit")
-		}
-		limit = parsed
-	}
-	if limit > maxNotificationLimit {
-		limit = maxNotificationLimit
+	limit, err := parsePageLimit(ctx, defaultNotificationLimit, maxNotificationLimit)
+	if err != nil {
+		return 0, nil, err
 	}
 	rawCursor, exists := ctx.GetQuery("cursor")
 	if !exists || strings.TrimSpace(rawCursor) == "" {

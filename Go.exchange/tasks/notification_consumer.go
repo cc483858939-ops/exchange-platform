@@ -44,10 +44,6 @@ type notificationMessageReader interface {
 	Close() error
 }
 
-type notificationLagReader interface {
-	Stats() kafka.ReaderStats
-}
-
 type notificationActivityRecord struct {
 	Message   kafka.Message
 	Envelope  eventing.Envelope
@@ -143,16 +139,7 @@ func consumeNotificationMessages(ctx context.Context, reader notificationMessage
 			metrics.RecordKafkaConsumerRecovery(kafkaConsumerNotificationProjection, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(commitErr))
 			return commitErr
 		}
-		if statsReader, ok := reader.(notificationLagReader); ok {
-			lag := statsReader.Stats().Lag
-			if lag < 0 {
-				lag = 0
-			}
-			metrics.SetNotificationConsumerLag(float64(lag))
-			PipelineCommit(PipelineNotificationProjection, time.Now().UTC(), int64(lag))
-		} else {
-			PipelineCommit(PipelineNotificationProjection, time.Now().UTC(), 0)
-		}
+		PipelineCommit(PipelineNotificationProjection, time.Now().UTC(), 0)
 	}
 }
 
@@ -402,36 +389,23 @@ func applyNotificationRecords(ctx context.Context, records []notificationActivit
 }
 
 func filterNotificationCandidates(tx *gorm.DB, candidates []models.Notification) ([]models.Notification, error) {
-	recipientIDs := make([]uint, 0, len(candidates))
-	actorIDs := make([]uint, 0, len(candidates))
+	participantIDs := make([]uint, 0, len(candidates)*2)
 	postIDs := make([]uint, 0, len(candidates))
 	for _, candidate := range candidates {
-		recipientIDs = append(recipientIDs, candidate.RecipientID)
-		actorIDs = append(actorIDs, candidate.ActorID)
+		participantIDs = append(participantIDs, candidate.RecipientID, candidate.ActorID)
 		if candidate.PostID != nil {
 			postIDs = append(postIDs, *candidate.PostID)
 		}
 	}
-	activeRecipients := make(map[uint]struct{})
-	var recipients []struct {
+	activeUsers := make(map[uint]struct{})
+	var participants []struct {
 		ID uint `gorm:"column:id"`
 	}
-	if err := tx.Model(&models.User{}).Select("id").Where("id IN ? AND deleted_at IS NULL", uniqueUintIDs(recipientIDs)).Find(&recipients).Error; err != nil {
+	if err := tx.Model(&models.User{}).Select("id").Where("id IN ? AND deleted_at IS NULL", uniqueUintIDs(participantIDs)).Find(&participants).Error; err != nil {
 		return nil, err
 	}
-	for _, user := range recipients {
-		activeRecipients[user.ID] = struct{}{}
-	}
-
-	activeActors := make(map[uint]struct{})
-	var actors []struct {
-		ID uint `gorm:"column:id"`
-	}
-	if err := tx.Model(&models.User{}).Select("id").Where("id IN ? AND deleted_at IS NULL", uniqueUintIDs(actorIDs)).Find(&actors).Error; err != nil {
-		return nil, err
-	}
-	for _, actor := range actors {
-		activeActors[actor.ID] = struct{}{}
+	for _, user := range participants {
+		activeUsers[user.ID] = struct{}{}
 	}
 	posts := make(map[uint]notificationPostRow)
 	var postRows []struct {
@@ -475,10 +449,10 @@ func filterNotificationCandidates(tx *gorm.DB, candidates []models.Notification)
 	}
 	filtered := make([]models.Notification, 0, len(candidates))
 	for _, candidate := range candidates {
-		if _, ok := activeRecipients[candidate.RecipientID]; !ok {
+		if _, ok := activeUsers[candidate.RecipientID]; !ok {
 			continue
 		}
-		if _, ok := activeActors[candidate.ActorID]; !ok {
+		if _, ok := activeUsers[candidate.ActorID]; !ok {
 			continue
 		}
 		if candidate.PostID != nil {
