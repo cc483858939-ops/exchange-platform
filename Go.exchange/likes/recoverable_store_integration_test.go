@@ -63,23 +63,23 @@ func TestStoreIncompleteStateIsNotReadyIntegration(t *testing.T) {
 
 	client.Set(ReadyKey(postID), "1", 0)
 	client.Set(VersionKey(postID), "0", 0)
-	if _, err := store.Get(ctx, 11, postID); !errors.Is(err, ErrNotReady) {
-		t.Fatalf("Get error=%v want ErrNotReady", err)
+	if _, err := store.Get(ctx, 11, postID); !errors.Is(err, ErrPostLikeNotReady) || !errors.Is(err, ErrNotReady) {
+		t.Fatalf("Get error=%v want Post NotReady compatible with ErrNotReady", err)
 	}
-	if _, err := store.LoadSnapshot(ctx, postID); !errors.Is(err, ErrNotReady) {
-		t.Fatalf("LoadSnapshot error=%v want ErrNotReady", err)
+	if _, err := store.LoadSnapshot(ctx, postID); !errors.Is(err, ErrPostLikeNotReady) || !errors.Is(err, ErrNotReady) {
+		t.Fatalf("LoadSnapshot error=%v want Post NotReady compatible with ErrNotReady", err)
 	}
-	if _, err := store.LoadFullState(ctx, postID); !errors.Is(err, ErrNotReady) {
-		t.Fatalf("LoadFullState error=%v want ErrNotReady", err)
+	if _, err := store.LoadFullState(ctx, postID); !errors.Is(err, ErrPostLikeNotReady) || !errors.Is(err, ErrNotReady) {
+		t.Fatalf("LoadFullState error=%v want Post NotReady compatible with ErrNotReady", err)
 	}
-	if _, err := store.Mutate(ctx, 11, postID, true); !errors.Is(err, ErrNotReady) {
-		t.Fatalf("Mutate error=%v want ErrNotReady", err)
+	if _, err := store.Mutate(ctx, 11, postID, true); !errors.Is(err, ErrPostLikeNotReady) || !errors.Is(err, ErrNotReady) {
+		t.Fatalf("Mutate error=%v want Post NotReady compatible with ErrNotReady", err)
 	}
 
 	client.Set(CountKey(postID), "0", 0)
 	client.Del(VersionKey(postID))
-	if _, err := store.Get(ctx, 11, postID); !errors.Is(err, ErrNotReady) {
-		t.Fatalf("missing Version error=%v want ErrNotReady", err)
+	if _, err := store.Get(ctx, 11, postID); !errors.Is(err, ErrPostLikeNotReady) || !errors.Is(err, ErrNotReady) {
+		t.Fatalf("missing Version error=%v want Post NotReady compatible with ErrNotReady", err)
 	}
 	client.Set(VersionKey(postID), "0", 0)
 	client.Set(CountKey(postID), "2", 0)

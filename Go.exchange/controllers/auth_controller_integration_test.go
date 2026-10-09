@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type stubTokenService struct{}
@@ -25,6 +27,16 @@ type refreshTokenService struct {
 }
 
 type allowAllAttemptLimiter struct{}
+
+type userLikeInitializerSpy struct {
+	userIDs []uint
+	err     error
+}
+
+func (spy *userLikeInitializerSpy) InitializeUserEmpty(_ context.Context, userID uint) error {
+	spy.userIDs = append(spy.userIDs, userID)
+	return spy.err
+}
 
 func (allowAllAttemptLimiter) Allow(context.Context, auth.AttemptInput) (auth.AttemptDecision, error) {
 	return auth.AttemptDecision{Allowed: true}, nil
@@ -81,7 +93,8 @@ func TestRegisterStoresSubmittedPasswordIntegration(t *testing.T) {
 	if err := db.AutoMigrate(&models.User{}); err != nil {
 		t.Fatal(err)
 	}
-	controller, err := NewAuthController(db, stubTokenService{}, allowAllAttemptLimiter{})
+	userLikeInit := &userLikeInitializerSpy{}
+	controller, err := NewAuthController(db, stubTokenService{}, allowAllAttemptLimiter{}, userLikeInit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,6 +138,49 @@ func TestRegisterStoresSubmittedPasswordIntegration(t *testing.T) {
 	})
 	if user.Password == "" || !utils.CheckPassword(password, user.Password) {
 		t.Fatal("stored password hash does not match submitted password")
+	}
+	if len(userLikeInit.userIDs) != 1 || userLikeInit.userIDs[0] != user.ID {
+		t.Fatalf("User Like initializer IDs=%v want [%d]", userLikeInit.userIDs, user.ID)
+	}
+}
+
+func TestRegisterRedisInitializationFailureRollsBackUserIntegration(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
+	}
+	db, err := testdb.Open(t, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.User{}); err != nil {
+		t.Fatal(err)
+	}
+	username := "register-like-fail-" + uuid.NewString()
+	initializer := &userLikeInitializerSpy{err: errors.New("Redis unavailable")}
+	tokens := &authTokenServiceSpy{}
+	controller, err := NewAuthController(db, tokens, allowAllAttemptLimiter{}, initializer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]string{"username": username, "password": "secret123"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewReader(payload))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	controller.Register(ctx)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("register status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if tokens.issueCalls != 0 {
+		t.Fatalf("issued %d token pairs after Redis initialization failure", tokens.issueCalls)
+	}
+	var user models.User
+	if err := db.Unscoped().Where("username = ?", username).First(&user).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("failed registration left User=%#v err=%v", user, err)
 	}
 }
 

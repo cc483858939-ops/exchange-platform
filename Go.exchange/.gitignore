@@ -5,5 +5,7 @@
 !/docs/runbooks/
 /docs/runbooks/*
 !/docs/runbooks/kafka-dlq.md
+!/docs/like-persistence-v4.md
+!/docs/like-state-recovery.md
 /.codex/
 /.devdata/

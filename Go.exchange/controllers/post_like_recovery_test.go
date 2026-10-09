@@ -140,7 +140,7 @@ func waitForRecoverySignal(t *testing.T, signal <-chan struct{}) {
 	}
 }
 
-func TestPostLikeRecoveryAcquiresTokenBeforeLoadAndRejectsRevocation(t *testing.T) {
+func TestPostLikeRecoveryRejectsUnprovenZeroStateAfterTokenAcquisition(t *testing.T) {
 	store := newRecoveryTestStore()
 	results, err := recoverPostLikeBatch(t.Context(), store, []uint{9}, func(context.Context, []uint) (map[uint]postLikeBaseline, error) {
 		store.mu.Lock()
@@ -152,8 +152,8 @@ func TestPostLikeRecoveryAcquiresTokenBeforeLoadAndRejectsRevocation(t *testing.
 		delete(store.tokens, 9)
 		return map[uint]postLikeBaseline{9: {}}, nil
 	})
-	if err != nil || !errors.Is(results[9], likes.ErrLikeRecoveryFenceLost) || len(store.writes) != 0 {
-		t.Fatalf("stale baseline accepted: results=%v writes=%v err=%v", results, store.writes, err)
+	if err != nil || !errors.Is(results[9], likes.ErrLikeRecoveryUnsafe) || len(store.writes) != 0 {
+		t.Fatalf("unproven zero baseline accepted: results=%v writes=%v err=%v", results, store.writes, err)
 	}
 }
 
@@ -193,8 +193,8 @@ func TestPostLikeRecoveryCoalescesConcurrentBaselineLoads(t *testing.T) {
 	for range callers {
 		select {
 		case err := <-results:
-			if err != nil {
-				t.Fatal(err)
+			if !errors.Is(err, likes.ErrLikeRecoveryUnsafe) {
+				t.Fatalf("recovery error=%v want unsafe zero bootstrap", err)
 			}
 		case <-time.After(5 * time.Second):
 			t.Fatal("callers did not complete")
@@ -203,9 +203,8 @@ func TestPostLikeRecoveryCoalescesConcurrentBaselineLoads(t *testing.T) {
 	if loads.Load() != 1 || store.reads != 1 || store.registries != 1 || store.versions != 1 {
 		t.Fatalf("loads=%d ready reads=%d registry=%d markers=%d", loads.Load(), store.reads, store.registries, store.versions)
 	}
-	state := store.writes[9]
-	if state.Count != 0 || state.Version != 0 || !store.fences[9].AllowZeroBootstrap || store.fences[9].ExpectedVersion != nil {
-		t.Fatalf("recovered state/fence=%+v state=%+v", store.fences[9], state)
+	if len(store.writes) != 0 {
+		t.Fatalf("unproven zero bootstrap wrote Redis state: %v", store.writes)
 	}
 	group.mu.Lock()
 	defer group.mu.Unlock()
@@ -262,11 +261,11 @@ func TestPostLikeRecoveryOverlappingBatchesAndSingleRead(t *testing.T) {
 	start([]uint{2})
 	releaseLoad()
 	for range 3 {
-		if err := <-results; err != nil {
-			t.Fatal(err)
+		if err := <-results; !errors.Is(err, likes.ErrLikeRecoveryUnsafe) {
+			t.Fatalf("overlapping batch error=%v want unsafe", err)
 		}
 	}
-	if len(loaded) != 0 || len(store.writes) != 3 {
+	if len(loaded) != 0 || len(store.writes) != 0 {
 		t.Fatalf("extra loads=%d writes=%d", len(loaded), len(store.writes))
 	}
 }
@@ -316,11 +315,11 @@ func TestPostLikeRecoveryCallerCancellationDoesNotCancelSharedLoad(t *testing.T)
 				t.Fatalf("cancel error=%v", err)
 			}
 			releaseLoad()
-			if err := <-remaining; err != nil {
-				t.Fatalf("shared recovery canceled: %v", err)
+			if err := <-remaining; !errors.Is(err, likes.ErrLikeRecoveryUnsafe) {
+				t.Fatalf("shared recovery result=%v want unsafe zero bootstrap", err)
 			}
-			if len(store.writes) != 1 {
-				t.Fatal("shared load did not recover")
+			if len(store.writes) != 0 {
+				t.Fatal("unproven baseline wrote Redis state")
 			}
 		})
 	}
@@ -346,24 +345,22 @@ func TestPostLikeRecoveryPerPostFencesAndReadyRecheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for id, want := range map[uint]error{1: nil, 2: likes.ErrLikeRecoveryUnsafe, 3: likes.ErrPostLikeUnavailable, 4: likes.ErrLikeRecoveryUnsafe, 5: likes.ErrLikeRecoveryUnsafe, 6: likes.ErrLikeRecoveryFenceLost, 7: likes.ErrLikeRecoveryUnsafe, 8: nil} {
+	for id, want := range map[uint]error{1: likes.ErrLikeRecoveryUnsafe, 2: likes.ErrLikeRecoveryUnsafe, 3: likes.ErrPostLikeUnavailable, 4: likes.ErrLikeRecoveryUnsafe, 5: likes.ErrLikeRecoveryUnsafe, 6: likes.ErrLikeRecoveryUnsafe, 7: likes.ErrLikeRecoveryUnsafe, 8: nil} {
 		if !errors.Is(results[id], want) {
 			t.Fatalf("post=%d err=%v want=%v", id, results[id], want)
 		}
 	}
-	if len(store.writes) != 1 || !store.fences[1].AllowZeroBootstrap {
-		t.Fatal("invalid recovery writes/fences")
+	if len(store.writes) != 0 {
+		t.Fatal("unproven zero baseline was written")
 	}
 	results, err = group.recover(t.Context(), store, []uint{1, 8}, func(context.Context, []uint) (map[uint]postLikeBaseline, error) {
-		return nil, errors.New("ready recheck loaded SQL")
+		return map[uint]postLikeBaseline{1: {}}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, err := range results {
-		if err != nil {
-			t.Fatal(err)
-		}
+	if !errors.Is(results[1], likes.ErrLikeRecoveryUnsafe) || results[8] != nil {
+		t.Fatalf("ready recheck results=%v", results)
 	}
 }
 
@@ -392,21 +389,25 @@ func TestPostLikeRecoveryFailureReleasesFlightsAndCanRetry(t *testing.T) {
 				}
 				return map[uint]postLikeBaseline{1: {}}, nil
 			})
-			if err != nil || !errors.Is(results[1], failure) {
+			firstFailure := failure
+			if failStage == "write" {
+				firstFailure = likes.ErrLikeRecoveryUnsafe
+			}
+			if err != nil || !errors.Is(results[1], firstFailure) {
 				t.Fatalf("results=%v err=%v", results, err)
 			}
 			delete(store.fail, 1)
 			results, err = group.recover(t.Context(), store, []uint{1}, func(context.Context, []uint) (map[uint]postLikeBaseline, error) {
 				return map[uint]postLikeBaseline{1: {}}, nil
 			})
-			if err != nil || results[1] != nil || len(store.writes) != 1 {
+			if err != nil || !errors.Is(results[1], likes.ErrLikeRecoveryUnsafe) || len(store.writes) != 0 {
 				t.Fatalf("retry results=%v err=%v", results, err)
 			}
 		})
 	}
 }
 
-func TestPostLikeRecoveryBatchFailureDoesNotPoisonCompletedPosts(t *testing.T) {
+func TestPostLikeRecoveryBatchRejectsUnprovenZeroBaselines(t *testing.T) {
 	var group postLikeRecoveryFlights
 	store := newRecoveryTestStore()
 	store.ready[4] = likes.State{}
@@ -418,10 +419,11 @@ func TestPostLikeRecoveryBatchFailureDoesNotPoisonCompletedPosts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if results[1] != nil || results[4] != nil || !errors.Is(results[2], failure) || !errors.Is(results[3], failure) {
+	if !errors.Is(results[1], likes.ErrLikeRecoveryUnsafe) || results[4] != nil ||
+		!errors.Is(results[2], likes.ErrLikeRecoveryUnsafe) || !errors.Is(results[3], likes.ErrLikeRecoveryUnsafe) {
 		t.Fatalf("per-post results=%v", results)
 	}
-	if len(store.writes) != 1 {
+	if len(store.writes) != 0 {
 		t.Fatalf("writes after failure: %v", store.writes)
 	}
 }

@@ -79,10 +79,11 @@ func runTargetedRefresh(ctx context.Context, baseDir string, options commandOpti
 		return err
 	}
 
-	redisClient := bestEffortRedis(stderr)
-	if redisClient != nil {
-		defer redisClient.Close()
+	redisClient, err := requiredRedis()
+	if err != nil {
+		return err
 	}
+	defer redisClient.Close()
 	var mirrorStore devdata.AvatarObjectStore
 	storageClient, storageErr := config.NewStorageClient()
 	if storageErr != nil {

@@ -12,6 +12,8 @@ import (
 
 	"Go.exchange/config"
 	"Go.exchange/global"
+	"Go.exchange/likes"
+	"Go.exchange/metrics"
 	"Go.exchange/models"
 	"Go.exchange/utils"
 
@@ -42,17 +44,24 @@ func run(stdout io.Writer) error {
 	if global.MaintenanceDb == nil {
 		return errors.New("database is not initialized")
 	}
+	redisClient, err := config.NewRedisClient()
+	if err != nil {
+		return fmt.Errorf("Redis is required to provision load-test users: %w", err)
+	}
+	defer redisClient.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	report, err := provisionSyntheticUsers(ctx, global.MaintenanceDb, userConfig)
+	report, err := provisionSyntheticUsers(ctx, global.MaintenanceDb, userConfig, likes.NewStore(redisClient))
 	if err != nil {
 		return err
 	}
 	return writeProvisionReport(stdout, userConfig, report)
 }
 
-func provisionSyntheticUsers(ctx context.Context, db *gorm.DB, userConfig loadTestUserConfig) (provisionReport, error) {
+func provisionSyntheticUsers(ctx context.Context, db *gorm.DB, userConfig loadTestUserConfig, initializers ...interface {
+	InitializeUserEmpty(context.Context, uint) error
+}) (provisionReport, error) {
 	if db == nil {
 		return provisionReport{}, errors.New("database is required")
 	}
@@ -68,6 +77,12 @@ func provisionSyntheticUsers(ctx context.Context, db *gorm.DB, userConfig loadTe
 	if err := validateLoadTestUserPrefix(userConfig.Prefix); err != nil {
 		return provisionReport{}, err
 	}
+	var userLikeInit interface {
+		InitializeUserEmpty(context.Context, uint) error
+	}
+	if len(initializers) > 0 {
+		userLikeInit = initializers[0]
+	}
 
 	var report provisionReport
 	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -82,12 +97,19 @@ func provisionSyntheticUsers(ctx context.Context, db *gorm.DB, userConfig loadTe
 				if hashErr != nil {
 					return fmt.Errorf("hash password for %s: %w", username, hashErr)
 				}
-				if createErr := tx.Create(&models.User{
+				user = models.User{
 					Username:    username,
 					Password:    hashedPassword,
 					DisplayName: displayName,
-				}).Error; createErr != nil {
+				}
+				if createErr := tx.Create(&user).Error; createErr != nil {
 					return fmt.Errorf("create synthetic user %s: %w", username, createErr)
+				}
+				if userLikeInit != nil {
+					if err := userLikeInit.InitializeUserEmpty(ctx, user.ID); err != nil {
+						metrics.RecordLikeLifecycleEvent("user_init_failure")
+						return fmt.Errorf("initialize new load-test User %d Like state: %w", user.ID, err)
+					}
 				}
 				report.Created++
 				continue

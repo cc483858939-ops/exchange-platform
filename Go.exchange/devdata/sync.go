@@ -13,6 +13,7 @@ import (
 
 	"Go.exchange/controllers"
 	"Go.exchange/likes"
+	"Go.exchange/metrics"
 	"Go.exchange/models"
 	"Go.exchange/utils"
 
@@ -41,29 +42,30 @@ type SyncResult struct {
 	PurgedPostIDs       []uint
 }
 
-// SyncOptions controls optional localizations while leaving the desired-state
-// Post sync and its maintenance behavior unchanged.
+// SyncOptions controls optional localizations and the trusted new-User Like
+// initializer used inside the SQL transaction.
 type SyncOptions struct {
 	AvatarResolutions                    map[string]AvatarResolution
 	CoverResolutions                     map[string]CoverResolution
 	PostMediaResolutions                 map[SourcePostKey][]PostMediaResolution
 	PreserveExistingAvatarWhenUnresolved bool
 	PreserveExistingCoverWhenUnresolved  bool
+	UserLikeInitializer                  interface {
+		InitializeUserEmpty(context.Context, uint) error
+	}
 }
 
 type syncMaintenance struct {
-	affected      map[uint]struct{}
-	newPosts      map[uint]struct{}
-	purged        map[uint]struct{}
-	reactivations map[uint]likes.FullState
+	affected map[uint]struct{}
+	newPosts map[uint]struct{}
+	purged   map[uint]struct{}
 }
 
 func newSyncMaintenance() *syncMaintenance {
 	return &syncMaintenance{
-		affected:      make(map[uint]struct{}),
-		newPosts:      make(map[uint]struct{}),
-		purged:        make(map[uint]struct{}),
-		reactivations: make(map[uint]likes.FullState),
+		affected: make(map[uint]struct{}),
+		newPosts: make(map[uint]struct{}),
+		purged:   make(map[uint]struct{}),
 	}
 }
 
@@ -87,16 +89,10 @@ func (m *syncMaintenance) addPurge(postID uint) {
 	}
 }
 
-func (m *syncMaintenance) addReactivation(postID uint, state likes.FullState) {
-	if m != nil && postID != 0 {
-		m.reactivations[postID] = state
-		m.affect(postID)
-	}
-}
-
 // SyncSnapshot applies a complete, already validated snapshot as desired
-// state. The relational mutation is one transaction; Redis/cache maintenance
-// runs only after that transaction commits and is intentionally best effort.
+// state. The relational mutation is one transaction. Redis Like maintenance
+// runs after commit and reports incomplete state; detail-cache invalidation is
+// best effort.
 func SyncSnapshot(ctx context.Context, db *gorm.DB, registry SourceRegistry, snapshot Snapshot, redisClient *redis.Client, syncAt time.Time) (SyncResult, error) {
 	return SyncSnapshotWithOptions(ctx, db, registry, snapshot, redisClient, syncAt, SyncOptions{})
 }
@@ -120,6 +116,9 @@ func SyncSnapshotWithOptions(ctx context.Context, db *gorm.DB, registry SourceRe
 	if syncAt.IsZero() {
 		syncAt = time.Now().UTC()
 	}
+	if options.UserLikeInitializer == nil && redisClient != nil {
+		options.UserLikeInitializer = likes.NewStore(redisClient)
+	}
 	maintenance := newSyncMaintenance()
 	result := SyncResult{}
 	var profileChanges map[uint]bool
@@ -140,7 +139,9 @@ func SyncSnapshotWithOptions(ctx context.Context, db *gorm.DB, registry SourceRe
 	result.AffectedPostIDs = sortedIDs(maintenance.affected)
 	result.NewPostIDs = sortedIDs(maintenance.newPosts)
 	result.PurgedPostIDs = sortedIDs(maintenance.purged)
-	performPostCommitMaintenance(ctx, db, redisClient, maintenance)
+	if err := performPostCommitMaintenance(ctx, db, redisClient, maintenance); err != nil {
+		return result, err
+	}
 	return result, nil
 }
 
@@ -237,6 +238,13 @@ func syncAccounts(tx *gorm.DB, registry SourceRegistry, snapshot Snapshot, syncA
 		}
 		if err := tx.Create(&user).Error; err != nil {
 			return nil, fmt.Errorf("create mirror user %q: %w", username, err)
+		}
+		if options.UserLikeInitializer != nil {
+			if err := options.UserLikeInitializer.InitializeUserEmpty(tx.Statement.Context, user.ID); err != nil {
+				metrics.RecordLikeLifecycleEvent("user_init_failure")
+				log.Printf("[DevData] initialize new User Like state user=%d: %v", user.ID, err)
+				return nil, fmt.Errorf("initialize new DevData mirror User %d Like state: %w", user.ID, err)
+			}
 		}
 		fetchedAt := sourceFetchedAt(snapshot)
 		accountRow := models.DevDataMirrorAccount{
@@ -554,11 +562,9 @@ func syncExistingPost(tx *gorm.DB, account models.DevDataMirrorAccount, mapping 
 	contentChanged := post.Content != desired.Text || post.Language != desired.Language || post.AuthorID != account.LocalUserID || post.Visibility != "public" || !post.CreatedAt.Equal(desired.CreatedAt.UTC())
 	reactivate := mapping.State == models.DevDataMirrorPostStateTombstone || post.DeletedAt.Valid
 	if reactivate {
-		likeState, err := loadReactivationLikeState(tx, post.ID, post.LikeCount, post.LikeSyncVersion)
-		if err != nil {
-			return err
-		}
-		maintenance.addReactivation(post.ID, likeState)
+		metrics.RecordLikeLifecycleEvent("post_reactivation_refused")
+		log.Printf("[DevData] like_state_post_reactivation_refused post=%d source_post=%s", post.ID, desired.SourcePostID)
+		return fmt.Errorf("DevData Post %d reactivation is unsafe: User -> Posts relations cannot be reconstructed", post.ID)
 	}
 	values := map[string]interface{}{
 		"author_id":  account.LocalUserID,
@@ -588,18 +594,6 @@ func syncExistingPost(tx *gorm.DB, account models.DevDataMirrorAccount, mapping 
 		return err
 	}
 	return nil
-}
-
-func loadReactivationLikeState(tx *gorm.DB, postID uint, count, version int64) (likes.FullState, error) {
-	if tx == nil {
-		return likes.FullState{}, errors.New("database is not initialized")
-	}
-	if postID == 0 || count < 0 || version < 0 {
-		return likes.FullState{}, likes.ErrLikeRecoveryUnsafe
-	}
-	// SPEC-01 records only the aggregate and cannot restore User -> Posts. The
-	// reactivation transition itself is rejected by InitializeFrom until SPEC-02.
-	return likes.FullState{Count: count, Version: version}, nil
 }
 
 func insertPost(tx *gorm.DB, account models.DevDataMirrorAccount, desired SnapshotPost, syncAt time.Time, options SyncOptions, maintenance *syncMaintenance) error {
@@ -783,9 +777,9 @@ func readSyncCounts(tx *gorm.DB, result *SyncResult) error {
 	return nil
 }
 
-func performPostCommitMaintenance(ctx context.Context, db *gorm.DB, redisClient *redis.Client, maintenance *syncMaintenance) {
+func performPostCommitMaintenance(ctx context.Context, db *gorm.DB, redisClient *redis.Client, maintenance *syncMaintenance) error {
 	if redisClient == nil || maintenance == nil {
-		return
+		return nil
 	}
 	for _, postID := range sortedIDs(maintenance.affected) {
 		if err := controllers.InvalidatePostDetailCacheByIDWithRedis(redisClient, postID); err != nil {
@@ -793,21 +787,25 @@ func performPostCommitMaintenance(ctx context.Context, db *gorm.DB, redisClient 
 		}
 	}
 	store := likes.NewStore(redisClient)
+	var maintenanceErrors []error
 	for _, postID := range sortedIDs(maintenance.newPosts) {
 		if _, err := store.InitializeFrom(ctx, postID, false, currentPostLikeStateLoader(db, postID)); err != nil {
-			log.Printf("WARN [DevData] initialize Redis like state for %d: %v", postID, err)
-		}
-	}
-	for _, postID := range sortedIDs(fullStateIDs(maintenance.reactivations)) {
-		if _, err := store.InitializeFrom(ctx, postID, true, currentPostLikeStateLoader(db, postID)); err != nil {
-			log.Printf("WARN [DevData] restore Redis like state for reactivated Post %d: %v", postID, err)
+			metrics.RecordLikeLifecycleEvent("post_init_failure")
+			log.Printf("[DevData] initialize Redis Like state post=%d: %v", postID, err)
+			maintenanceErrors = append(maintenanceErrors, fmt.Errorf("initialize Redis Like state for new Post %d: %w", postID, err))
 		}
 	}
 	for _, postID := range sortedIDs(maintenance.purged) {
 		if err := store.PurgePost(ctx, postID); err != nil {
-			log.Printf("WARN [DevData] purge Redis like state for %d: %v", postID, err)
+			metrics.RecordLikeLifecycleEvent("post_delete_cleanup_failure")
+			log.Printf("[DevData] purge Redis Like state post=%d: %v", postID, err)
+			maintenanceErrors = append(maintenanceErrors, fmt.Errorf("purge Redis Like state for deleted Post %d: %w", postID, err))
 		}
 	}
+	if err := errors.Join(maintenanceErrors...); err != nil {
+		return fmt.Errorf("SQL transaction committed; Redis Like maintenance is incomplete: %w", err)
+	}
+	return nil
 }
 
 // Transaction-time reactivation snapshots are not write authorization. Read
@@ -821,16 +819,8 @@ func currentPostLikeStateLoader(db *gorm.DB, postID uint) func(context.Context) 
 		if err := db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", postID).First(&post).Error; err != nil {
 			return likes.FullState{}, err
 		}
-		return loadReactivationLikeState(db.WithContext(ctx), postID, post.LikeCount, post.LikeSyncVersion)
+		return likes.FullState{Count: post.LikeCount, Version: post.LikeSyncVersion}, nil
 	}
-}
-
-func fullStateIDs(values map[uint]likes.FullState) map[uint]struct{} {
-	ids := make(map[uint]struct{}, len(values))
-	for id := range values {
-		ids[id] = struct{}{}
-	}
-	return ids
 }
 
 func sortedIDs(values map[uint]struct{}) []uint {

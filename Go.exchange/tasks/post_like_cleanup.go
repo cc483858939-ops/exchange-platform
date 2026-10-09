@@ -7,6 +7,7 @@ import (
 
 	"Go.exchange/global"
 	"Go.exchange/likes"
+	"Go.exchange/metrics"
 	"Go.exchange/models"
 
 	"gorm.io/gorm"
@@ -52,11 +53,13 @@ func runPostLikeCleanupPass(ctx context.Context, db *gorm.DB, remove func(contex
 			return err
 		}
 		if err := remove(ctx, work.PostID); err != nil {
+			metrics.RecordLikeLifecycleEvent("post_delete_cleanup_failure")
 			// Back off the failed front item, letting other deletions progress next
 			// pass. Preserve it through outages and process restarts.
 			if updateErr := db.WithContext(ctx).Model(&work).Where("retry_after = ?", work.RetryAfter).Update("retry_after", now.Add(5*time.Second)).Error; updateErr != nil {
 				return updateErr
 			}
+			metrics.RecordLikeLifecycleEvent("post_delete_cleanup_retry")
 			return err
 		}
 		if err := db.WithContext(ctx).Delete(&work).Error; err != nil {

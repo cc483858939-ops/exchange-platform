@@ -1,14 +1,19 @@
 package controllers
 
 import (
-	"Go.exchange/auth"
-	"Go.exchange/models"
-	"Go.exchange/utils"
+	"context"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"Go.exchange/auth"
+	"Go.exchange/metrics"
+	"Go.exchange/models"
+	"Go.exchange/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
@@ -48,14 +53,21 @@ type authResponse struct {
 }
 
 type AuthController struct {
-	db      *gorm.DB
-	tokens  auth.TokenService
-	limiter auth.AttemptLimiter
+	db           *gorm.DB
+	tokens       auth.TokenService
+	limiter      auth.AttemptLimiter
+	userLikeInit interface {
+		InitializeUserEmpty(context.Context, uint) error
+	}
 }
+
+var errRegistrationUserLikeInit = errors.New("initialize registration user like state")
 
 const authRequestMaxBodyBytes int64 = 16 << 10
 
-func NewAuthController(db *gorm.DB, tokens auth.TokenService, limiter auth.AttemptLimiter) (*AuthController, error) {
+func NewAuthController(db *gorm.DB, tokens auth.TokenService, limiter auth.AttemptLimiter, userLikeInitializers ...interface {
+	InitializeUserEmpty(context.Context, uint) error
+}) (*AuthController, error) {
 	if db == nil {
 		return nil, errors.New("auth database is required")
 	}
@@ -65,7 +77,11 @@ func NewAuthController(db *gorm.DB, tokens auth.TokenService, limiter auth.Attem
 	if limiter == nil {
 		return nil, errors.New("auth attempt limiter is required")
 	}
-	return &AuthController{db: db, tokens: tokens, limiter: limiter}, nil
+	controller := &AuthController{db: db, tokens: tokens, limiter: limiter}
+	if len(userLikeInitializers) > 0 {
+		controller.userLikeInit = userLikeInitializers[0]
+	}
+	return controller, nil
 }
 
 func (c *AuthController) Register(ctx *gin.Context) {
@@ -88,7 +104,28 @@ func (c *AuthController) Register(ctx *gin.Context) {
 		return
 	}
 	user := models.User{Username: request.Username, Password: hashedPassword}
-	if err := c.db.WithContext(ctx.Request.Context()).Create(&user).Error; err != nil {
+	if c.userLikeInit == nil {
+		metrics.RecordLikeLifecycleEvent("user_init_failure")
+		writeAuthError(ctx, http.StatusServiceUnavailable, "AUTH_LIKE_STATE_UNAVAILABLE", "Registration is temporarily unavailable")
+		return
+	}
+	requestCtx := ctx.Request.Context()
+	err = c.db.WithContext(requestCtx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&user).Error; err != nil {
+			return err
+		}
+		if err := c.userLikeInit.InitializeUserEmpty(requestCtx, user.ID); err != nil {
+			metrics.RecordLikeLifecycleEvent("user_init_failure")
+			log.Printf("[AuthRegister] initialize User Like state user=%d: %v", user.ID, err)
+			return fmt.Errorf("%w: %v", errRegistrationUserLikeInit, err)
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, errRegistrationUserLikeInit) {
+			writeAuthError(ctx, http.StatusServiceUnavailable, "AUTH_LIKE_STATE_UNAVAILABLE", "Registration is temporarily unavailable")
+			return
+		}
 		if handleRequestDBError(ctx, err) {
 			return
 		}

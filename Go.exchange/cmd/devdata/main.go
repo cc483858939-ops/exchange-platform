@@ -100,10 +100,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 		} else {
 			writeFetchReport(stdout, report, options.snapshotPath(baseDir))
 		}
-		redisClient := bestEffortRedis(stderr)
-		if redisClient != nil {
-			defer redisClient.Close()
+		redisClient, err := requiredRedis()
+		if err != nil {
+			return err
 		}
+		defer redisClient.Close()
 		var avatarStore devdata.AvatarObjectStore
 		storageClient, storageErr := config.NewStorageClient()
 		if storageErr != nil {
@@ -224,10 +225,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(stdout, "Post media: posts=%d attempted=%d uploaded=%d reused=%d failed=%d\n", postMediaReport.PostsWithMedia, postMediaReport.Attempted, postMediaReport.Uploaded, postMediaReport.Reused, postMediaReport.Failed)
-		redisClient := bestEffortRedis(stderr)
-		if redisClient != nil {
-			defer redisClient.Close()
+		redisClient, err := requiredRedis()
+		if err != nil {
+			return err
 		}
+		defer redisClient.Close()
 		if err := syncAndVerifyWithDB(ctx, stdout, registry, snapshot, db, redisClient, devdata.SyncOptions{
 			AvatarResolutions:                    avatarResolutions,
 			CoverResolutions:                     coverResolutions,
@@ -578,10 +580,11 @@ func applyIncrementalBatch(ctx context.Context, db *gorm.DB, registry devdata.So
 	for _, account := range batch.Accounts {
 		selectedKeys = append(selectedKeys, account.RegistryKey)
 	}
-	redisClient := bestEffortRedis(stderr)
-	if redisClient != nil {
-		defer redisClient.Close()
+	redisClient, err := requiredRedis()
+	if err != nil {
+		return incrementalSyncSummary{}, err
 	}
+	defer redisClient.Close()
 	var mirrorStore devdata.AvatarObjectStore
 	storageClient, storageErr := config.NewStorageClient()
 	if storageErr != nil {
@@ -657,13 +660,12 @@ func releaseDevDataMutationLock(ctx context.Context, lock interface {
 	return lock.Release(releaseCtx)
 }
 
-func bestEffortRedis(stderr io.Writer) *redis.Client {
+func requiredRedis() (*redis.Client, error) {
 	client, err := config.NewRedisClient()
 	if err != nil {
-		fmt.Fprintf(stderr, "WARN: Redis unavailable; DB sync remains committed without cache/like maintenance: %v\n", err)
-		return nil
+		return nil, fmt.Errorf("Redis is required for DevData sync; no database changes were made: %w", err)
 	}
-	return client
+	return client, nil
 }
 
 func syncAndVerifyWithDB(ctx context.Context, stdout io.Writer, registry devdata.SourceRegistry, snapshot devdata.Snapshot, db *gorm.DB, redisClient *redis.Client, options devdata.SyncOptions) error {

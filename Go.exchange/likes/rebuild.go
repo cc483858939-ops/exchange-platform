@@ -31,11 +31,12 @@ func (s *Store) BeginRebuildMany(ctx context.Context, postIDs []uint) (map[uint]
 }
 
 // InitializeFrom reads current SQL only after the rebuild token exists.
-// Reactivation is rejected until SPEC-02 can remove stale User -> Posts links.
+// Same-ID reactivation is fail-closed because this model cannot prove every
+// stale User -> Posts link is gone without reintroducing a reverse index.
 func (s *Store) InitializeFrom(ctx context.Context, postID uint, reactivation bool, load func(context.Context) (FullState, error)) (bool, error) {
 	if reactivation {
-		// User -> Posts has no reverse index, so Post reactivation cannot prove
-		// or clear stale membership until SPEC-02 owns the lifecycle transition.
+		// User -> Posts has no reverse index, so reactivation cannot prove or
+		// clear stale membership safely.
 		return false, ErrLikeRecoveryUnsafe
 	}
 	tokens, unavailable, err := s.beginRebuildMany(ctx, []uint{postID}, reactivation)

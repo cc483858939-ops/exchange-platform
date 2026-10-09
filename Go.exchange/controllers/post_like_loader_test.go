@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -22,10 +23,54 @@ func TestValidatePostLikeBaselineRejectsInvalidAggregates(t *testing.T) {
 	}
 }
 
-func TestClassifyPostLikeRecoveryOnlyAllowsNeverManagedZeroBootstrap(t *testing.T) {
-	zero, err := classifyPostLikeRecovery(false, nil, postLikeBaseline{})
-	if err != nil || !zero.AllowZeroBootstrap || zero.ExpectedVersion != nil {
-		t.Fatalf("zero fence=%+v err=%v", zero, err)
+func TestRequestLikeLoadersDoNotBootstrapMissingStateFromSQL(t *testing.T) {
+	oldSet := setPostLikedStateWithRedis
+	oldGet := loadPostLikeStateFromRedis
+	oldGetMany := loadPostLikeStatesFromRedis
+	oldLoadOne := loadPostLikeBaselineFromDB
+	oldLoadMany := loadPostLikeBaselinesFromDB
+	t.Cleanup(func() {
+		setPostLikedStateWithRedis = oldSet
+		loadPostLikeStateFromRedis = oldGet
+		loadPostLikeStatesFromRedis = oldGetMany
+		loadPostLikeBaselineFromDB = oldLoadOne
+		loadPostLikeBaselinesFromDB = oldLoadMany
+	})
+	baselineReads := 0
+	loadPostLikeBaselineFromDB = func(context.Context, uint) (postLikeBaseline, error) {
+		baselineReads++
+		return postLikeBaseline{}, nil
+	}
+	loadPostLikeBaselinesFromDB = func(context.Context, []uint) (map[uint]postLikeBaseline, error) {
+		baselineReads++
+		return map[uint]postLikeBaseline{}, nil
+	}
+	setPostLikedStateWithRedis = func(context.Context, uint, uint, bool) (postLikeMutationResult, error) {
+		return postLikeMutationResult{}, likes.ErrUserLikeNotReady
+	}
+	if _, err := setPostLikedStateWithRecovery(t.Context(), 7, 11, true); !errors.Is(err, likes.ErrUserLikeNotReady) {
+		t.Fatalf("User NotReady mutation error=%v", err)
+	}
+	loadPostLikeStateFromRedis = func(context.Context, uint, uint) (postLikeStateResult, error) {
+		return postLikeStateResult{}, likes.ErrPostLikeNotReady
+	}
+	if _, err := loadPostLikeStateWithRecovery(t.Context(), 7, 11); !errors.Is(err, likes.ErrPostLikeNotReady) {
+		t.Fatalf("Post NotReady read error=%v", err)
+	}
+	loadPostLikeStatesFromRedis = func(context.Context, uint, []uint) (postLikeStatesLoadResult, error) {
+		return postLikeStatesLoadResult{States: map[uint]postLikeStateResult{}, Unavailable: []uint{11}}, nil
+	}
+	if result, err := loadPostLikeStatesWithRecovery(t.Context(), 7, []uint{11}); err != nil || len(result.Unavailable) != 1 {
+		t.Fatalf("batch result=%+v err=%v", result, err)
+	}
+	if baselineReads != 0 {
+		t.Fatalf("request loader performed %d SQL recovery baseline reads", baselineReads)
+	}
+}
+
+func TestClassifyPostLikeRecoveryRejectsUnprovenZeroBootstrap(t *testing.T) {
+	if _, err := classifyPostLikeRecovery(false, nil, postLikeBaseline{}); !errors.Is(err, likes.ErrLikeRecoveryUnsafe) {
+		t.Fatalf("unproven zero baseline error=%v want unsafe", err)
 	}
 
 	marker := int64(10)
@@ -37,6 +82,7 @@ func TestClassifyPostLikeRecoveryOnlyAllowsNeverManagedZeroBootstrap(t *testing.
 	}{
 		{name: "registered zero", registered: true},
 		{name: "recoverable marker", marker: &marker},
+		{name: "unregistered zero"},
 		{name: "nonzero count", baseline: postLikeBaseline{Count: 1, Version: 1, ReactionRowCount: 1}},
 		{name: "nonzero version", baseline: postLikeBaseline{Version: 1}},
 		{name: "reaction history", baseline: postLikeBaseline{ReactionRowCount: 1}},

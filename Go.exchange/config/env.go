@@ -27,10 +27,10 @@ func ValidateAPIEventingConfig(cfg *Config) error {
 }
 
 // ValidateLikeStateExpiryConfig prevents Post aggregate expiration while
-// User -> Posts relationships still lack coordinated recovery and cleanup.
+// User -> Posts relations have no matching Post-scoped expiry protocol.
 func ValidateLikeStateExpiryConfig() error {
 	if LikeStateExpiryEnabled() {
-		return errors.New("LIKE_STATE_EXPIRY_ENABLED is unsupported until SPEC-02 implements User Like state recovery")
+		return errors.New("LIKE_STATE_EXPIRY_ENABLED is unsupported while persistent User -> Posts relations cannot be expired with Post state")
 	}
 	return nil
 }

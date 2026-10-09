@@ -25,30 +25,29 @@ local post_id = ARGV[1]
 local user_id = ARGV[2]
 if not string.match(post_id, '^%d+$') or post_id == '0' or
    not string.match(user_id, '^%d+$') or user_id == '0' then
-  return redis.error_reply('LIKE_NOT_READY')
-end
-
-if redis.call('SISMEMBER', KEYS[4], '0') ~= 1 then
-  return redis.error_reply('LIKE_NOT_READY')
+  return redis.error_reply('LIKE_POST_NOT_READY')
 end
 
 local ready = redis.call('GET', KEYS[1])
 if ready == 'deleted' then return redis.error_reply('LIKE_POST_DELETED') end
+if redis.call('SISMEMBER', KEYS[4], '0') ~= 1 then
+  return redis.error_reply('LIKE_USER_NOT_READY')
+end
 if ready ~= '1' then
-  return redis.error_reply('LIKE_NOT_READY')
+  return redis.error_reply('LIKE_POST_NOT_READY')
 end
 local count_raw = redis.call('GET', KEYS[2])
 local version_raw = redis.call('GET', KEYS[3])
 if not count_raw or not version_raw then
-  return redis.error_reply('LIKE_NOT_READY')
+  return redis.error_reply('LIKE_POST_NOT_READY')
 end
 if not string.match(count_raw, '^%d+$') or not string.match(version_raw, '^%d+$') then
-  return redis.error_reply('LIKE_NOT_READY')
+  return redis.error_reply('LIKE_POST_NOT_READY')
 end
 local count = tonumber(count_raw)
 local version = tonumber(version_raw)
 if not count or count < 0 or not version or version < 0 then
-  return redis.error_reply('LIKE_NOT_READY')
+  return redis.error_reply('LIKE_POST_NOT_READY')
 end
 local current = redis.call('SISMEMBER', KEYS[4], post_id)
 local desired = ARGV[3] == '1' and 1 or 0
@@ -91,11 +90,34 @@ if actual ~= 'none' and actual ~= 'set' then
 end
 if actual == 'set' then
   if redis.call('SISMEMBER', KEYS[1], '0') == 1 then return 0 end
-  if redis.call('SCARD', KEYS[1]) > 0 then return redis.error_reply('LIKE_NOT_READY') end
+  if redis.call('SCARD', KEYS[1]) > 0 then return redis.error_reply('LIKE_USER_NOT_READY') end
 end
 redis.call('SADD', KEYS[1], '0')
 return 1
 `)
+
+var removeDeletedUserPostRelationsScript = redis.NewScript(`
+local user_type = redis.call('TYPE', KEYS[1]).ok
+if user_type ~= 'none' and user_type ~= 'set' then return redis.error_reply('LIKE_TYPE_PRECHECK') end
+for i = 2, #KEYS do
+  local ready_type = redis.call('TYPE', KEYS[i]).ok
+  if ready_type ~= 'none' and ready_type ~= 'string' then return redis.error_reply('LIKE_TYPE_PRECHECK') end
+end
+if user_type == 'none' then return 0 end
+if redis.call('SISMEMBER', KEYS[1], '0') ~= 1 then return redis.error_reply('LIKE_USER_NOT_READY') end
+local removed = 0
+for i = 1, #ARGV do
+  local post_id = ARGV[i]
+  if post_id ~= '0' then
+    local ready = redis.call('GET', KEYS[i + 1])
+    if not ready or ready == 'deleted' then
+      removed = removed + redis.call('SREM', KEYS[1], post_id)
+    end
+  end
+end
+return removed
+`)
+
 var beginRebuildScript = redis.NewScript(`
 local ready_type = redis.call('TYPE', KEYS[1]).ok
 if ready_type ~= 'none' and ready_type ~= 'string' then return redis.error_reply('LIKE_TYPE_PRECHECK') end

@@ -50,6 +50,9 @@ func TestDeletedPostFenceSurvivesCleanupFailureAndStaleRecoveryIntegration(t *te
 	if _, err := store.Get(t.Context(), 11, postID); !errors.Is(err, ErrPostLikeUnavailable) {
 		t.Fatalf("deleted read=%v", err)
 	}
+	if _, err := store.Get(t.Context(), postID+101, postID); !errors.Is(err, ErrPostLikeUnavailable) {
+		t.Fatalf("deleted Post with missing User state must remain unavailable, got %v", err)
+	}
 	if _, err := store.LoadFullState(t.Context(), postID); !errors.Is(err, ErrPostLikeUnavailable) {
 		t.Fatalf("deleted full state=%v", err)
 	}

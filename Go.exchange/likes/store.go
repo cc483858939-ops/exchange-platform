@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
 
 	"Go.exchange/config"
+	"Go.exchange/metrics"
 
 	"github.com/go-redis/redis/v7"
 	"github.com/google/uuid"
@@ -23,7 +25,10 @@ func (s *Store) Mutate(ctx context.Context, userID, postID uint, liked bool) (Mu
 		return MutationResult{}, errors.New("redis is not initialized")
 	}
 	if userID == 0 || postID == 0 {
-		return MutationResult{}, ErrNotReady
+		if userID == 0 {
+			return MutationResult{}, userNotReadyError()
+		}
+		return MutationResult{}, postNotReadyError()
 	}
 	desired := "0"
 	if liked {
@@ -55,7 +60,8 @@ func (s *Store) Get(ctx context.Context, userID, postID uint) (State, error) {
 
 // GetForServing reads and validates Like state for a client-facing request.
 // Lease arguments are rejected because Post-only expiry cannot preserve the
-// User -> Posts relation until SPEC-02 implements coordinated recovery.
+// Persistent User -> Posts relations cannot be expired independently from the
+// corresponding Post aggregates.
 func (s *Store) GetForServing(ctx context.Context, userID, postID uint, ttl, renewalThreshold time.Duration) (State, error) {
 	if config.LikeStateExpiryEnabled() || ttl != 0 || renewalThreshold != 0 {
 		return State{}, ErrLikeStateExpiryUnsupported
@@ -68,7 +74,7 @@ func (s *Store) get(ctx context.Context, userID, postID uint) (State, error) {
 		return State{}, errors.New("redis is not initialized")
 	}
 	if postID == 0 {
-		return State{}, ErrNotReady
+		return State{}, postNotReadyError()
 	}
 	pipe := s.client.WithContext(ctx).Pipeline()
 	ready := pipe.Get(ReadyKey(postID))
@@ -88,33 +94,35 @@ func (s *Store) get(ctx context.Context, userID, postID uint) (State, error) {
 	if execErr != nil && execErr != redis.Nil {
 		return State{}, mapScriptError(execErr)
 	}
-	if err := requireReadyCommand(ready); err != nil {
-		return State{}, err
-	}
-	if err := commandErrorOrNotReady(count.Err()); err != nil {
-		return State{}, err
-	}
-	if err := commandErrorOrNotReady(version.Err()); err != nil {
-		return State{}, err
-	}
-	if member != nil {
-		if err := commandErrorOrNotReady(initialized.Err()); err != nil {
+	if initialized != nil {
+		if err := userCommandErrorOrNotReady(initialized.Err()); err != nil {
 			return State{}, err
 		}
 		if !initialized.Val() {
-			return State{}, ErrNotReady
+			return State{}, userNotReadyError()
 		}
-		if err := commandErrorOrNotReady(member.Err()); err != nil {
+	}
+	if err := requireReadyCommand(ready); err != nil {
+		return State{}, err
+	}
+	if err := postCommandErrorOrNotReady(count.Err()); err != nil {
+		return State{}, err
+	}
+	if err := postCommandErrorOrNotReady(version.Err()); err != nil {
+		return State{}, err
+	}
+	if member != nil {
+		if err := userCommandErrorOrNotReady(member.Err()); err != nil {
 			return State{}, err
 		}
 	}
 	countValue, ok := parseNonNegativeInt64(count.Val())
 	if !ok || count.Err() == redis.Nil {
-		return State{}, ErrNotReady
+		return State{}, postNotReadyError()
 	}
 	versionValue, ok := parseNonNegativeInt64(version.Val())
 	if !ok || version.Err() == redis.Nil {
-		return State{}, ErrNotReady
+		return State{}, postNotReadyError()
 	}
 	state := State{Count: countValue, Version: versionValue}
 	if member != nil {
@@ -185,11 +193,14 @@ func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint) (map[u
 	}
 	_, execErr := pipe.ExecContext(ctx)
 	if initialized != nil {
-		if err := commandErrorOrNotReady(initialized.Err()); err != nil {
+		if err := userCommandErrorOrNotReady(initialized.Err()); err != nil {
+			recordStoreLifecycleFailure(err, userID, 0)
 			return nil, nil, err
 		}
 		if !initialized.Val() {
-			return nil, nil, ErrNotReady
+			err := userNotReadyError()
+			recordStoreLifecycleFailure(err, userID, 0)
+			return nil, nil, err
 		}
 	}
 	for _, command := range batch {
@@ -199,11 +210,14 @@ func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint) (map[u
 		}
 		for _, commandErr := range []error{command.ready.Err(), command.count.Err(), command.version.Err()} {
 			if commandErr != nil && commandErr != redis.Nil {
-				return nil, nil, mapScriptError(commandErr)
+				mapped := mapScriptError(commandErr)
+				recordStoreLifecycleFailure(mapped, userID, command.postID)
+				return nil, nil, mapped
 			}
 		}
 		if command.member != nil {
-			if err := commandErrorOrNotReady(command.member.Err()); err != nil {
+			if err := userCommandErrorOrNotReady(command.member.Err()); err != nil {
+				recordStoreLifecycleFailure(err, userID, command.postID)
 				return nil, nil, err
 			}
 		}
@@ -213,6 +227,8 @@ func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint) (map[u
 			command.count.Err() == redis.Nil || command.version.Err() == redis.Nil ||
 			!countOK || !versionOK {
 			unavailable = append(unavailable, command.postID)
+			err := postNotReadyError()
+			recordStoreLifecycleFailure(err, userID, command.postID)
 			continue
 		}
 		states[command.postID] = State{
@@ -222,7 +238,9 @@ func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint) (map[u
 		}
 	}
 	if execErr != nil && execErr != redis.Nil {
-		return nil, nil, mapScriptError(execErr)
+		mapped := mapScriptError(execErr)
+		recordStoreLifecycleFailure(mapped, userID, 0)
+		return nil, nil, mapped
 	}
 	return states, unavailable, nil
 }
@@ -231,16 +249,26 @@ func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint) (map[u
 // callers that know this user has no prior Like state. It never repairs a
 // partially lost or malformed relation set.
 func (s *Store) InitializeUserEmpty(ctx context.Context, userID uint) error {
+	_, err := s.InitializeUserEmptyWithResult(ctx, userID)
+	return err
+}
+
+// InitializeUserEmptyWithResult returns true only when this call created the
+// initialized-empty sentinel. Existing initialized relations are never reset.
+func (s *Store) InitializeUserEmptyWithResult(ctx context.Context, userID uint) (bool, error) {
 	if s == nil || s.client == nil {
-		return errors.New("redis is not initialized")
+		return false, errors.New("redis is not initialized")
 	}
 	if userID == 0 {
-		return errors.New("invalid user id")
+		return false, errors.New("invalid user id")
 	}
-	_, err := initializeUserEmptyScript.Run(
+	value, err := initializeUserEmptyScript.Run(
 		s.client.WithContext(ctx), []string{UserLikesKey(userID)},
 	).Int64()
-	return mapScriptError(err)
+	if err != nil {
+		return false, mapScriptError(err)
+	}
+	return value == 1, nil
 }
 
 // Initialize requires a rebuild token acquired before loading the active SQL
@@ -313,12 +341,13 @@ func (s *Store) DeletePost(ctx context.Context, postID uint) error {
 	if err := markPostDeletedScript.Run(s.client.WithContext(ctx), []string{ReadyKey(postID), RebuildTokenKey(postID)}).Err(); err != nil {
 		return mapScriptError(err)
 	}
+	metrics.RecordLikeLifecycleEvent("post_delete_fence_success")
 	return s.PurgePost(ctx, postID)
 }
 
 // PurgePost removes live Post aggregate and snapshot-relay state, preserving a
-// deletion fence. It cannot remove that Post from every User set without a
-// reverse index; SPEC-02 owns that lifecycle cleanup.
+// deletion fence. User relations are reclaimed later by a bounded SQL/SSCAN
+// maintenance task.
 func (s *Store) PurgePost(ctx context.Context, postID uint) error {
 	if s == nil || s.client == nil {
 		return errors.New("redis is not initialized")
@@ -349,7 +378,7 @@ func (s *Store) LoadFullState(ctx context.Context, postID uint) (FullState, erro
 		return FullState{}, errors.New("redis is not initialized")
 	}
 	if postID == 0 {
-		return FullState{}, ErrNotReady
+		return FullState{}, postNotReadyError()
 	}
 	client := s.client.WithContext(ctx)
 	pipe := client.Pipeline()
@@ -363,25 +392,25 @@ func (s *Store) LoadFullState(ctx context.Context, postID uint) (FullState, erro
 	if execErr != nil && execErr != redis.Nil {
 		return FullState{}, execErr
 	}
-	if err := commandErrorOrNotReady(ready.Err()); err != nil {
+	if err := postCommandErrorOrNotReady(ready.Err()); err != nil {
 		return FullState{}, err
 	}
 	if ready.Val() != "1" {
-		return FullState{}, ErrNotReady
+		return FullState{}, postNotReadyError()
 	}
-	if err := commandErrorOrNotReady(count.Err()); err != nil {
+	if err := postCommandErrorOrNotReady(count.Err()); err != nil {
 		return FullState{}, err
 	}
-	if err := commandErrorOrNotReady(version.Err()); err != nil {
+	if err := postCommandErrorOrNotReady(version.Err()); err != nil {
 		return FullState{}, err
 	}
 	countValue, ok := parseNonNegativeInt64(count.Val())
 	if count.Err() == redis.Nil || !ok {
-		return FullState{}, ErrNotReady
+		return FullState{}, postNotReadyError()
 	}
 	versionValue, ok := parseNonNegativeInt64(version.Val())
 	if version.Err() == redis.Nil || !ok {
-		return FullState{}, ErrNotReady
+		return FullState{}, postNotReadyError()
 	}
 	return FullState{Count: countValue, Version: versionValue}, nil
 }
@@ -497,6 +526,63 @@ func (s *Store) ScanRegistry(ctx context.Context, cursor uint64, count int) ([]u
 		postIDs = append(postIDs, uint(postID))
 	}
 	return postIDs, next, nil
+}
+
+// ScanUserLikes enumerates one user's relation Set without loading it in full.
+// The initialized-empty sentinel is omitted from returned post IDs.
+func (s *Store) ScanUserLikes(ctx context.Context, userID uint, cursor uint64, count int) ([]uint, uint64, error) {
+	if s == nil || s.client == nil {
+		return nil, cursor, errors.New("redis is not initialized")
+	}
+	if userID == 0 {
+		return nil, cursor, errors.New("invalid user id")
+	}
+	if count <= 0 {
+		count = 100
+	}
+	members, next, err := s.client.WithContext(ctx).SScan(UserLikesKey(userID), cursor, "", int64(count)).Result()
+	if err != nil {
+		return nil, cursor, err
+	}
+	postIDs := make([]uint, 0, len(members))
+	for _, member := range members {
+		postID, parseErr := strconv.ParseUint(member, 10, 64)
+		if parseErr != nil || postID == 0 || uint64(uint(postID)) != postID {
+			continue
+		}
+		postIDs = append(postIDs, uint(postID))
+	}
+	return postIDs, next, nil
+}
+
+// RemoveDeletedUserPostRelations removes at most 128 SQL-confirmed deleted
+// Post relations. Redis rechecks each Ready fence atomically and never touches
+// the sentinel or any Post aggregate, queue, or event key.
+func (s *Store) RemoveDeletedUserPostRelations(ctx context.Context, userID uint, postIDs []uint) (int64, error) {
+	if s == nil || s.client == nil {
+		return 0, errors.New("redis is not initialized")
+	}
+	if userID == 0 {
+		return 0, errors.New("invalid user id")
+	}
+	if len(postIDs) > 128 {
+		return 0, errors.New("relation cleanup batch exceeds 128 Post IDs")
+	}
+	keys := make([]string, 1, len(postIDs)+1)
+	keys[0] = UserLikesKey(userID)
+	args := make([]interface{}, 0, len(postIDs))
+	for _, postID := range postIDs {
+		if postID == 0 {
+			continue
+		}
+		keys = append(keys, ReadyKey(postID))
+		args = append(args, strconv.FormatUint(uint64(postID), 10))
+	}
+	if len(args) == 0 {
+		return 0, nil
+	}
+	removed, err := removeDeletedUserPostRelationsScript.Run(s.client.WithContext(ctx), keys, args...).Int64()
+	return removed, mapScriptError(err)
 }
 
 func (s *Store) LoadExpiryCandidates(ctx context.Context, cutoff time.Time, batch int) ([]uint, error) {
@@ -635,7 +721,7 @@ func (s *Store) loadAggregateState(ctx context.Context, postID uint) (State, err
 		return State{}, errors.New("redis is not initialized")
 	}
 	if postID == 0 {
-		return State{}, ErrNotReady
+		return State{}, postNotReadyError()
 	}
 	pipe := s.client.WithContext(ctx).Pipeline()
 	ready := pipe.Get(ReadyKey(postID))
@@ -644,35 +730,38 @@ func (s *Store) loadAggregateState(ctx context.Context, postID uint) (State, err
 	if _, err := pipe.ExecContext(ctx); err != nil && err != redis.Nil {
 		return State{}, mapScriptError(err)
 	}
-	if err := commandErrorOrNotReady(ready.Err()); err != nil {
+	if ready.Err() == nil && ready.Val() == "deleted" {
+		return State{}, ErrPostLikeUnavailable
+	}
+	if err := postCommandErrorOrNotReady(ready.Err()); err != nil {
 		return State{}, err
 	}
 	if ready.Val() != "1" {
-		return State{}, ErrNotReady
+		return State{}, postNotReadyError()
 	}
-	if err := commandErrorOrNotReady(count.Err()); err != nil {
+	if err := postCommandErrorOrNotReady(count.Err()); err != nil {
 		return State{}, err
 	}
-	if err := commandErrorOrNotReady(version.Err()); err != nil {
+	if err := postCommandErrorOrNotReady(version.Err()); err != nil {
 		return State{}, err
 	}
 	countValue, countOK := parseNonNegativeInt64(count.Val())
 	versionValue, versionOK := parseNonNegativeInt64(version.Val())
 	if !countOK || !versionOK {
-		return State{}, ErrNotReady
+		return State{}, postNotReadyError()
 	}
 	return State{Count: countValue, Version: versionValue}, nil
 }
 
 func requireReadyCommand(command *redis.StringCmd) error {
 	if command == nil {
-		return ErrNotReady
+		return postNotReadyError()
 	}
-	if err := commandErrorOrNotReady(command.Err()); err != nil {
+	if err := postCommandErrorOrNotReady(command.Err()); err != nil {
 		return err
 	}
 	if command.Val() != "1" {
-		return ErrNotReady
+		return postNotReadyError()
 	}
 	return nil
 }
@@ -688,6 +777,44 @@ func commandErrorOrNotReady(err error) error {
 		return fmt.Errorf("like Redis key type preflight failed: %w", ErrLikeRedisType)
 	}
 	return err
+}
+
+func postCommandErrorOrNotReady(err error) error {
+	if err == redis.Nil {
+		return postNotReadyError()
+	}
+	if err != nil {
+		return commandErrorOrNotReady(err)
+	}
+	return nil
+}
+
+func userCommandErrorOrNotReady(err error) error {
+	if err == redis.Nil {
+		return userNotReadyError()
+	}
+	if err != nil {
+		return commandErrorOrNotReady(err)
+	}
+	return nil
+}
+
+func recordStoreLifecycleFailure(err error, userID, postID uint) {
+	switch {
+	case errors.Is(err, ErrUserLikeNotReady):
+		metrics.RecordLikeLifecycleEvent("user_not_ready")
+		log.Printf("[LikeLifecycle] like_state_user_not_ready user=%d post=%d", userID, postID)
+	case errors.Is(err, ErrPostLikeNotReady):
+		metrics.RecordLikeLifecycleEvent("post_not_ready")
+		metrics.RecordLikeLifecycleEvent("post_recovery_refused")
+		log.Printf("[LikeLifecycle] like_state_post_recovery_refused user=%d post=%d", userID, postID)
+	case errors.Is(err, ErrLikeRedisType):
+		metrics.RecordLikeLifecycleEvent("redis_type_error")
+		log.Printf("[LikeLifecycle] like_state_redis_type_error user=%d post=%d", userID, postID)
+	case errors.Is(err, ErrLikeCountInconsistent):
+		metrics.RecordLikeLifecycleEvent("count_inconsistent")
+		log.Printf("[LikeLifecycle] like_state_count_inconsistent user=%d post=%d", userID, postID)
+	}
 }
 
 func parseNonNegativeInt64(value string) (int64, bool) {
@@ -709,6 +836,10 @@ func mapScriptError(err error) error {
 	switch {
 	case strings.Contains(message, "LIKE_POST_DELETED"):
 		return ErrPostLikeUnavailable
+	case strings.Contains(message, "LIKE_USER_NOT_READY"):
+		return userNotReadyError()
+	case strings.Contains(message, "LIKE_POST_NOT_READY"):
+		return postNotReadyError()
 	case strings.Contains(message, "LIKE_NOT_READY"):
 		return ErrNotReady
 	case strings.Contains(message, "LIKE_RECOVERY_UNSAFE"):

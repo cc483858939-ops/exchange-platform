@@ -18,6 +18,7 @@ import (
 	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/initialize"
+	"Go.exchange/likes"
 	"Go.exchange/ratelimit"
 	"Go.exchange/recommendation"
 	"Go.exchange/router"
@@ -54,7 +55,7 @@ func StartHttpServerWithTracing(tokens auth.TokenService, publisher eventing.Bat
 	if err != nil {
 		return nil, fmt.Errorf("initialize auth rate limiter: %w", err)
 	}
-	authController, err := controllers.NewAuthController(global.APIDb, tokens, limiter)
+	authController, err := controllers.NewAuthController(global.APIDb, tokens, limiter, likes.NewStore(global.RedisDB))
 	if err != nil {
 		return nil, fmt.Errorf("initialize auth controller: %w", err)
 	}

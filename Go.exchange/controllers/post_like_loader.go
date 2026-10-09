@@ -7,6 +7,7 @@ import (
 
 	"Go.exchange/global"
 	"Go.exchange/likes"
+	"Go.exchange/metrics"
 	"Go.exchange/models"
 
 	"gorm.io/gorm"
@@ -124,28 +125,19 @@ func classifyPostLikeRecovery(registered bool, marker *int64, baseline postLikeB
 	if err := validatePostLikeBaseline(baseline); err != nil {
 		return likes.RecoveryFence{}, err
 	}
-	if marker != nil || registered || baseline.Count != 0 || baseline.Version != 0 || baseline.ReactionRowCount != 0 {
-		return likes.RecoveryFence{}, likes.ErrLikeRecoveryUnsafe
-	}
-	return likes.RecoveryFence{AllowZeroBootstrap: true}, nil
+	// SQL zero state, an absent registry entry, and an absent recoverable marker
+	// do not prove Kafka has projected every prior Like. This function has no
+	// trusted-new-Post creation evidence, so existing-Post recovery is unsafe.
+	_ = registered
+	_ = marker
+	return likes.RecoveryFence{}, likes.ErrLikeRecoveryUnsafe
 }
 
 func ensurePostLikeStateReady(ctx context.Context, postID uint) error {
-	if postID == 0 {
-		return likes.ErrPostLikeUnavailable
-	}
-	results, err := postLikeRecoveryGroup.recover(ctx, likes.NewStore(global.RedisDB), []uint{postID}, func(ctx context.Context, ids []uint) (map[uint]postLikeBaseline, error) {
-		baseline, err := loadPostLikeBaselineFromDB(ctx, ids[0])
-		if err != nil {
-			return nil, err
-		}
-		return map[uint]postLikeBaseline{ids[0]: baseline}, nil
-	})
-	if err == nil {
-		err = results[postID]
-	}
-	logPostLikeRecoveryOutcome(postID, err)
-	return err
+	_ = ctx
+	metrics.RecordLikeLifecycleEvent("post_recovery_refused")
+	log.Printf("[LikeLifecycle] like_state_post_recovery_refused post=%d", postID)
+	return likes.ErrLikeRecoveryUnsafe
 }
 
 func logPostLikeRecoveryOutcome(postID uint, err error) {
@@ -177,77 +169,46 @@ func isPostLikeBatchUnavailableError(err error) bool {
 
 func setPostLikedStateWithRecovery(ctx context.Context, userID, postID uint, liked bool) (postLikeMutationResult, error) {
 	result, err := setPostLikedStateWithRedis(ctx, userID, postID, liked)
-	if !errors.Is(err, likes.ErrNotReady) {
-		return result, err
-	}
-	if recoveryErr := ensurePostLikeStateReady(ctx, postID); recoveryErr != nil && !errors.Is(recoveryErr, likes.ErrLikeRecoveryFenceLost) {
-		return postLikeMutationResult{}, recoveryErr
-	}
-	return setPostLikedStateWithRedis(ctx, userID, postID, liked)
+	recordLikeReadinessEvent(userID, postID, err)
+	return result, err
 }
 
 func loadPostLikeStateWithRecovery(ctx context.Context, userID, postID uint) (postLikeStateResult, error) {
 	result, err := loadPostLikeStateFromRedis(ctx, userID, postID)
-	if !errors.Is(err, likes.ErrNotReady) {
-		return result, err
-	}
-	if recoveryErr := ensurePostLikeStateReady(ctx, postID); recoveryErr != nil && !errors.Is(recoveryErr, likes.ErrLikeRecoveryFenceLost) {
-		return postLikeStateResult{}, recoveryErr
-	}
-	return loadPostLikeStateFromRedis(ctx, userID, postID)
+	recordLikeReadinessEvent(userID, postID, err)
+	return result, err
 }
 
 func loadPostLikeStatesWithRecovery(ctx context.Context, userID uint, postIDs []uint) (postLikeStatesLoadResult, error) {
 	result, err := loadPostLikeStatesFromRedis(ctx, userID, postIDs)
-	if err != nil || len(result.Unavailable) == 0 {
-		return result, err
-	}
-
-	recoveryResults, err := postLikeRecoveryGroup.recover(ctx, likes.NewStore(global.RedisDB), result.Unavailable, loadPostLikeBaselinesFromDB)
 	if err != nil {
-		return postLikeStatesLoadResult{}, err
+		postID := uint(0)
+		if len(postIDs) > 0 {
+			postID = postIDs[0]
+		}
+		recordLikeReadinessEvent(userID, postID, err)
 	}
+	return result, err
+}
 
-	unavailable := make(map[uint]struct{}, len(result.Unavailable))
-	for _, postID := range result.Unavailable {
-		recoverErr := recoveryResults[postID]
-		if recoverErr != nil {
-			if isPostLikeBatchUnavailableError(recoverErr) {
-				unavailable[postID] = struct{}{}
-				logPostLikeRecoveryOutcome(postID, recoverErr)
-				continue
-			}
-			return postLikeStatesLoadResult{}, recoverErr
-		}
-		logPostLikeRecoveryOutcome(postID, nil)
+func recordLikeReadinessEvent(userID, postID uint, err error) {
+	if errors.Is(err, likes.ErrUserLikeNotReady) {
+		metrics.RecordLikeLifecycleEvent("user_not_ready")
+		log.Printf("[LikeLifecycle] like_state_user_not_ready user=%d post=%d", userID, postID)
 	}
-
-	recoveredIDs := make([]uint, 0, len(result.Unavailable)-len(unavailable))
-	for _, postID := range result.Unavailable {
-		if _, isUnavailable := unavailable[postID]; !isUnavailable {
-			recoveredIDs = append(recoveredIDs, postID)
-		}
+	if errors.Is(err, likes.ErrPostLikeNotReady) {
+		metrics.RecordLikeLifecycleEvent("post_not_ready")
+		metrics.RecordLikeLifecycleEvent("post_recovery_refused")
+		log.Printf("[LikeLifecycle] like_state_post_recovery_refused user=%d post=%d", userID, postID)
 	}
-	if len(recoveredIDs) > 0 {
-		readyResult, getErr := loadPostLikeStatesFromRedis(ctx, userID, recoveredIDs)
-		if getErr != nil {
-			return postLikeStatesLoadResult{}, getErr
-		}
-		for postID, state := range readyResult.States {
-			result.States[postID] = state
-		}
-		for _, postID := range readyResult.Unavailable {
-			unavailable[postID] = struct{}{}
-		}
+	if errors.Is(err, likes.ErrLikeRedisType) {
+		metrics.RecordLikeLifecycleEvent("redis_type_error")
+		log.Printf("[LikeLifecycle] like_state_redis_type_error user=%d post=%d", userID, postID)
 	}
-
-	result.Unavailable = result.Unavailable[:0]
-	for _, postID := range postIDs {
-		if _, isUnavailable := unavailable[postID]; isUnavailable {
-			result.Unavailable = append(result.Unavailable, postID)
-		}
+	if errors.Is(err, likes.ErrLikeCountInconsistent) {
+		metrics.RecordLikeLifecycleEvent("count_inconsistent")
+		log.Printf("[LikeLifecycle] like_state_count_inconsistent user=%d post=%d", userID, postID)
 	}
-	return result, nil
 }
 
 func uniquePostIDs(postIDs []uint) []uint {

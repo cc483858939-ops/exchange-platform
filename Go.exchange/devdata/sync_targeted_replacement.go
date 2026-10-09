@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"Go.exchange/likes"
 	"Go.exchange/models"
 
 	"github.com/go-redis/redis/v7"
@@ -43,6 +44,9 @@ func SyncTargetedReplacement(ctx context.Context, db *gorm.DB, registry SourceRe
 	}
 	if syncAt.IsZero() {
 		syncAt = time.Now().UTC()
+	}
+	if options.UserLikeInitializer == nil && redisClient != nil {
+		options.UserLikeInitializer = likes.NewStore(redisClient)
 	}
 
 	maintenance := newSyncMaintenance()
@@ -87,7 +91,9 @@ func SyncTargetedReplacement(ctx context.Context, db *gorm.DB, registry SourceRe
 	result.AffectedPostIDs = sortedIDs(maintenance.affected)
 	result.NewPostIDs = sortedIDs(maintenance.newPosts)
 	result.PurgedPostIDs = sortedIDs(maintenance.purged)
-	performPostCommitMaintenance(ctx, db, redisClient, maintenance)
+	if err := performPostCommitMaintenance(ctx, db, redisClient, maintenance); err != nil {
+		return result, err
+	}
 	return result, nil
 }
 

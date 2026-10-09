@@ -844,27 +844,23 @@ func TestDevDataMirrorSyncLifecycleIntegration(t *testing.T) {
 	}
 
 	reactivatedSnapshot := data.snapshot(now.Add(6*time.Minute), keepRoot, replyRoot)
-	reactivated, err := SyncSnapshot(context.Background(), db, data.Registry, reactivatedSnapshot, nil, now.Add(6*time.Minute))
-	if err != nil {
-		t.Fatalf("reactivate sync: %v", err)
-	}
-	if reactivated.Reactivated != 1 || !containsUint(reactivated.AffectedPostIDs, localPostIDs[replyRoot.SourcePostID]) {
-		t.Fatalf("reactivate result=%#v", reactivated)
+	if _, err := SyncSnapshot(context.Background(), db, data.Registry, reactivatedSnapshot, nil, now.Add(6*time.Minute)); err == nil || !strings.Contains(err.Error(), "reactivation is unsafe") {
+		t.Fatalf("reactivate sync error=%v want fail-closed lifecycle rejection", err)
 	}
 	reactivatedMapping := findMirrorMapping(t, db, replyRoot.SourcePostID)
-	if reactivatedMapping.LocalPostID != localPostIDs[replyRoot.SourcePostID] || reactivatedMapping.State != models.DevDataMirrorPostStateActive {
-		t.Fatalf("reactivated mapping=%#v", reactivatedMapping)
+	if reactivatedMapping.LocalPostID != localPostIDs[replyRoot.SourcePostID] || reactivatedMapping.State != models.DevDataMirrorPostStateTombstone {
+		t.Fatalf("refused reactivation changed mapping=%#v", reactivatedMapping)
 	}
 	var reactivatedPost models.Post
-	if err := db.Unscoped().First(&reactivatedPost, reactivatedMapping.LocalPostID).Error; err != nil || reactivatedPost.DeletedAt.Valid {
-		t.Fatalf("reactivated Post=%#v err=%v", reactivatedPost, err)
+	if err := db.Unscoped().First(&reactivatedPost, reactivatedMapping.LocalPostID).Error; err != nil || !reactivatedPost.DeletedAt.Valid {
+		t.Fatalf("refused reactivation changed Post=%#v err=%v", reactivatedPost, err)
 	}
 	if err := db.Unscoped().First(&preservedReply, reply.ID).Error; err != nil {
 		t.Fatalf("reply disappeared on reactivation: %v", err)
 	}
 
 	if _, err := SyncSnapshot(context.Background(), db, data.Registry, desired, nil, now.Add(7*time.Minute)); err != nil {
-		t.Fatalf("retire reactivated root: %v", err)
+		t.Fatalf("preserve fail-closed root tombstone: %v", err)
 	}
 	if err := db.Unscoped().Where("id = ?", reply.ID).Delete(&models.Post{}).Error; err != nil {
 		t.Fatalf("delete reply for tombstone GC: %v", err)

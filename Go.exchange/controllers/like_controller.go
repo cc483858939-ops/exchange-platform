@@ -191,7 +191,7 @@ func writePostLikeError(ctx *gin.Context, err error) {
 	ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 }
 
-func setPostLikedStateWithRedis(ctx context.Context, userID uint, postID uint, liked bool) (postLikeMutationResult, error) {
+var setPostLikedStateWithRedis = func(ctx context.Context, userID uint, postID uint, liked bool) (postLikeMutationResult, error) {
 	state, err := likes.NewStore(global.RedisDB).Mutate(ctx, userID, postID, liked)
 	if err != nil {
 		return postLikeMutationResult{}, err
@@ -207,13 +207,13 @@ func setPostLikedStateWithRedis(ctx context.Context, userID uint, postID uint, l
 	}, nil
 }
 
-func loadPostLikeStateFromRedis(ctx context.Context, userID uint, postID uint) (postLikeStateResult, error) {
+var loadPostLikeStateFromRedis = func(ctx context.Context, userID uint, postID uint) (postLikeStateResult, error) {
 	ttl, renewalThreshold := likeStateServingReadLease()
 	state, err := likes.NewStore(global.RedisDB).GetForServing(ctx, userID, postID, ttl, renewalThreshold)
 	return postLikeStateResult{Likes: state.Count, Liked: state.Liked}, err
 }
 
-func loadPostLikeStatesFromRedis(ctx context.Context, userID uint, postIDs []uint) (postLikeStatesLoadResult, error) {
+var loadPostLikeStatesFromRedis = func(ctx context.Context, userID uint, postIDs []uint) (postLikeStatesLoadResult, error) {
 	ttl, renewalThreshold := likeStateServingReadLease()
 	states, unavailable, err := likes.NewStore(global.RedisDB).GetManyForServing(ctx, userID, postIDs, ttl, renewalThreshold)
 	if err != nil {

@@ -100,6 +100,17 @@ advisory lock。full refresh 或 rebuild 正在运行时，增量任务可以安
 增量检查点完成之后；如果 full refresh 或其他操作改写了待恢复检查点的基线，
 增量任务会报告冲突，需要 operator 对账后处理，不能保证自动补齐全部历史。
 
+这些会写入镜像的 CLI 命令要求 Redis 可用；在开始 PostgreSQL 同步前会
+验证 Redis 连接，避免把 Like 初始化或删除维护失败静默报告为成功。新建
+镜像 User 在 SQL 事务中初始化 User Like sentinel；已有或恢复的 User Set
+不会被重置。SQL 已提交后，新 Post Like 初始化或删除清理失败会让命令返回
+明确错误，提示 SQL 已提交且 Redis 维护仍待处理。
+
+同 ID 的 DevData Post 重新激活当前保持 Fail Closed。同步在 SQL 清除
+`deleted_at` 或更新镜像映射前拒绝该转换，避免旧 User Set 成员被误认为新
+生命周期的 Like。此限制适用于零 Count/Version 的情况；本阶段没有可证明
+从未存在旧关系的持久元数据。
+
 ## Persistent snapshot requirement
 
 `.devdata/x_latest.json` 不是临时 cache，而是增量连续性状态以及完整的

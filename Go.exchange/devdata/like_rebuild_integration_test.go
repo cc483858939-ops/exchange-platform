@@ -44,11 +44,14 @@ func TestDevDataMaintenanceReloadsCurrentLikesAndRejectsDeletedPostIntegration(t
 	t.Cleanup(func() { client.Close() })
 	store := likes.NewStore(client)
 	postID := uint(time.Now().UnixNano() & 0x3fffffff)
+	liveID := postID + 1
 	t.Cleanup(func() {
-		client.Del(likes.ReadyKey(postID), likes.CountKey(postID), likes.UsersKey(postID), likes.VersionKey(postID), likes.RebuildTokenKey(postID))
-		client.SRem(likes.RegistryKey, postID)
-		client.ZRem(likes.ExpiryCandidatesKey, postID)
-		client.HDel(likes.RecoverableVersionsKey, strconv.FormatUint(uint64(postID), 10))
+		for _, id := range []uint{postID, liveID} {
+			client.Del(likes.ReadyKey(id), likes.CountKey(id), likes.UsersKey(id), likes.VersionKey(id), likes.RebuildTokenKey(id))
+			client.SRem(likes.RegistryKey, id)
+			client.ZRem(likes.ExpiryCandidatesKey, id)
+			client.HDel(likes.RecoverableVersionsKey, strconv.FormatUint(uint64(id), 10))
+		}
 	})
 	if err := tx.Exec("INSERT INTO posts VALUES (?, 1, 9, NULL)", postID).Error; err != nil {
 		t.Fatal(err)
@@ -59,10 +62,20 @@ func TestDevDataMaintenanceReloadsCurrentLikesAndRejectsDeletedPostIntegration(t
 	if err := store.DeletePost(t.Context(), postID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := initializeLikeStore(store, t.Context(), liveID, 0, 0, nil); err != nil {
+		t.Fatal(err)
+	}
 	maintenance := newSyncMaintenance()
-	// A stale transaction-time snapshot must not be written back.
-	maintenance.addReactivation(postID, likes.FullState{Count: 2, Version: 3})
-	performPostCommitMaintenance(t.Context(), tx, client, maintenance)
+	// A deleted Post remains fenced; request-time and maintenance code do not
+	// reactivate its identity or restore a stale Like snapshot.
+	maintenance.addNew(postID)
+	maintenance.addPurge(liveID)
+	if err := performPostCommitMaintenance(t.Context(), tx, client, maintenance); err == nil {
+		t.Fatal("SQL-committed Like maintenance failure was not surfaced")
+	}
+	if _, err := store.LoadSummary(t.Context(), liveID); !errors.Is(err, likes.ErrPostLikeNotReady) {
+		t.Fatalf("later purge was skipped after earlier initializer failure: %v", err)
+	}
 	if _, err := store.Get(t.Context(), 11, postID); !errors.Is(err, likes.ErrPostLikeUnavailable) {
 		t.Fatalf("SPEC-01 unexpectedly reactivated nonzero state: %v", err)
 	}
@@ -72,7 +85,9 @@ func TestDevDataMaintenanceReloadsCurrentLikesAndRejectsDeletedPostIntegration(t
 	if err := store.DeletePost(t.Context(), postID); err != nil {
 		t.Fatal(err)
 	}
-	performPostCommitMaintenance(t.Context(), tx, client, maintenance)
+	if err := performPostCommitMaintenance(t.Context(), tx, client, maintenance); err == nil {
+		t.Fatal("deleted Post initialization failure was not surfaced")
+	}
 	if _, err := store.Get(t.Context(), 11, postID); !errors.Is(err, likes.ErrPostLikeUnavailable) {
 		t.Fatalf("deleted Post reactivated: %v", err)
 	}

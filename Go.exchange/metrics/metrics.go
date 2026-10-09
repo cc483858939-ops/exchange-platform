@@ -32,6 +32,8 @@ var (
 	notificationProjectionFailures               = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_notification_projection_failures_total", Help: "Notification projection failures by stage."}, []string{"stage"})
 	notificationProjectionLatency                = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_notification_projection_latency_seconds", Help: "Notification projection batch latency in seconds.", Buckets: prometheus.DefBuckets})
 	likePipelineDepth                            = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "go_exchange_like_pipeline_depth", Help: "Current Redis like pipeline depth by stage."}, []string{"stage"})
+	likeLifecycleEvents                          = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_like_lifecycle_events_total", Help: "Like lifecycle and User -> Posts repair events by bounded outcome."}, []string{"event"})
+	userLikeRelationsRemoved                     = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_user_like_relations_removed_total", Help: "Deleted Post relations removed from User Like Sets by bounded maintenance."})
 	recommendationTelemetryEvents                = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_telemetry_events_total", Help: "Recommendation telemetry events by ingestion outcome."}, []string{"status", "event_type", "reason"})
 	recommendationTelemetryBatchSize             = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_telemetry_batch_size", Help: "Number of recommendation telemetry events per ingestion request.", Buckets: []float64{1, 5, 10, 20, 50}})
 	recommendationTelemetryIngestDuration        = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_telemetry_ingest_duration_seconds", Help: "Recommendation telemetry ingestion latency in seconds.", Buckets: prometheus.DefBuckets})
@@ -83,7 +85,7 @@ var (
 func init() {
 	registry.MustRegister(
 		httpRequestsTotal, httpRequestDuration, recommendationHTTPDuration, postEmbeddingEvents, postEmbeddingFailures, postEmbeddingPublishFailures, postEmbeddingProcessingDuration, kafkaConsumerRecovery,
-		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxRowsLastSuccess, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, consumerInboxRowsLastSuccess, notificationProjectionFailures, notificationProjectionLatency, likePipelineDepth,
+		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxRowsLastSuccess, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, consumerInboxRowsLastSuccess, notificationProjectionFailures, notificationProjectionLatency, likePipelineDepth, likeLifecycleEvents, userLikeRelationsRemoved,
 		recommendationTelemetryEvents, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests,
 		recommendationRequestLogFailures, recommendationTrackingResults,
@@ -122,6 +124,25 @@ func init() {
 		recommendationTraceCleanupRuns.WithLabelValues(outcome)
 	}
 	recommendationTraceCleanupBacklogLikely.Set(0)
+}
+
+// RecordLikeLifecycleEvent accepts only fixed event values so identifiers and
+// arbitrary error text cannot become Prometheus labels.
+func RecordLikeLifecycleEvent(event string) {
+	switch event {
+	case "user_not_ready", "post_not_ready", "redis_type_error", "count_inconsistent", "user_init_failure", "post_init_failure", "post_recovery_refused",
+		"stale_relation_removed", "user_relation_cleanup_error", "user_relation_cleanup_retry", "post_reactivation_refused",
+		"post_delete_fence_success", "post_delete_cleanup_failure", "post_delete_cleanup_retry":
+		likeLifecycleEvents.WithLabelValues(event).Inc()
+	default:
+		likeLifecycleEvents.WithLabelValues("unknown").Inc()
+	}
+}
+
+func RecordUserLikeRelationsRemoved(count int64) {
+	if count > 0 {
+		userLikeRelationsRemoved.Add(float64(count))
+	}
 }
 
 func Middleware() gin.HandlerFunc {

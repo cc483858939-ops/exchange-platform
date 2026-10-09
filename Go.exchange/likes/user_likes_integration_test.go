@@ -25,8 +25,9 @@ func TestInitializeUserEmptySentinelAndFailClosedIntegration(t *testing.T) {
 	if err := store.InitializeUserEmpty(context.Background(), 0); err == nil {
 		t.Fatal("zero User ID was accepted")
 	}
-	if err := store.InitializeUserEmpty(context.Background(), userID); err != nil {
-		t.Fatal(err)
+	created, err := store.InitializeUserEmptyWithResult(context.Background(), userID)
+	if err != nil || !created {
+		t.Fatalf("first initialized-empty result=%t err=%v", created, err)
 	}
 	if initialized, err := client.SIsMember(UserLikesKey(userID), UserLikesInitSentinel).Result(); err != nil || !initialized {
 		t.Fatalf("initialized sentinel=%t err=%v", initialized, err)
@@ -34,14 +35,16 @@ func TestInitializeUserEmptySentinelAndFailClosedIntegration(t *testing.T) {
 	if ttl, err := client.TTL(UserLikesKey(userID)).Result(); err != nil || ttl != -1 {
 		t.Fatalf("User set TTL=%s err=%v want persistent", ttl, err)
 	}
-	if err := store.InitializeUserEmpty(context.Background(), userID); err != nil {
-		t.Fatalf("idempotent initialization: %v", err)
+	created, err = store.InitializeUserEmptyWithResult(context.Background(), userID)
+	if err != nil || created {
+		t.Fatalf("idempotent initialization result=%t err=%v", created, err)
 	}
 	if err := client.SAdd(UserLikesKey(userID), strconv.FormatUint(uint64(postID), 10)).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.InitializeUserEmpty(context.Background(), userID); err != nil {
-		t.Fatalf("valid existing set was not preserved: %v", err)
+	created, err = store.InitializeUserEmptyWithResult(context.Background(), userID)
+	if err != nil || created {
+		t.Fatalf("valid existing set was not preserved created=%t err=%v", created, err)
 	}
 	if liked, err := client.SIsMember(UserLikesKey(userID), strconv.FormatUint(uint64(postID), 10)).Result(); err != nil || !liked {
 		t.Fatalf("idempotent init lost relation=%t err=%v", liked, err)
@@ -50,8 +53,8 @@ func TestInitializeUserEmptySentinelAndFailClosedIntegration(t *testing.T) {
 	if err := client.SAdd(UserLikesKey(badSetUserID), strconv.FormatUint(uint64(postID), 10)).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.InitializeUserEmpty(context.Background(), badSetUserID); !errors.Is(err, ErrNotReady) {
-		t.Fatalf("nonempty set without sentinel error=%v want ErrNotReady", err)
+	if err := store.InitializeUserEmpty(context.Background(), badSetUserID); !errors.Is(err, ErrUserLikeNotReady) || !errors.Is(err, ErrNotReady) {
+		t.Fatalf("nonempty set without sentinel error=%v want User NotReady compatible with ErrNotReady", err)
 	}
 	if liked, err := client.SIsMember(UserLikesKey(badSetUserID), strconv.FormatUint(uint64(postID), 10)).Result(); err != nil || !liked {
 		t.Fatalf("rejected initialization changed existing data liked=%t err=%v", liked, err)
@@ -80,14 +83,14 @@ func TestMutationRequiresInitializedUserAndUnderflowFailsBeforeWritesIntegration
 		}
 	})
 
-	if _, err := store.Mutate(ctx, userIDs[0], postID, true); !errors.Is(err, ErrNotReady) {
-		t.Fatalf("missing User mutation error=%v want ErrNotReady", err)
+	if _, err := store.Mutate(ctx, userIDs[0], postID, true); !errors.Is(err, ErrUserLikeNotReady) || !errors.Is(err, ErrNotReady) {
+		t.Fatalf("missing User mutation error=%v want User NotReady compatible with ErrNotReady", err)
 	}
-	if _, err := store.Get(ctx, userIDs[0], postID); !errors.Is(err, ErrNotReady) {
-		t.Fatalf("missing User Get error=%v want ErrNotReady", err)
+	if _, err := store.Get(ctx, userIDs[0], postID); !errors.Is(err, ErrUserLikeNotReady) || !errors.Is(err, ErrNotReady) {
+		t.Fatalf("missing User Get error=%v want User NotReady compatible with ErrNotReady", err)
 	}
-	if _, _, err := store.GetMany(ctx, userIDs[0], []uint{postID}); !errors.Is(err, ErrNotReady) {
-		t.Fatalf("missing User GetMany error=%v want ErrNotReady", err)
+	if _, _, err := store.GetMany(ctx, userIDs[0], []uint{postID}); !errors.Is(err, ErrUserLikeNotReady) || !errors.Is(err, ErrNotReady) {
+		t.Fatalf("missing User GetMany error=%v want User NotReady compatible with ErrNotReady", err)
 	}
 	if dirty, err := client.SIsMember(DirtyKey, postID).Result(); err != nil || dirty {
 		t.Fatalf("missing User wrote Dirty=%t err=%v", dirty, err)
@@ -112,8 +115,8 @@ func TestMutationRequiresInitializedUserAndUnderflowFailsBeforeWritesIntegration
 	if err := client.SAdd(UserLikesKey(userIDs[1]), strconv.FormatUint(uint64(postID), 10)).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Mutate(ctx, userIDs[1], postID, false); !errors.Is(err, ErrNotReady) {
-		t.Fatalf("missing sentinel mutation error=%v want ErrNotReady", err)
+	if _, err := store.Mutate(ctx, userIDs[1], postID, false); !errors.Is(err, ErrUserLikeNotReady) || !errors.Is(err, ErrNotReady) {
+		t.Fatalf("missing sentinel mutation error=%v want User NotReady compatible with ErrNotReady", err)
 	}
 	if liked, err := client.SIsMember(UserLikesKey(userIDs[1]), strconv.FormatUint(uint64(postID), 10)).Result(); err != nil || !liked {
 		t.Fatalf("missing sentinel mutation changed relation=%t err=%v", liked, err)

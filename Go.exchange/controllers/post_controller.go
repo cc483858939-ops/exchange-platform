@@ -13,6 +13,7 @@ import (
 	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/likes"
+	"Go.exchange/metrics"
 	"Go.exchange/models"
 	"Go.exchange/postlanguage"
 	"Go.exchange/postmediaupload"
@@ -43,7 +44,7 @@ const (
 var loadPostAuthorForCreate = loadPublicAuthorByID
 var initializePostLikeState = func(ctx context.Context, postID uint) error {
 	if global.RedisDB == nil {
-		return nil
+		return errors.New("redis is not initialized")
 	}
 	store := likes.NewStore(global.RedisDB)
 	_, err := store.InitializeFrom(ctx, postID, false, func(ctx context.Context) (likes.FullState, error) {
@@ -67,8 +68,12 @@ var invalidatePostCreateParentDetailCache = func(postID uint) error {
 }
 
 func initializePostLikeStateAfterCommit(ctx context.Context, postID uint) {
-	if err := initializePostLikeState(ctx, postID); err != nil && global.APIDb != nil {
-		global.APIDb.Logger.Error(ctx, "failed to initialize post like state", err)
+	if err := initializePostLikeState(ctx, postID); err != nil {
+		metrics.RecordLikeLifecycleEvent("post_init_failure")
+		log.Printf("[PostCreate] initialize Redis like state post=%d: %v", postID, err)
+		if global.APIDb != nil {
+			global.APIDb.Logger.Error(ctx, "failed to initialize post like state", err)
+		}
 	}
 }
 

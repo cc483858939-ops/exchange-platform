@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
+	"Go.exchange/likes"
+	"Go.exchange/metrics"
 	"Go.exchange/models"
 
 	"github.com/go-redis/redis/v7"
@@ -54,6 +57,9 @@ func syncIncrementalBatch(ctx context.Context, db *gorm.DB, registry SourceRegis
 	if syncAt.IsZero() {
 		syncAt = time.Now().UTC()
 	}
+	if options.UserLikeInitializer == nil && redisClient != nil {
+		options.UserLikeInitializer = likes.NewStore(redisClient)
+	}
 	maintenance := newSyncMaintenance()
 	result := SyncResult{}
 	var profileChanges map[uint]bool
@@ -75,7 +81,9 @@ func syncIncrementalBatch(ctx context.Context, db *gorm.DB, registry SourceRegis
 	result.AffectedPostIDs = sortedIDs(maintenance.affected)
 	result.NewPostIDs = sortedIDs(maintenance.newPosts)
 	result.PurgedPostIDs = sortedIDs(maintenance.purged)
-	performPostCommitMaintenance(ctx, db, redisClient, maintenance)
+	if err := performPostCommitMaintenance(ctx, db, redisClient, maintenance); err != nil {
+		return result, err
+	}
 	return result, nil
 }
 
@@ -176,6 +184,13 @@ func syncIncrementalAccounts(tx *gorm.DB, registry SourceRegistry, batch Increme
 		}
 		if err := tx.Create(&user).Error; err != nil {
 			return nil, nil, fmt.Errorf("create incremental mirror user %q: %w", username, err)
+		}
+		if options.UserLikeInitializer != nil {
+			if err := options.UserLikeInitializer.InitializeUserEmpty(tx.Statement.Context, user.ID); err != nil {
+				metrics.RecordLikeLifecycleEvent("user_init_failure")
+				log.Printf("[DevData] initialize new incremental User Like state user=%d: %v", user.ID, err)
+				return nil, nil, fmt.Errorf("initialize new incremental DevData mirror User %d Like state: %w", user.ID, err)
+			}
 		}
 		account := models.DevDataMirrorAccount{
 			RegistryKey:     source.RegistryKey,
