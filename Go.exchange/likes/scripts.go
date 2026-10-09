@@ -8,8 +8,14 @@ local function type_matches(key, expected)
   return actual == 'none' or actual == expected
 end
 
-if not type_matches(KEYS[1], 'string') or
-   not type_matches(KEYS[2], 'string') or
+local ready_type = redis.call('TYPE', KEYS[1]).ok
+if ready_type ~= 'none' and ready_type ~= 'string' then
+  return redis.error_reply('LIKE_TYPE_PRECHECK')
+end
+local ready = redis.call('GET', KEYS[1])
+if ready == 'deleted' then return redis.error_reply('LIKE_POST_DELETED') end
+
+if not type_matches(KEYS[2], 'string') or
    not type_matches(KEYS[3], 'string') or
    not type_matches(KEYS[4], 'set') or
    not type_matches(KEYS[5], 'set') or
@@ -28,8 +34,6 @@ if not string.match(post_id, '^%d+$') or post_id == '0' or
   return redis.error_reply('LIKE_POST_NOT_READY')
 end
 
-local ready = redis.call('GET', KEYS[1])
-if ready == 'deleted' then return redis.error_reply('LIKE_POST_DELETED') end
 if redis.call('SISMEMBER', KEYS[4], '0') ~= 1 then
   return redis.error_reply('LIKE_USER_NOT_READY')
 end
@@ -83,6 +87,18 @@ end
 return {count, current, changed, version}
 `)
 
+var scanUserLikesScript = redis.NewScript(`
+local actual = redis.call('TYPE', KEYS[1]).ok
+if actual ~= 'none' and actual ~= 'set' then return redis.error_reply('LIKE_USER_TYPE') end
+if actual == 'none' or redis.call('SISMEMBER', KEYS[1], '0') ~= 1 then
+  return redis.error_reply('LIKE_USER_NOT_READY')
+end
+local result = redis.call('SSCAN', KEYS[1], ARGV[1], 'COUNT', ARGV[2])
+local values = {result[1]}
+for _, member in ipairs(result[2]) do table.insert(values, member) end
+return values
+`)
+
 var initializeUserEmptyScript = redis.NewScript(`
 local actual = redis.call('TYPE', KEYS[1]).ok
 if actual ~= 'none' and actual ~= 'set' then
@@ -98,31 +114,50 @@ return 1
 
 var removeDeletedUserPostRelationsScript = redis.NewScript(`
 local user_type = redis.call('TYPE', KEYS[1]).ok
-if user_type ~= 'none' and user_type ~= 'set' then return redis.error_reply('LIKE_TYPE_PRECHECK') end
-for i = 2, #KEYS do
-  local ready_type = redis.call('TYPE', KEYS[i]).ok
-  if ready_type ~= 'none' and ready_type ~= 'string' then return redis.error_reply('LIKE_TYPE_PRECHECK') end
-end
-if user_type == 'none' then return 0 end
+if user_type ~= 'none' and user_type ~= 'set' then return redis.error_reply('LIKE_USER_TYPE') end
+if user_type == 'none' then return redis.error_reply('LIKE_USER_NOT_READY') end
 if redis.call('SISMEMBER', KEYS[1], '0') ~= 1 then return redis.error_reply('LIKE_USER_NOT_READY') end
 local removed = 0
+local result = {0}
 for i = 1, #ARGV do
   local post_id = ARGV[i]
   if post_id ~= '0' then
-    local ready = redis.call('GET', KEYS[i + 1])
-    if not ready or ready == 'deleted' then
+    local ready_type = redis.call('TYPE', KEYS[i + 1]).ok
+    if ready_type ~= 'none' and ready_type ~= 'string' then
+      table.insert(result, post_id)
+      table.insert(result, 'post_ready_type_error')
+    else
+      local ready = redis.call('GET', KEYS[i + 1])
+      if not ready or ready == 'deleted' then
       removed = removed + redis.call('SREM', KEYS[1], post_id)
+      elseif ready == '1' then
+        table.insert(result, post_id)
+        table.insert(result, 'post_lifecycle_mismatch')
+      else
+        table.insert(result, post_id)
+        table.insert(result, 'post_ready_state_invalid')
+      end
     end
   end
 end
-return removed
+result[1] = removed
+return result
 `)
 
 var beginRebuildScript = redis.NewScript(`
 local ready_type = redis.call('TYPE', KEYS[1]).ok
 if ready_type ~= 'none' and ready_type ~= 'string' then return redis.error_reply('LIKE_TYPE_PRECHECK') end
 if redis.call('GET', KEYS[1]) == 'deleted' and ARGV[3] ~= '1' then return redis.error_reply('LIKE_POST_DELETED') end
-if not redis.call('SET', KEYS[2], ARGV[1], 'PX', ARGV[2], 'NX') then return redis.error_reply('LIKE_RECOVERY_FENCE_LOST') end
+local token_type = redis.call('TYPE', KEYS[2]).ok
+if token_type ~= 'none' and token_type ~= 'string' then return redis.error_reply('LIKE_TYPE_PRECHECK') end
+local current_token = redis.call('GET', KEYS[2])
+if current_token == ARGV[1] then
+  redis.call('PEXPIRE', KEYS[2], ARGV[2])
+  return 1
+end
+if current_token or not redis.call('SET', KEYS[2], ARGV[1], 'PX', ARGV[2], 'NX') then
+  return redis.error_reply('LIKE_RECOVERY_FENCE_LOST')
+end
 return 1
 `)
 

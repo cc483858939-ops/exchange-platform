@@ -28,9 +28,12 @@ Deletion tombstone expiry is enabled by default; no environment setting is
 required. `LIKE_DELETION_TOMBSTONE_TTL` defaults to `24h` and
 `LIKE_REBUILD_TOKEN_TTL` defaults to `30s`. Slow rebuilds exceeding their token
 lease are rejected and must start again with a fresh SQL read. Ordinary hot
-reads and Like mutations do not acquire tokens or query SQL. New Post creation
-and the post-commit initializer are the only automatic Post zero-state creation
-path; it uses the existing token and deleted fence.
+reads and Like mutations do not acquire tokens or query SQL. Trusted new Post
+creation and DevData import retry transient infrastructure failures at most
+three times while retaining the same token and deleted fence. If initialization
+still fails, the dry-run-first `cmd/recover-post-like-state` command provides a
+quiesced development-only recovery path; its confirmation and refusal rules are
+documented in `docs/like-state-recovery.md`.
 
 Setting `LIKE_DELETION_TOMBSTONE_EXPIRY_ENABLED=false` explicitly keeps future
 deletion fences persistent. It does not remove TTLs already armed. Normal
@@ -39,17 +42,22 @@ Redis restart/eviction loses tokens too, so old operations fail closed.
 
 ## User relation cleanup
 
-`tasks.startUserLikeRelationCleanup` pages PostgreSQL User IDs and issues one
-`SSCAN COUNT 128` command per pass for each `user:likes:{id}` Set. Redis treats
-COUNT as a scan hint; any over-returned members are retained and consumed in
-later passes. The worker verifies at most 128 candidate Post IDs per SQL query
-and runs a conditional Lua remove batch
+`tasks.startUserLikeRelationCleanup` pages PostgreSQL User IDs by ascending
+keyset pages of 64 and issues one `SSCAN COUNT 128` command per pass for the
+current `user:likes:{id}` Set. Redis treats COUNT as a scan hint; any
+over-returned members are retained and consumed in later bounded batches. When
+the SQL query after the maximum UserID returns an empty page, the worker resets
+the cursor and starts a new sweep. The worker verifies at most 128 candidate
+Post IDs per SQL query and runs a conditional Lua remove batch
 that deletes only SQL-confirmed soft-deleted or missing Post IDs whose Redis
 Ready fence is still absent or `deleted`. A `ready=1` fence is preserved. The
 script never removes sentinel `0`, changes Post Count/Version, or emits Like
-events. The cursor and a bounded candidate page stay in worker memory; after a
-restart the sweep resumes from the first SQL User ID and safely repeats prior
-work.
+events. User Set type errors and missing sentinels skip only that User for the
+current sweep; a later sweep retries it. Wrong-type Post Ready keys and
+lifecycle mismatches protect only the affected candidate and do not block other
+candidates. Infrastructure errors retain the current User and pending members
+for retry. The cursor and candidate page stay in worker memory; after a restart
+the sweep resumes from the first SQL User ID and safely repeats prior work.
 
 ## Stock User initialization
 
@@ -72,5 +80,7 @@ zero-bootstrap/initialization after tombstone expiry, independent token expiry,
 conditional release, deletion during an outstanding rebuild, persistent fences
 on cleanup failure, successful retry, and fail-closed DevData reactivation
 before SQL mutation. User relation cleanup integration tests verify SQL
-lifecycle checks and sentinel preservation. Without those settings, the
-corresponding Redis/PostgreSQL tests explicitly skip.
+lifecycle checks, unexpired and expired tombstones, multi-round pagination,
+corrupt-user isolation, infrastructure retries, and sentinel preservation.
+Without those settings, the corresponding Redis/PostgreSQL tests explicitly
+skip.

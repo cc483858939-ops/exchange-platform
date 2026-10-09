@@ -131,7 +131,8 @@ func init() {
 func RecordLikeLifecycleEvent(event string) {
 	switch event {
 	case "user_not_ready", "post_not_ready", "redis_type_error", "count_inconsistent", "user_init_failure", "post_init_failure", "post_recovery_refused",
-		"stale_relation_removed", "user_relation_cleanup_error", "user_relation_cleanup_retry", "post_reactivation_refused",
+		"stale_relation_removed", "user_relation_cleanup_error", "user_relation_cleanup_retry", "user_relation_cleanup_user_state_error",
+		"user_relation_cleanup_post_state_error", "user_relation_cleanup_lifecycle_mismatch", "post_init_retry", "post_reactivation_refused",
 		"post_delete_fence_success", "post_delete_cleanup_failure", "post_delete_cleanup_retry":
 		likeLifecycleEvents.WithLabelValues(event).Inc()
 	default:

@@ -3,9 +3,14 @@ package likes
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
+	"strings"
+	"syscall"
 	"time"
 
 	"Go.exchange/config"
+	"Go.exchange/metrics"
 
 	"github.com/go-redis/redis/v7"
 	"github.com/google/uuid"
@@ -52,6 +57,143 @@ func (s *Store) InitializeFrom(ctx context.Context, postID uint, reactivation bo
 		return false, err
 	}
 	return s.Initialize(ctx, postID, baseline.Count, baseline.Version, tokens[postID])
+}
+
+const newPostInitializationAttempts = 3
+
+var newPostInitializationRetryDelays = [...]time.Duration{50 * time.Millisecond, 100 * time.Millisecond}
+
+// InitializeNewPostFrom is only for a trusted new Post creation context. It
+// retries transient infrastructure failures a bounded number of times while
+// retaining the same rebuild token; safety and lifecycle errors fail closed.
+func (s *Store) InitializeNewPostFrom(ctx context.Context, postID uint, load func(context.Context) (FullState, error)) (bool, error) {
+	if ctx == nil {
+		return false, errors.New("new Post Like initialization context is nil")
+	}
+	if s == nil || s.client == nil {
+		return false, errors.New("redis is not initialized")
+	}
+	if postID == 0 || load == nil {
+		return false, ErrLikeRecoveryUnsafe
+	}
+
+	token := uuid.NewString()
+	acquired := false
+	acquire := func(attemptCtx context.Context, ownerToken string) error {
+		err := beginRebuildScript.Run(
+			s.client.WithContext(attemptCtx),
+			[]string{ReadyKey(postID), RebuildTokenKey(postID)},
+			ownerToken,
+			config.LikeRebuildTokenTTL().Milliseconds(),
+			0,
+		).Err()
+		if err == nil {
+			acquired = true
+		}
+		return mapScriptError(err)
+	}
+	initialize := func(attemptCtx context.Context, ownerToken string) (bool, error) {
+		baseline, err := load(attemptCtx)
+		if err != nil {
+			return false, err
+		}
+		if baseline.Count != 0 || baseline.Version != 0 {
+			return false, ErrLikeRecoveryUnsafe
+		}
+		created, err := s.Initialize(attemptCtx, postID, baseline.Count, baseline.Version, ownerToken)
+		if err == nil {
+			return created, nil
+		}
+		if errors.Is(err, ErrLikeRecoveryFenceLost) {
+			if _, stateErr := s.Get(attemptCtx, 0, postID); stateErr == nil {
+				return false, nil
+			}
+		}
+		return false, err
+	}
+	created, err := runNewPostInitializationWithRetry(ctx, token, acquire, initialize)
+	if acquired {
+		s.ReleaseRebuildMany(ctx, map[uint]string{postID: token})
+	}
+	return created, err
+}
+
+func runNewPostInitializationWithRetry(
+	ctx context.Context,
+	token string,
+	acquire func(context.Context, string) error,
+	initialize func(context.Context, string) (bool, error),
+) (bool, error) {
+	if ctx == nil || token == "" || acquire == nil || initialize == nil {
+		return false, ErrLikeRecoveryUnsafe
+	}
+	var lastErr error
+	for attempt := 0; attempt < newPostInitializationAttempts; attempt++ {
+		if err := acquire(ctx, token); err != nil {
+			lastErr = err
+			if !isRetryableLikeInitializationError(err) || attempt+1 == newPostInitializationAttempts {
+				return false, err
+			}
+			if err := waitNewPostInitializationRetry(ctx, attempt); err != nil {
+				return false, errors.Join(lastErr, err)
+			}
+			continue
+		}
+		created, err := initialize(ctx, token)
+		if err == nil {
+			return created, nil
+		}
+		lastErr = err
+		if !isRetryableLikeInitializationError(err) || attempt+1 == newPostInitializationAttempts {
+			return false, err
+		}
+		if err := waitNewPostInitializationRetry(ctx, attempt); err != nil {
+			return false, errors.Join(lastErr, err)
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("new Post Like initialization exhausted retries")
+	}
+	return false, lastErr
+}
+
+func waitNewPostInitializationRetry(ctx context.Context, attempt int) error {
+	metrics.RecordLikeLifecycleEvent("post_init_retry")
+	delay := newPostInitializationRetryDelays[len(newPostInitializationRetryDelays)-1]
+	if attempt >= 0 && attempt < len(newPostInitializationRetryDelays) {
+		delay = newPostInitializationRetryDelays[attempt]
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func isRetryableLikeInitializationError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ETIMEDOUT) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary()) {
+		return true
+	}
+	var redisErr redis.Error
+	if errors.As(err, &redisErr) {
+		message := strings.TrimSpace(redisErr.Error())
+		for _, prefix := range []string{"LOADING ", "TRYAGAIN ", "READONLY ", "CLUSTERDOWN ", "MASTERDOWN "} {
+			if strings.HasPrefix(message, prefix) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Store) beginRebuildMany(ctx context.Context, postIDs []uint, reactivation bool) (map[uint]string, map[uint]error, error) {

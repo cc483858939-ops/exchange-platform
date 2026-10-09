@@ -47,7 +47,7 @@ var initializePostLikeState = func(ctx context.Context, postID uint) error {
 		return errors.New("redis is not initialized")
 	}
 	store := likes.NewStore(global.RedisDB)
-	_, err := store.InitializeFrom(ctx, postID, false, func(ctx context.Context) (likes.FullState, error) {
+	_, err := store.InitializeNewPostFrom(ctx, postID, func(ctx context.Context) (likes.FullState, error) {
 		baseline, err := loadPostLikeBaselineFromDB(ctx, postID)
 		if err != nil {
 			return likes.FullState{}, err

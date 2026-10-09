@@ -21,12 +21,14 @@ const (
 )
 
 type userLikeRelationCleanupState struct {
-	lastUserID uint
-	users      []uint
-	userIndex  int
-	userID     uint
-	scanCursor uint64
-	pending    []uint
+	lastUserID      uint
+	users           []uint
+	userIndex       int
+	userID          uint
+	scanCursor      uint64
+	pending         []uint
+	scanUserLikes   func(context.Context, *likes.Store, uint, uint64, int) ([]uint, uint64, error)
+	removeRelations func(context.Context, *likes.Store, uint, []uint) (int64, []likes.UserLikeCleanupIssue, error)
 }
 
 func startUserLikeRelationCleanup(ctx context.Context, wg interface {
@@ -86,8 +88,20 @@ func runUserLikeRelationCleanupPass(ctx context.Context, store *likes.Store, db 
 	}
 
 	if len(state.pending) == 0 {
-		postIDs, next, err := store.ScanUserLikes(ctx, state.userID, state.scanCursor, userLikeCleanupScanCount)
+		scan := state.scanUserLikes
+		if scan == nil {
+			scan = func(ctx context.Context, store *likes.Store, userID uint, cursor uint64, count int) ([]uint, uint64, error) {
+				return store.ScanUserLikes(ctx, userID, cursor, count)
+			}
+		}
+		postIDs, next, err := scan(ctx, store, state.userID, state.scanCursor, userLikeCleanupScanCount)
 		if err != nil {
+			if skipUserLikeCleanupUser(err) {
+				metrics.RecordLikeLifecycleEvent("user_relation_cleanup_user_state_error")
+				log.Printf("[UserLikeRelationCleanup] user=%d skipped for permanent Like Set state error: %v", state.userID, err)
+				advanceUser(state)
+				return nil
+			}
 			return err
 		}
 		state.scanCursor = next
@@ -109,17 +123,32 @@ func runUserLikeRelationCleanupPass(ctx context.Context, store *likes.Store, db 
 	if err != nil {
 		return err
 	}
-	removed, err := store.RemoveDeletedUserPostRelations(ctx, state.userID, deletedIDs)
+	remove := state.removeRelations
+	if remove == nil {
+		remove = func(ctx context.Context, store *likes.Store, userID uint, postIDs []uint) (int64, []likes.UserLikeCleanupIssue, error) {
+			return store.RemoveDeletedUserPostRelationsDetailed(ctx, userID, postIDs)
+		}
+	}
+	removed, issues, err := remove(ctx, store, state.userID, deletedIDs)
 	if err != nil {
-		if errors.Is(err, likes.ErrUserLikeNotReady) {
-			metrics.RecordLikeLifecycleEvent("user_relation_cleanup_error")
-			log.Printf("[UserLikeRelationCleanup] user=%d relations lack initialization sentinel; no members removed", state.userID)
+		if skipUserLikeCleanupUser(err) {
+			metrics.RecordLikeLifecycleEvent("user_relation_cleanup_user_state_error")
+			log.Printf("[UserLikeRelationCleanup] user=%d skipped for permanent Like Set state error: %v", state.userID, err)
 			advanceUser(state)
 			return nil
 		}
 		return err
 	}
 	state.pending = state.pending[limit:]
+	for _, issue := range issues {
+		switch issue.Kind {
+		case likes.UserLikeCleanupPostReadyTypeError:
+			metrics.RecordLikeLifecycleEvent("user_relation_cleanup_post_state_error")
+		case likes.UserLikeCleanupLifecycleMismatch, likes.UserLikeCleanupUnexpectedReady:
+			metrics.RecordLikeLifecycleEvent("user_relation_cleanup_lifecycle_mismatch")
+		}
+		log.Printf("[UserLikeRelationCleanup] user=%d post=%d relation protected; state_issue=%s", state.userID, issue.PostID, issue.Kind)
+	}
 	if removed > 0 {
 		metrics.RecordUserLikeRelationsRemoved(removed)
 		log.Printf("[UserLikeRelationCleanup] user=%d removed=%d", state.userID, removed)
@@ -130,6 +159,10 @@ func runUserLikeRelationCleanupPass(ctx context.Context, store *likes.Store, db 
 	return nil
 }
 
+func skipUserLikeCleanupUser(err error) bool {
+	return errors.Is(err, likes.ErrUserLikeNotReady) || errors.Is(err, likes.ErrUserLikeRedisType)
+}
+
 func loadNextUserPage(ctx context.Context, db *gorm.DB, state *userLikeRelationCleanupState) error {
 	type userIDRow struct{ ID uint }
 	var rows []userIDRow
@@ -137,6 +170,15 @@ func loadNextUserPage(ctx context.Context, db *gorm.DB, state *userLikeRelationC
 		Select("id").Where("id > ?", state.lastUserID).
 		Order("id ASC").Limit(userLikeCleanupUserPageSize).Scan(&rows).Error; err != nil {
 		return err
+	}
+	if len(rows) == 0 {
+		state.lastUserID = 0
+		state.users = nil
+		state.userIndex = 0
+		state.userID = 0
+		state.scanCursor = 0
+		state.pending = nil
+		return nil
 	}
 	state.users = state.users[:0]
 	state.userIndex = 0
@@ -187,12 +229,14 @@ func findDeletedPostIDs(ctx context.Context, db *gorm.DB, candidates []uint) ([]
 }
 
 func advanceUser(state *userLikeRelationCleanupState) {
-	state.userID = 0
 	state.scanCursor = 0
 	state.pending = nil
 	state.userIndex++
 	if state.userIndex >= len(state.users) {
 		state.users = nil
 		state.userIndex = 0
+		state.userID = 0
+		return
 	}
+	state.userID = state.users[state.userIndex]
 }

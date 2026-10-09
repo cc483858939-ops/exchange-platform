@@ -29,6 +29,7 @@ func TestBehaviorClaimsAreOwnedAndVersionAwareIntegration(t *testing.T) {
 	pair := BehaviorPair(userID, postID)
 	cleanup := func() {
 		client.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
+		client.Del(UserLikesKey(userID))
 		client.SRem(DirtyKey, postID)
 		client.ZRem(ProcessingKey, postID)
 		client.HDel(ClaimsKey, strconv.FormatUint(uint64(postID), 10))
@@ -46,6 +47,9 @@ func TestBehaviorClaimsAreOwnedAndVersionAwareIntegration(t *testing.T) {
 	created, err := initializeLikeStore(store, ctx, postID, 0, 0, nil)
 	if err != nil || !created {
 		t.Fatalf("initialize created=%t err=%v", created, err)
+	}
+	if err := store.InitializeUserEmpty(ctx, userID); err != nil {
+		t.Fatalf("initialize user Like sentinel: %v", err)
 	}
 	for version := 1; version <= 100; version++ {
 		result, err := store.Mutate(ctx, userID, postID, version%2 == 1)

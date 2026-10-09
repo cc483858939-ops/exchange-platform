@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -197,11 +198,14 @@ func TestValidateEventingConfigByRuntime(t *testing.T) {
 func TestValidateEventingRejectsUnsupportedLikeStateExpiry(t *testing.T) {
 	t.Setenv("LIKE_STATE_EXPIRY_ENABLED", "true")
 	cfg := &Config{Kafka: KafkaConfig{ActivityEventsTopic: "activity", ConsumerDLQTopic: "consumer-dlq", NotificationGroupID: "notifications"}}
-	if err := ValidateAPIEventingConfig(cfg); err == nil || !strings.Contains(err.Error(), "persistent User -> Posts relations") {
+	if err := ValidateAPIEventingConfig(cfg); !errors.Is(err, ErrLikeStateExpiryUnsupported) || !strings.Contains(err.Error(), "persistent User -> Posts relations") {
 		t.Fatalf("API expiry validation error=%v want lifecycle rejection", err)
 	}
-	if err := ValidateWorkerEventingConfig(cfg); err == nil || !strings.Contains(err.Error(), "persistent User -> Posts relations") {
+	if err := ValidateWorkerEventingConfig(cfg); !errors.Is(err, ErrLikeStateExpiryUnsupported) || !strings.Contains(err.Error(), "persistent User -> Posts relations") {
 		t.Fatalf("worker expiry validation error=%v want lifecycle rejection", err)
+	}
+	if err := ValidateLikeStateExpiryConfig(); !errors.Is(err, ErrLikeStateExpiryUnsupported) {
+		t.Fatalf("direct expiry validation error=%v want stable sentinel", err)
 	}
 }
 

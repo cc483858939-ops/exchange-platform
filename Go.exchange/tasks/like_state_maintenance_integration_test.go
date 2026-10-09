@@ -85,7 +85,7 @@ func assertLikeStateExpiryRejected(t *testing.T, env *likeStateClosureIntegratio
 	}
 }
 
-func TestLikeStateMaintenanceRejectsExpiryUntilSPEC02Integration(t *testing.T) {
+func TestLikeStateMaintenanceRejectsPostOnlyExpiryWhileUserRelationsPersistIntegration(t *testing.T) {
 	configureLikeStateMaintenanceExpiry(t)
 	env, _ := newLikeStateMaintenanceFixture(t, 2, 10)
 	if _, err := runLikeStateMaintenancePass(t.Context(), env.store, env.db, 0, time.Now().UTC()); !errors.Is(err, likes.ErrLikeStateExpiryUnsupported) {

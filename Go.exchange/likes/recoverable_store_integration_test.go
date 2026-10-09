@@ -272,7 +272,15 @@ func TestStoreLuaTypePreflightPreventsPurgePartialMutationIntegration(t *testing
 	if created, err := initializeLikeStore(store, ctx, postID, 1, 1, []uint{11}); err != nil || !created {
 		t.Fatalf("Initialize created=%t err=%v", created, err)
 	}
-	client.Set(VersionKey(postID), "wrong type", 0)
+	if err := client.Set(RebuildTokenKey(postID), "stale-token", time.Minute).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Del(VersionKey(postID)).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RPush(VersionKey(postID), "wrong Redis type").Err(); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.PurgePost(ctx, postID); !errors.Is(err, ErrLikeRedisType) {
 		t.Fatalf("Purge error=%v want ErrLikeRedisType", err)
 	}
@@ -280,6 +288,9 @@ func TestStoreLuaTypePreflightPreventsPurgePartialMutationIntegration(t *testing
 		if exists, err := client.Exists(key).Result(); err != nil || exists != 1 {
 			t.Fatalf("key=%q exists=%d err=%v after preflight failure", key, exists, err)
 		}
+	}
+	if exists, err := client.Exists(RebuildTokenKey(postID)).Result(); err != nil || exists != 0 {
+		t.Fatalf("rebuild token exists=%d err=%v; purge must revoke stale writers even when key preflight fails", exists, err)
 	}
 	if exists, err := client.Exists(UsersKey(postID)).Result(); err != nil || exists != 0 {
 		t.Fatalf("legacy Post Users key exists=%d err=%v", exists, err)

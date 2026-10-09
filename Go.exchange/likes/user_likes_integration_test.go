@@ -70,6 +70,50 @@ func TestInitializeUserEmptySentinelAndFailClosedIntegration(t *testing.T) {
 	}
 }
 
+func TestScanUserLikesReturnsTypedUserReadinessAndTypeErrorsIntegration(t *testing.T) {
+	client, store, postID := openRecoverableStoreIntegration(t)
+	userID := postID + 151
+	noSentinelUserID := userID + 1
+	wrongTypeUserID := userID + 2
+	t.Cleanup(func() {
+		client.Del(UserLikesKey(userID), UserLikesKey(noSentinelUserID), UserLikesKey(wrongTypeUserID))
+	})
+	if err := store.InitializeUserEmpty(t.Context(), userID); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SAdd(UserLikesKey(userID), strconv.FormatUint(uint64(postID+1), 10)).Err(); err != nil {
+		t.Fatal(err)
+	}
+	var scanned []uint
+	var cursor uint64
+	for {
+		page, next, err := store.ScanUserLikes(t.Context(), userID, cursor, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		scanned = append(scanned, page...)
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	if len(scanned) != 1 || scanned[0] != postID+1 {
+		t.Fatalf("scanned=%v want only PostID %d and no sentinel", scanned, postID+1)
+	}
+	if err := client.SAdd(UserLikesKey(noSentinelUserID), postID+2).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.ScanUserLikes(t.Context(), noSentinelUserID, 0, 128); !errors.Is(err, ErrUserLikeNotReady) || !errors.Is(err, ErrNotReady) {
+		t.Fatalf("missing sentinel error=%v want User NotReady", err)
+	}
+	if err := client.LPush(UserLikesKey(wrongTypeUserID), "corrupt").Err(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.ScanUserLikes(t.Context(), wrongTypeUserID, 0, 128); !errors.Is(err, ErrUserLikeRedisType) || !errors.Is(err, ErrLikeRedisType) {
+		t.Fatalf("wrong User key type error=%v want typed Redis key error", err)
+	}
+}
+
 func TestMutationRequiresInitializedUserAndUnderflowFailsBeforeWritesIntegration(t *testing.T) {
 	client, store, postID := openRecoverableStoreIntegration(t)
 	ctx := context.Background()

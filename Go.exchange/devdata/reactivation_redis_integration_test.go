@@ -58,8 +58,8 @@ func TestDevDataReactivationFailsClosedUntilUserLifecycleIntegration(t *testing.
 	if err := store.PurgePost(ctx, postID); err != nil {
 		t.Fatalf("purge Post aggregate state: %v", err)
 	}
-	if _, err := store.Get(ctx, 11, postID); err != likes.ErrNotReady {
-		t.Fatalf("purged state error=%v, want ErrNotReady", err)
+	if _, err := store.Get(ctx, 11, postID); !errors.Is(err, likes.ErrPostLikeNotReady) || !errors.Is(err, likes.ErrNotReady) {
+		t.Fatalf("purged state error=%v, want Post NotReady compatible with ErrNotReady", err)
 	}
 
 	loaded := false

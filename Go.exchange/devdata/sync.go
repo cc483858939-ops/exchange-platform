@@ -789,7 +789,7 @@ func performPostCommitMaintenance(ctx context.Context, db *gorm.DB, redisClient 
 	store := likes.NewStore(redisClient)
 	var maintenanceErrors []error
 	for _, postID := range sortedIDs(maintenance.newPosts) {
-		if _, err := store.InitializeFrom(ctx, postID, false, currentPostLikeStateLoader(db, postID)); err != nil {
+		if _, err := store.InitializeNewPostFrom(ctx, postID, currentPostLikeStateLoader(db, postID)); err != nil {
 			metrics.RecordLikeLifecycleEvent("post_init_failure")
 			log.Printf("[DevData] initialize Redis Like state post=%d: %v", postID, err)
 			maintenanceErrors = append(maintenanceErrors, fmt.Errorf("initialize Redis Like state for new Post %d: %w", postID, err))

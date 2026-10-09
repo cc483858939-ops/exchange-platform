@@ -11,7 +11,7 @@ bootstrap source while Kafka may still be behind.
 | --- | --- |
 | New registration | Create the SQL User in a transaction, initialize Redis Set `{0}`, commit SQL, then issue tokens. Redis failure rolls back SQL and returns 503. |
 | Existing User Set missing or missing sentinel | Fail closed. Login and refresh do not initialize it. |
-| New Post | The trusted create path initializes Count/Version/Ready through the existing rebuild token and deleted fence. A failure is logged and measured; the Post is not reported Ready in Redis. |
+| New Post | The trusted create path initializes Count/Version/Ready through the existing rebuild token and deleted fence. It retries transient infrastructure failures at most three times with the same token. A failure is logged and measured; the Post is not Ready in Redis. |
 | Existing Post Count/Version/Ready missing | Fail closed with Post NotReady. HTTP requests do not load a SQL baseline or write zero. |
 | Post deleted | Redis deletion fence rejects Like/Unlike; durable `PostLikeCleanup` retries propagation. |
 | Wrong Redis key type or inconsistent Count | Return an explicit unavailable error and emit a bounded lifecycle metric. Do not repair automatically. |
@@ -25,15 +25,23 @@ projection.
 
 ## Deleted relation cleanup
 
-The worker scans SQL Users by ascending keyset pages, then uses one
+The worker scans SQL Users by ascending keyset pages of 64, then uses one
 `SSCAN COUNT 128` per pass for the current User Set. COUNT is a Redis hint;
-over-returned members remain in memory for later passes. Each pass checks at
-most 128 Post IDs against SQL and sends at most 128 IDs to a Lua script. The SQL
-query treats soft-deleted and physically missing Posts as deleted. Lua removes a
-relation only while its Ready key is absent or `deleted`, preserves Ready `1`,
-and never removes sentinel `0` or updates any Post aggregate/event key.
-The counter `go_exchange_user_like_relations_removed_total` increments by the
-actual number removed, and cleanup failures/retries use bounded event labels.
+over-returned members remain pending for later passes, while each SQL check and
+Lua deletion batch is capped at 128 IDs. Completing the last SQL page resets the
+cursor for the next sweep. A SQL error is returned as a retryable pass failure
+and does not reset the cursor. The SQL query treats soft-deleted and physically
+missing Posts as deleted. Lua removes a relation only while its Ready key is
+absent or `deleted`, preserves Ready `1`, and never removes sentinel `0` or
+updates any Post aggregate/event key.
+
+A User key type error or missing sentinel is logged and skipped for the current
+sweep, so later Users are processed; a later sweep retries that User. A
+wrong-type Post Ready key or SQL-deleted/Redis-active mismatch protects only
+that candidate, records a bounded lifecycle event, and allows other candidates
+to proceed. Redis connection failures retain the current User and pending
+members for retry. The counter `go_exchange_user_like_relations_removed_total`
+increments by the actual number removed.
 
 Progress is in memory. A worker restart starts from the first SQL User ID and
 repeats the idempotent scan. The current PostID-only relation format cannot
@@ -77,6 +85,38 @@ The tool never runs automatically in API or Worker startup. It does not issue
 history, stop and use a separately approved development reset or restore
 procedure; do not initialize empty User Sets over that state.
 
+## Failed new Post initialization
+
+After the trusted creation path exhausts its bounded transient retries, an
+operator may inspect a specific active Post with the recovery command. It is
+dry-run by default:
+
+```powershell
+go run ./cmd/recover-post-like-state --post-id=123
+```
+
+For an apply, stop API and Like workers, review and drain Snapshot/Behavior
+queues and Kafka lag, confirm this is an explicitly approved development
+recovery with disposable Like history, then pass all confirmations:
+
+```powershell
+go run ./cmd/recover-post-like-state `
+  --post-id=123 `
+  --apply `
+  --confirm-development-reset `
+  --confirm-like-writes-paused `
+  --confirm-snapshot-behavior-kafka-drained
+```
+
+The command checks that the Post is active, SQL Count/Version are zero, no
+`post_reaction` rows exist, Redis aggregate/registry/token/expiry state is
+consistent with a never-initialized Post, Snapshot claims are clear, and global
+Behavior queues are empty. It repeats SQL and Redis preflight after taking the
+rebuild token. Any evidence of history, partial Redis state, deletion, or queue
+work is a refusal; this is a controlled development initialization, not an
+online recovery of lost Like history. The command never clears queues or uses
+`FLUSHDB`.
+
 ## Runtime incident with missing Redis state
 
 1. Keep Like writes closed while investigating. Do not let a normal HTTP
@@ -100,9 +140,10 @@ procedure; do not initialize empty User Sets over that state.
 
 - There is no automatic online recovery for an existing User Set or Post
   aggregate lost from Redis.
-- Post creation initialization failures are observable but have no separate
-  durable retry queue in this stage; an operator must resolve the Redis issue
-  and use a trusted creation/recovery workflow.
+- Post creation initialization failures receive three bounded same-token
+  attempts. There is no durable retry queue; an operator must resolve the
+  Redis issue and invoke the explicit Post recovery command in a quiesced
+  development environment.
 - DevData same-ID reactivation remains unsupported even for apparently zero
   aggregates, because this schema has no proof that stale User Set membership
   never existed.

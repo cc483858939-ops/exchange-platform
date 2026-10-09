@@ -540,13 +540,27 @@ func (s *Store) ScanUserLikes(ctx context.Context, userID uint, cursor uint64, c
 	if count <= 0 {
 		count = 100
 	}
-	members, next, err := s.client.WithContext(ctx).SScan(UserLikesKey(userID), cursor, "", int64(count)).Result()
-	if err != nil {
-		return nil, cursor, err
+	if count > 128 {
+		count = 128
 	}
-	postIDs := make([]uint, 0, len(members))
-	for _, member := range members {
-		postID, parseErr := strconv.ParseUint(member, 10, 64)
+	result, err := scanUserLikesScript.Run(s.client.WithContext(ctx), []string{UserLikesKey(userID)}, cursor, count).Result()
+	if err != nil {
+		return nil, cursor, mapScriptError(err)
+	}
+	values, ok := result.([]interface{})
+	if !ok {
+		return nil, cursor, fmt.Errorf("unexpected User Like SSCAN response type %T", result)
+	}
+	if len(values) == 0 {
+		return nil, cursor, errors.New("unexpected User Like SSCAN response")
+	}
+	next, parseErr := strconv.ParseUint(asString(values[0]), 10, 64)
+	if parseErr != nil {
+		return nil, cursor, fmt.Errorf("parse User Like SSCAN cursor: %w", parseErr)
+	}
+	postIDs := make([]uint, 0, len(values)-1)
+	for _, value := range values[1:] {
+		postID, parseErr := strconv.ParseUint(asString(value), 10, 64)
 		if parseErr != nil || postID == 0 || uint64(uint(postID)) != postID {
 			continue
 		}
@@ -559,14 +573,34 @@ func (s *Store) ScanUserLikes(ctx context.Context, userID uint, cursor uint64, c
 // Post relations. Redis rechecks each Ready fence atomically and never touches
 // the sentinel or any Post aggregate, queue, or event key.
 func (s *Store) RemoveDeletedUserPostRelations(ctx context.Context, userID uint, postIDs []uint) (int64, error) {
+	removed, issues, err := s.RemoveDeletedUserPostRelationsDetailed(ctx, userID, postIDs)
+	if err != nil {
+		return removed, err
+	}
+	if len(issues) > 0 {
+		switch issues[0].Kind {
+		case UserLikeCleanupPostReadyTypeError:
+			return removed, fmt.Errorf("Post %d Ready key has an unexpected type: %w", issues[0].PostID, ErrPostLikeRedisType)
+		case UserLikeCleanupLifecycleMismatch:
+			return removed, fmt.Errorf("Post %d is SQL-deleted but Redis Ready is active: %w", issues[0].PostID, ErrLikeRelationLifecycleMismatch)
+		default:
+			return removed, fmt.Errorf("Post %d has an unexpected Redis Ready value: %w", issues[0].PostID, ErrPostLikeNotReady)
+		}
+	}
+	return removed, nil
+}
+
+// RemoveDeletedUserPostRelationsDetailed isolates malformed Post Ready keys
+// so they cannot block healthy candidates in this bounded batch.
+func (s *Store) RemoveDeletedUserPostRelationsDetailed(ctx context.Context, userID uint, postIDs []uint) (int64, []UserLikeCleanupIssue, error) {
 	if s == nil || s.client == nil {
-		return 0, errors.New("redis is not initialized")
+		return 0, nil, errors.New("redis is not initialized")
 	}
 	if userID == 0 {
-		return 0, errors.New("invalid user id")
+		return 0, nil, errors.New("invalid user id")
 	}
 	if len(postIDs) > 128 {
-		return 0, errors.New("relation cleanup batch exceeds 128 Post IDs")
+		return 0, nil, errors.New("relation cleanup batch exceeds 128 Post IDs")
 	}
 	keys := make([]string, 1, len(postIDs)+1)
 	keys[0] = UserLikesKey(userID)
@@ -579,10 +613,38 @@ func (s *Store) RemoveDeletedUserPostRelations(ctx context.Context, userID uint,
 		args = append(args, strconv.FormatUint(uint64(postID), 10))
 	}
 	if len(args) == 0 {
-		return 0, nil
+		return 0, nil, nil
 	}
-	removed, err := removeDeletedUserPostRelationsScript.Run(s.client.WithContext(ctx), keys, args...).Int64()
-	return removed, mapScriptError(err)
+	result, err := removeDeletedUserPostRelationsScript.Run(s.client.WithContext(ctx), keys, args...).Result()
+	if err != nil {
+		return 0, nil, mapScriptError(err)
+	}
+	values, ok := result.([]interface{})
+	if !ok {
+		return 0, nil, fmt.Errorf("unexpected User Like relation cleanup response type %T", result)
+	}
+	if len(values) == 0 || (len(values)-1)%2 != 0 {
+		return 0, nil, errors.New("unexpected User Like relation cleanup response")
+	}
+	removed := asInt64(values[0])
+	if removed < 0 {
+		return 0, nil, errors.New("negative User Like relation cleanup count")
+	}
+	issues := make([]UserLikeCleanupIssue, 0, (len(values)-1)/2)
+	for index := 1; index < len(values); index += 2 {
+		postIDValue, parseErr := strconv.ParseUint(asString(values[index]), 10, 64)
+		if parseErr != nil || postIDValue == 0 || uint64(uint(postIDValue)) != postIDValue {
+			return removed, nil, fmt.Errorf("parse User Like cleanup PostID: %q", asString(values[index]))
+		}
+		kind := asString(values[index+1])
+		switch kind {
+		case UserLikeCleanupPostReadyTypeError, UserLikeCleanupLifecycleMismatch, UserLikeCleanupUnexpectedReady:
+		default:
+			return removed, nil, fmt.Errorf("unknown User Like cleanup issue kind %q", kind)
+		}
+		issues = append(issues, UserLikeCleanupIssue{PostID: uint(postIDValue), Kind: kind})
+	}
+	return removed, issues, nil
 }
 
 func (s *Store) LoadExpiryCandidates(ctx context.Context, cutoff time.Time, batch int) ([]uint, error) {
@@ -834,6 +896,10 @@ func mapScriptError(err error) error {
 	}
 	message := err.Error()
 	switch {
+	case strings.Contains(message, "LIKE_USER_TYPE"):
+		return userLikeRedisTypeError()
+	case strings.Contains(message, "LIKE_POST_TYPE"):
+		return postLikeRedisTypeError()
 	case strings.Contains(message, "LIKE_POST_DELETED"):
 		return ErrPostLikeUnavailable
 	case strings.Contains(message, "LIKE_USER_NOT_READY"):

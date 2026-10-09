@@ -3,6 +3,8 @@ package likes
 import (
 	"errors"
 	"time"
+
+	"Go.exchange/config"
 )
 
 // ErrNotReady is retained for callers that used the original readiness error.
@@ -10,15 +12,41 @@ import (
 var ErrNotReady = errors.New("post like state is not ready")
 
 var (
-	ErrUserLikeNotReady           = errors.New("user like state is not ready")
-	ErrPostLikeNotReady           = errors.New("post like state is not ready")
-	ErrPostLikeUnavailable        = errors.New("post not found")
-	ErrLikeProjectionNotReady     = errors.New("post like projection is not ready")
-	ErrLikeRecoveryUnsafe         = errors.New("post like state cannot be safely recovered")
-	ErrLikeRecoveryFenceLost      = errors.New("post like recovery fence changed")
-	ErrLikeRedisType              = errors.New("unexpected Redis key type")
-	ErrLikeCountInconsistent      = errors.New("post like count is inconsistent with user relation")
-	ErrLikeStateExpiryUnsupported = errors.New("post like state expiry is unsupported while persistent user relations remain")
+	ErrUserLikeNotReady              = errors.New("user like state is not ready")
+	ErrPostLikeNotReady              = errors.New("post like state is not ready")
+	ErrPostLikeUnavailable           = errors.New("post not found")
+	ErrLikeProjectionNotReady        = errors.New("post like projection is not ready")
+	ErrLikeRecoveryUnsafe            = errors.New("post like state cannot be safely recovered")
+	ErrLikeRecoveryFenceLost         = errors.New("post like recovery fence changed")
+	ErrLikeRedisType                 = errors.New("unexpected Redis key type")
+	ErrUserLikeRedisType             = errors.New("unexpected User Like Redis key type")
+	ErrPostLikeRedisType             = errors.New("unexpected Post Like Redis key type")
+	ErrLikeRelationLifecycleMismatch = errors.New("deleted Post has active Redis Like state")
+	ErrLikeCountInconsistent         = errors.New("post like count is inconsistent with user relation")
+	ErrLikeStateExpiryUnsupported    = config.ErrLikeStateExpiryUnsupported
+)
+
+type likeRedisTypeError struct{ kind error }
+
+func (e likeRedisTypeError) Error() string { return e.kind.Error() }
+
+func (e likeRedisTypeError) Is(target error) bool {
+	return target == ErrLikeRedisType || target == e.kind
+}
+
+func userLikeRedisTypeError() error { return likeRedisTypeError{kind: ErrUserLikeRedisType} }
+
+func postLikeRedisTypeError() error { return likeRedisTypeError{kind: ErrPostLikeRedisType} }
+
+type UserLikeCleanupIssue struct {
+	PostID uint
+	Kind   string
+}
+
+const (
+	UserLikeCleanupPostReadyTypeError = "post_ready_type_error"
+	UserLikeCleanupLifecycleMismatch  = "post_lifecycle_mismatch"
+	UserLikeCleanupUnexpectedReady    = "post_ready_state_invalid"
 )
 
 type readinessError struct{ kind error }

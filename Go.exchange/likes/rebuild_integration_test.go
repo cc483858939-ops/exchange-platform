@@ -3,6 +3,7 @@ package likes
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -153,5 +154,92 @@ func TestExplicitReactivationFailsClosedUntilUserLifecycleIsImplementedIntegrati
 	}
 	if ready, err := store.client.Get(ReadyKey(postID)).Result(); err != nil || ready != "deleted" {
 		t.Fatalf("reactivation changed deletion fence=%q err=%v", ready, err)
+	}
+}
+
+func TestNewPostInitializationNeverOverwritesChangedAggregateIntegration(t *testing.T) {
+	client, store, postID := openRecoverableStoreIntegration(t)
+	userID := postID + 301
+	t.Cleanup(func() { client.Del(UserLikesKey(userID)) })
+	if err := store.InitializeUserEmpty(t.Context(), userID); err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.InitializeNewPostFrom(t.Context(), postID, func(context.Context) (FullState, error) {
+		return FullState{}, nil
+	})
+	if err != nil || !created {
+		t.Fatalf("initialization created=%t err=%v", created, err)
+	}
+	if _, err := store.Mutate(t.Context(), userID, postID, true); err != nil {
+		t.Fatal(err)
+	}
+	created, err = store.InitializeNewPostFrom(t.Context(), postID, func(context.Context) (FullState, error) {
+		return FullState{}, nil
+	})
+	if err != nil || created {
+		t.Fatalf("repeat initialization created=%t err=%v", created, err)
+	}
+	state, err := store.LoadFullState(t.Context(), postID)
+	if err != nil || state.Count != 1 || state.Version != 1 {
+		t.Fatalf("state=%+v err=%v, initialization overwrote changed aggregate", state, err)
+	}
+}
+
+func TestNewPostInitializationRejectsDeletedPostIntegration(t *testing.T) {
+	_, store, postID := openRecoverableStoreIntegration(t)
+	if err := store.DeletePost(t.Context(), postID); err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.InitializeNewPostFrom(t.Context(), postID, func(context.Context) (FullState, error) {
+		return FullState{}, nil
+	})
+	if created || !errors.Is(err, ErrPostLikeUnavailable) {
+		t.Fatalf("deleted Post initialized created=%t err=%v", created, err)
+	}
+	if ready, err := store.client.Get(ReadyKey(postID)).Result(); err != nil || ready != "deleted" {
+		t.Fatalf("deletion fence changed ready=%q err=%v", ready, err)
+	}
+}
+
+func TestConcurrentNewPostInitializersCannotOverwriteOneAnotherIntegration(t *testing.T) {
+	_, store, postID := openRecoverableStoreIntegration(t)
+	type result struct {
+		created bool
+		err     error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			created, err := store.InitializeNewPostFrom(t.Context(), postID, func(context.Context) (FullState, error) {
+				return FullState{}, nil
+			})
+			results <- result{created: created, err: err}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	var successful, created int
+	for result := range results {
+		if result.err == nil {
+			successful++
+			if result.created {
+				created++
+			}
+		} else if !errors.Is(result.err, ErrLikeRecoveryFenceLost) {
+			t.Fatalf("concurrent initializer error=%v", result.err)
+		}
+	}
+	if successful == 0 || created > 1 {
+		t.Fatalf("successful=%d created=%d; expected one stable initialization", successful, created)
+	}
+	state, err := store.LoadFullState(t.Context(), postID)
+	if err != nil || state.Count != 0 || state.Version != 0 {
+		t.Fatalf("final state=%+v err=%v", state, err)
 	}
 }

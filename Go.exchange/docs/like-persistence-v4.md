@@ -1,65 +1,58 @@
 # Like persistence v4: Redis state aggregation
 
-The online like path has one implementation only: Redis atomically stores the current user state, Post count, and Post version. PostgreSQL is an asynchronous projection. A SQL projection is not used to bootstrap ordinary requests because Kafka may still be behind; there is no DB direct like write, Redis Stream, dual write, or runtime mode switch.
+The online Like path has one implementation: Redis atomically stores the current User relation and Post aggregate. PostgreSQL `posts.like_count`, `posts.like_sync_version`, and `post_reaction` are asynchronous Kafka projections. A lagging SQL projection is never used to rebuild an ordinary request.
 
-## Write path
+## Redis keys and write path
 
-One Lua script validates the Redis baseline, applies SADD or SREM for the user, changes count/version only on state change, and writes:
+- `user:likes:{userID}` is a Set of liked Post IDs. Sentinel `0` means the User Set was initialized.
+- `post:like:{postID}:ready`, `post:like:{postID}:count`, and `post:like:{postID}:version` hold the Post aggregate state.
+- `post:likes:dirty`, `post:likes:processing`, and `post:likes:claims` carry absolute Post snapshot delivery state.
+- `post:likes:behavior:dirty`, `post:likes:behavior:state`, `post:likes:behavior:processing`, and `post:likes:behavior:claims` carry the latest User/Post behavior state and delivery claims. A pair is encoded as `userID:postID`.
+- `post:likes:registry` tracks initialized Post aggregates; `post:like:{postID}:rebuild-token` fences trusted initialization against deletion.
 
-- article:likes:dirty for the absolute article snapshot;
-- article:likes:behavior:state for the latest user/article state;
-- article:likes:behavior:dirty for behavior delivery.
+One Lua mutation checks the User sentinel, Post Ready/Count/Version, deleted fence, and Redis key types before changing anything. A Like or Unlike changes Count and Version only when the relation changes, then marks the existing Snapshot and Behavior queues dirty. No Like request writes `post_reaction` directly.
 
-The encoded behavior state is liked|version|occurred_at and the pair key is user_id:article_id.
+## Delivery and projections
 
-## Delivery
+The existing Snapshot and Behavior relays publish to Kafka. Snapshot consumers apply absolute Post counts with version checks. User behavior consumers apply version-guarded reactions and deduplicate delivered events through the existing inbox. Kafka event schemas and HTTP Like success responses remain unchanged.
 
-A timed dispatcher runs every second. It claims at most 500 dirty pairs, loads their latest state, publishes one Kafka batch, then ACKs only if pair, claim_id, and emitted version still match.
+## Lifecycle and recovery
 
-A newer state during publishing remains dirty. An expired lease is reclaimed safely. Kafka event IDs are stable: like-state:{user_id}:{article_id}:{version}; the Kafka key is user_id:article_id.
+New registrations initialize `user:likes:{userID}` to `{0}` inside the SQL registration transaction before tokens are issued. DevData and load-test setup initialize only newly inserted Users. Login, token refresh, and ordinary Like requests do not create or reset a missing User Set.
 
-The one-second window bounds behavior output by active pairs rather than request count. API reads and writes remain synchronous against Redis.
+Trusted new Post creation and DevData imports use a rebuild token, deletion fence, zero-state checks, and at most three attempts for transient infrastructure errors while retaining the same token. Existing Post Count/Version loss fails closed. A SQL value of zero does not prove Kafka has projected every earlier Like.
 
-## Projection
+If new Post initialization still fails, inspect the Post and queues in a quiesced development environment. The maintenance command is dry-run by default:
 
-Kafka consumers apply absolute article snapshots only when the version is newer. User reactions and article behavior rows are also version guarded. consumer_inboxes deduplicates repeated Kafka delivery.
+```powershell
+go run ./cmd/recover-post-like-state --post-id=123
+```
 
-## Configuration
+Mutation requires all explicit confirmations and repeats the SQL/Redis preflight after taking a rebuild token:
 
-| Variable | Default |
-| --- | --- |
-| LIKE_SNAPSHOT_POLL_INTERVAL | 1s |
-| LIKE_SNAPSHOT_BATCH_SIZE | 100 |
-| LIKE_CLAIM_LEASE | 30s |
-| LIKE_BEHAVIOR_BATCH_SIZE | 500 |
-| LIKE_BEHAVIOR_CLAIM_LEASE | 30s |
-| LIKE_BEHAVIOR_FLUSH_INTERVAL | 1s |
-| LIKE_BEHAVIOR_PROJECTION_CONSUMERS | 6 |
+```powershell
+go run ./cmd/recover-post-like-state `
+  --post-id=123 `
+  --apply `
+  --confirm-development-reset `
+  --confirm-like-writes-paused `
+  --confirm-snapshot-behavior-kafka-drained
+```
 
-## Recovery and backfill
+The command refuses nonzero SQL Count/Version, any Post reaction rows, partial or previously registered Redis state, active Snapshot claims, expiry/recovery markers, or nonempty global Behavior queues. The operator must separately confirm Kafka lag is drained and Like history is disposable. It never runs `FLUSHDB`, clears queues, or reconstructs User relations. A Post with a valid `ready=1` state is left unchanged.
 
-Backfill is an explicit quiesced operation. Pause API writes, wait for snapshot and behavior queues plus Kafka lag to reach zero, verify article count equals active reactions, then run cmd/backfill-likes with LIKE_BACKFILL_QUIESCED=true.
+The one-time pre-launch User initializer is `go run ./cmd/initialize-user-likes`. It requires `--confirm-development-reset` and `--confirm-api-worker-kafka-quiesced`, keyset-pages SQL Users, preserves valid existing Sets, and refuses SQL projection history. It does not clear projections, queues, or Kafka.
 
-The online implementation has no fallback to the former DB or Stream paths. Redis unavailability or a missing User/Post baseline therefore returns an error rather than silently changing consistency semantics. `ErrUserLikeNotReady` and `ErrPostLikeNotReady` remain compatible with `errors.Is(err, likes.ErrNotReady)` but are separately logged and measured.
+Existing User Set or Post aggregate loss has no automatic online recovery. Redis outages, missing User sentinel, missing Post state, type errors, and detectable Count inconsistencies fail closed. Same-ID DevData Post reactivation remains rejected because a User Set stores PostID without a lifecycle generation.
 
-## User and Post lifecycle
+## Deleted relation cleanup
 
-New registrations initialize `user:likes:{userID}` with sentinel `0` inside a
-controlled SQL registration transaction, before token issuance. DevData and
-load-test provisioning initialize only newly inserted User rows. Login,
-refresh, and ordinary Like requests never repair existing User Sets.
+The background worker keyset-pages Users (64 IDs), then scans one User Set with `SSCAN COUNT 128` per pass. Redis `COUNT` is a hint; over-returned members remain pending and each SQL check/Lua removal batch is capped at 128 IDs. Completing the SQL pages resets the cursor for the next sweep. A worker restart begins at the first User again; removals are idempotent.
 
-Trusted new Post creation retains rebuild-token and deletion-fence protected
-zero-state initialization. A missing existing Post aggregate fails closed; a
-SQL value of zero does not prove Kafka has projected every prior mutation.
-Same-ID DevData Post reactivation is rejected before SQL changes because stale
-User membership has no lifecycle version.
+SQL confirms Post lifecycle before Lua removes a relation. Lua preserves sentinel `0`, active `ready=1` relations, Post Count/Version, Snapshot Dirty, and Behavior events. A malformed User Set is logged and skipped for the current sweep so later Users proceed; transient SQL/Redis failures retain progress and retry. A Post Ready type error or SQL-deleted/Redis-active mismatch protects only that candidate and is reported; the next sweep can reconsider it.
 
-Deleted Posts keep the existing durable `PostLikeCleanup` and Redis deletion
-fence. A separate worker keyset-pages SQL Users, scans User Sets with
-`SSCAN COUNT 128`, confirms candidate Post lifecycle in SQL, and conditionally
-removes only missing/soft-deleted Post relations. Each SQL/Lua batch is capped
-at 128 IDs; sentinel `0`, active Redis `ready=1` relations, Post Count/Version,
-Snapshot Dirty, and Behavior events are preserved. See
-[`like-state-recovery.md`](like-state-recovery.md) for the one-time
-development initializer and incident procedure.
+## Expiry
+
+Post aggregate expiry remains disabled while User Sets persist independently. Setting `LIKE_STATE_EXPIRY_ENABLED=true` fails validation with the stable `ErrLikeStateExpiryUnsupported` error. Do not enable Post-only TTL or clear Post Count/Version as an expiry substitute.
+
+SPEC-03 performance work remains separate: optimizing global Snapshot Dirty claims, partitioning global Behavior queues, Redis Cluster cross-slot Lua changes, and high-throughput end-to-end measurements.

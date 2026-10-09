@@ -104,7 +104,10 @@ advisory lock。full refresh 或 rebuild 正在运行时，增量任务可以安
 验证 Redis 连接，避免把 Like 初始化或删除维护失败静默报告为成功。新建
 镜像 User 在 SQL 事务中初始化 User Like sentinel；已有或恢复的 User Set
 不会被重置。SQL 已提交后，新 Post Like 初始化或删除清理失败会让命令返回
-明确错误，提示 SQL 已提交且 Redis 维护仍待处理。
+明确错误，提示 SQL 已提交且 Redis 维护仍待处理。新 Post 初始化会对暂时性基础设施错误使用
+最多三次的同 Token 重试。若仍失败，可在暂停 Like 写入并确认队列/Kafka 已处理后，先
+dry-run 检查，再使用 `go run ./cmd/recover-post-like-state --post-id=<id>` 进行显式开发环境
+恢复。该命令拒绝有 SQL Like 历史、部分 Redis 状态或未清空行为队列的 Post。
 
 同 ID 的 DevData Post 重新激活当前保持 Fail Closed。同步在 SQL 清除
 `deleted_at` 或更新镜像映射前拒绝该转换，避免旧 User Set 成员被误认为新

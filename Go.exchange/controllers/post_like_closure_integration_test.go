@@ -130,6 +130,20 @@ func TestPostLikeStatesProjectionNotReadyIsPerIDUnavailable(t *testing.T) {
 	}
 
 	store := likes.NewStore(redisClient)
+	oldSingleBaselineLoader, oldBatchBaselineLoader := loadPostLikeBaselineFromDB, loadPostLikeBaselinesFromDB
+	baselineCalls, batchBaselineCalls := 0, 0
+	loadPostLikeBaselineFromDB = func(context.Context, uint) (postLikeBaseline, error) {
+		baselineCalls++
+		return postLikeBaseline{}, errors.New("unexpected per-Post SQL baseline load")
+	}
+	loadPostLikeBaselinesFromDB = func(context.Context, []uint) (map[uint]postLikeBaseline, error) {
+		batchBaselineCalls++
+		return nil, errors.New("unexpected SQL baseline batch load")
+	}
+	t.Cleanup(func() {
+		loadPostLikeBaselineFromDB = oldSingleBaselineLoader
+		loadPostLikeBaselinesFromDB = oldBatchBaselineLoader
+	})
 	if err := store.InitializeUserEmpty(t.Context(), viewer.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -152,22 +166,34 @@ func TestPostLikeStatesProjectionNotReadyIsPerIDUnavailable(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Items) != 2 || len(response.UnavailablePostIDs) != 1 || response.UnavailablePostIDs[0] != posts[2].ID {
+	if len(response.Items) != 1 || len(response.UnavailablePostIDs) != 2 {
 		t.Fatalf("batch response=%#v", response)
+	}
+	unavailable := make(map[uint]struct{}, len(response.UnavailablePostIDs))
+	for _, postID := range response.UnavailablePostIDs {
+		unavailable[postID] = struct{}{}
+	}
+	if _, ok := unavailable[posts[1].ID]; !ok {
+		t.Fatalf("cold zero-state Post was not reported unavailable: %#v", response.UnavailablePostIDs)
+	}
+	if _, ok := unavailable[posts[2].ID]; !ok {
+		t.Fatalf("projection-mismatch Post was not reported unavailable: %#v", response.UnavailablePostIDs)
 	}
 	items := make(map[uint]postLikeStateItem, len(response.Items))
 	for _, item := range response.Items {
 		items[item.PostID] = item
 	}
-	for _, postID := range posts[:2] {
-		item, ok := items[postID.ID]
-		if !ok || item.Likes != 0 || item.Liked {
-			t.Fatalf("post=%d item=%#v exists=%t", postID.ID, item, ok)
-		}
+	if item, ok := items[posts[0].ID]; !ok || item.Likes != 0 || item.Liked {
+		t.Fatalf("ready post=%d item=%#v exists=%t", posts[0].ID, item, ok)
 	}
-	for _, key := range []string{likes.ReadyKey(posts[2].ID), likes.CountKey(posts[2].ID), likes.UsersKey(posts[2].ID), likes.VersionKey(posts[2].ID)} {
-		if exists, err := redisClient.Exists(key).Result(); err != nil || exists != 0 {
-			t.Fatalf("projection-mismatch key=%q exists=%d err=%v", key, exists, err)
+	if baselineCalls != 0 || batchBaselineCalls != 0 {
+		t.Fatalf("batch read performed SQL recovery loads: single=%d batch=%d", baselineCalls, batchBaselineCalls)
+	}
+	for _, unavailablePost := range posts[1:] {
+		for _, key := range []string{likes.ReadyKey(unavailablePost.ID), likes.CountKey(unavailablePost.ID), likes.UsersKey(unavailablePost.ID), likes.VersionKey(unavailablePost.ID)} {
+			if exists, err := redisClient.Exists(key).Result(); err != nil || exists != 0 {
+				t.Fatalf("unavailable Post key=%q exists=%d err=%v", key, exists, err)
+			}
 		}
 	}
 	postIDString := strconv.FormatUint(uint64(posts[2].ID), 10)

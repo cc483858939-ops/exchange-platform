@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+// ErrLikeStateExpiryUnsupported marks the unsafe Post-only TTL configuration.
+var ErrLikeStateExpiryUnsupported = errors.New("post like state expiry is unsupported while persistent User -> Posts relations remain")
+
 // ValidateAPIEventingConfig fails before the API accepts mutations when its
 // durable activity path is unavailable.
 func ValidateAPIEventingConfig(cfg *Config) error {
@@ -30,7 +33,7 @@ func ValidateAPIEventingConfig(cfg *Config) error {
 // User -> Posts relations have no matching Post-scoped expiry protocol.
 func ValidateLikeStateExpiryConfig() error {
 	if LikeStateExpiryEnabled() {
-		return errors.New("LIKE_STATE_EXPIRY_ENABLED is unsupported while persistent User -> Posts relations cannot be expired with Post state")
+		return ErrLikeStateExpiryUnsupported
 	}
 	return nil
 }
