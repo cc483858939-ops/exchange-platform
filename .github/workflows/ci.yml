@@ -229,7 +229,7 @@ jobs:
             TestKafkaDLQReplayAuditPersistenceIntegration \
             TestCanonicalReplyInvalidatesParentDetailCacheWithoutTTLIntegration \
             TestPostLikeHotPathDoesNotLoadPostgres \
-            TestPostLikeSafeExpiryRecoveryIntegration \
+            TestLikeStateMaintenanceRejectsPostOnlyExpiryWhileUserRelationsPersistIntegration \
             TestPostLikeDeletePurgeFailureReconcilesIntegration \
             TestRedisHistoryStoreGuestIntegration \
             TestRedisHistoryStoreUserIntegration
