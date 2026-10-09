@@ -3,6 +3,7 @@ package tracing
 import (
 	"context"
 	"fmt"
+	"math/rand"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -10,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -73,9 +75,18 @@ func newTracerProvider(ctx context.Context, cfg Config, exporter sdktrace.SpanEx
 	if err != nil {
 		return nil, fmt.Errorf("initialize tracing resource: %w", err)
 	}
+	// Public HTTP traceparent headers are untrusted. Use a local random decision
+	// for either remote sampled flag so a caller cannot choose trace IDs that
+	// force TraceIDRatioBased to record every request.
+	rootSampler := sdktrace.TraceIDRatioBased(cfg.SampleRatio)
+	remoteSampler := untrustedRemoteSampler{ratio: cfg.SampleRatio}
 	return sdktrace.NewTracerProvider(
 		sdktrace.WithResource(resource),
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.SampleRatio))),
+		sdktrace.WithSampler(sdktrace.ParentBased(
+			rootSampler,
+			sdktrace.WithRemoteParentSampled(remoteSampler),
+			sdktrace.WithRemoteParentNotSampled(remoteSampler),
+		)),
 		sdktrace.WithBatcher(
 			exporter,
 			sdktrace.WithExportTimeout(cfg.ExportTimeout),
@@ -83,4 +94,23 @@ func newTracerProvider(ctx context.Context, cfg Config, exporter sdktrace.SpanEx
 			sdktrace.WithMaxExportBatchSize(maxSpanBatchSize),
 		),
 	), nil
+}
+
+type untrustedRemoteSampler struct {
+	ratio float64
+}
+
+func (sampler untrustedRemoteSampler) ShouldSample(parameters sdktrace.SamplingParameters) sdktrace.SamplingResult {
+	decision := sdktrace.Drop
+	if rand.Float64() < sampler.ratio {
+		decision = sdktrace.RecordAndSample
+	}
+	return sdktrace.SamplingResult{
+		Decision:   decision,
+		Tracestate: trace.SpanContextFromContext(parameters.ParentContext).TraceState(),
+	}
+}
+
+func (sampler untrustedRemoteSampler) Description() string {
+	return fmt.Sprintf("UntrustedRemoteRatioBased{%g}", sampler.ratio)
 }

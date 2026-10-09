@@ -48,7 +48,7 @@ func NewService(dependencies ServiceDependencies, cfg ServiceConfig) (Verificati
 func (service *RecommendationService) Serve(ctx context.Context, request ServeRequest) (output ServeResult, returnErr error) {
 	started := time.Now()
 	var span trace.Span
-	if ctx != nil {
+	if ctx != nil && TracingEnabled() {
 		ctx, span = startRecommendationSpan(ctx, "recommendation.service",
 			attribute.String("recommendation.viewer_kind", viewerKindName(request.Viewer.Kind)),
 		)

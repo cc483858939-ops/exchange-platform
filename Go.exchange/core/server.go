@@ -43,7 +43,13 @@ type APIRuntime struct {
 	httpShutdownTimeout time.Duration
 }
 
-func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher) (_ *APIRuntime, returnErr error) {
+func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher) (*APIRuntime, error) {
+	return StartHttpServerWithTracing(tokens, publisher, true)
+}
+
+func StartHttpServerWithTracing(tokens auth.TokenService, publisher eventing.BatchPublisher, traceEnabled bool) (_ *APIRuntime, returnErr error) {
+	recommendation.SetTracingEnabled(traceEnabled)
+
 	limiter, err := auth.NewRedisAttemptLimiter(global.RedisDB)
 	if err != nil {
 		return nil, fmt.Errorf("initialize auth rate limiter: %w", err)
@@ -142,7 +148,7 @@ func StartHttpServer(tokens auth.TokenService, publisher eventing.BatchPublisher
 		return nil, fmt.Errorf("initialize recommendation handler: %w", err)
 	}
 	telemetryRateLimiter := controllers.NewRecommendationTelemetryRedisRateLimiter(global.RedisDB)
-	handler, err := router.SetupRouter(authController, tokens, publisher, readiness, applicationLimiter, recommendationHandler, telemetryRateLimiter, translationService)
+	handler, err := router.SetupRouterWithTracing(authController, tokens, publisher, readiness, applicationLimiter, recommendationHandler, telemetryRateLimiter, traceEnabled, translationService)
 	if err != nil {
 		return nil, fmt.Errorf("initialize HTTP router: %w", err)
 	}

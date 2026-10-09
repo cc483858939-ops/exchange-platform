@@ -2,6 +2,7 @@ package router
 
 import (
 	"errors"
+	"net/http"
 	"strings"
 	"time"
 
@@ -15,9 +16,10 @@ import (
 	"Go.exchange/runtimehealth"
 	"Go.exchange/translation"
 
-	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gin-contrib/cors"
@@ -25,10 +27,16 @@ import (
 )
 
 func SetupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, applicationLimiter ratelimit.Limiter, recommendationHandler *controllers.RecommendationHandler, telemetryRateLimiter controllers.RecommendationTelemetryRateLimiter, translationServices ...translation.Service) (*gin.Engine, error) {
-	return setupRouter(authController, verifier, publisher, readiness, applicationLimiter, recommendationHandler, telemetryRateLimiter, translationServices, traceProvider())
+	return SetupRouterWithTracing(authController, verifier, publisher, readiness, applicationLimiter, recommendationHandler, telemetryRateLimiter, true, translationServices...)
 }
 
-func setupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, applicationLimiter ratelimit.Limiter, recommendationHandler *controllers.RecommendationHandler, telemetryRateLimiter controllers.RecommendationTelemetryRateLimiter, translationServices []translation.Service, tracerProvider trace.TracerProvider) (*gin.Engine, error) {
+// SetupRouterWithTracing preserves SetupRouter while allowing the API process
+// to omit HTTP instrumentation entirely when tracing is disabled.
+func SetupRouterWithTracing(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, applicationLimiter ratelimit.Limiter, recommendationHandler *controllers.RecommendationHandler, telemetryRateLimiter controllers.RecommendationTelemetryRateLimiter, tracingEnabled bool, translationServices ...translation.Service) (*gin.Engine, error) {
+	return setupRouter(authController, verifier, publisher, readiness, applicationLimiter, recommendationHandler, telemetryRateLimiter, translationServices, traceProvider(), tracingEnabled)
+}
+
+func setupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, applicationLimiter ratelimit.Limiter, recommendationHandler *controllers.RecommendationHandler, telemetryRateLimiter controllers.RecommendationTelemetryRateLimiter, translationServices []translation.Service, tracerProvider trace.TracerProvider, tracingEnabled bool) (*gin.Engine, error) {
 	if recommendationHandler == nil {
 		return nil, errors.New("recommendation handler is required")
 	}
@@ -49,26 +57,9 @@ func setupRouter(authController *controllers.AuthController, verifier auth.Acces
 	router.RemoteIPHeaders = []string{"X-Forwarded-For", "X-Real-IP"}
 	router.TrustedPlatform = ""
 
-	router.Use(otelgin.Middleware("exchange-api",
-		otelgin.WithTracerProvider(tracerProvider),
-		otelgin.WithSpanStartOptions(trace.WithAttributes(
-			attribute.String("url.path", ""),
-			attribute.String("client.address", ""),
-			attribute.String("http.client_ip", ""),
-			attribute.String("network.peer.address", ""),
-			attribute.Int("network.peer.port", 0),
-			attribute.String("user_agent.original", ""),
-		)),
-		otelgin.WithGinFilter(func(ctx *gin.Context) bool {
-			switch ctx.Request.URL.Path {
-			case "/metrics", "/healthz", "/readyz":
-				return false
-			default:
-				return true
-			}
-		}),
-		otelgin.WithSpanNameFormatter(recommendationHTTPSpanName),
-	))
+	if tracingEnabled {
+		router.Use(httpTracingMiddleware(tracerProvider))
+	}
 	router.Use(cors.New(cors.Config{
 		AllowOrigins:     allowedOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
@@ -161,6 +152,37 @@ func setupRouter(authController *controllers.AuthController, verifier auth.Acces
 
 func traceProvider() trace.TracerProvider {
 	return otel.GetTracerProvider()
+}
+
+func httpTracingMiddleware(tracerProvider trace.TracerProvider) gin.HandlerFunc {
+	tracer := tracerProvider.Tracer("Go.exchange/router")
+	propagator := propagation.TraceContext{}
+	return func(ctx *gin.Context) {
+		switch ctx.Request.URL.Path {
+		case "/metrics", "/healthz", "/readyz":
+			ctx.Next()
+			return
+		}
+
+		parentCtx := propagator.Extract(ctx.Request.Context(), propagation.HeaderCarrier(ctx.Request.Header))
+		spanCtx, span := tracer.Start(parentCtx, recommendationHTTPSpanName(ctx),
+			trace.WithSpanKind(trace.SpanKindServer),
+			trace.WithAttributes(
+				attribute.String("http.request.method", ctx.Request.Method),
+				attribute.String("http.route", ctx.FullPath()),
+			),
+		)
+		ctx.Request = ctx.Request.WithContext(spanCtx)
+		defer span.End()
+
+		ctx.Next()
+
+		statusCode := ctx.Writer.Status()
+		span.SetAttributes(attribute.Int("http.response.status_code", statusCode))
+		if statusCode >= http.StatusInternalServerError || len(ctx.Errors) > 0 {
+			span.SetStatus(codes.Error, "HTTP request failed")
+		}
+	}
 }
 
 func recommendationHTTPSpanName(ctx *gin.Context) string {

@@ -108,7 +108,7 @@ func run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var waitGroup sync.WaitGroup
-	apiRuntime, err := core.StartHttpServer(tokens, publisher)
+	apiRuntime, err := core.StartHttpServerWithTracing(tokens, publisher, tracingConfig.Enabled)
 	if err != nil {
 		return err
 	}

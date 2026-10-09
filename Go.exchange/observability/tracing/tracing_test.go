@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func TestLoadConfigDefaults(t *testing.T) {
@@ -129,6 +130,131 @@ func TestTracerProviderSamplesAndExportsSpans(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestTracerProviderDoesNotTrustRemoteSampledFlag(t *testing.T) {
+	traceID, err := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentSpanID, err := trace.SpanIDFromHex("00f067aa0ba902b7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name      string
+		ratio     float64
+		flags     trace.TraceFlags
+		wantTrace bool
+	}{
+		{name: "remote sampled cannot override zero ratio", ratio: 0, flags: trace.FlagsSampled, wantTrace: false},
+		{name: "remote unsampled cannot override full ratio", ratio: 1, flags: 0, wantTrace: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			exporter := tracetest.NewInMemoryExporter()
+			provider, err := newTracerProvider(context.Background(), testConfig(test.ratio), exporter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parent := trace.NewSpanContext(trace.SpanContextConfig{
+				TraceID: traceID, SpanID: parentSpanID, TraceFlags: test.flags, Remote: true,
+			})
+			parentCtx := trace.ContextWithRemoteSpanContext(context.Background(), parent)
+			spanCtx, span := provider.Tracer("test").Start(parentCtx, "http.server")
+			if span.IsRecording() != test.wantTrace {
+				t.Fatalf("recording=%v want=%v", span.IsRecording(), test.wantTrace)
+			}
+			if got := trace.SpanFromContext(spanCtx).SpanContext(); got.TraceID() != traceID {
+				t.Fatalf("trace ID=%s want preserved remote ID %s", got.TraceID(), traceID)
+			}
+			span.End()
+			if err := provider.ForceFlush(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			spans := exporter.GetSpans()
+			wantCount := 0
+			if test.wantTrace {
+				wantCount = 1
+			}
+			if len(spans) != wantCount {
+				t.Fatalf("exported spans=%d want=%d", len(spans), wantCount)
+			}
+			if test.wantTrace && spans[0].Parent.SpanID() != parentSpanID {
+				t.Fatalf("parent span ID=%s want=%s", spans[0].Parent.SpanID(), parentSpanID)
+			}
+			if err := provider.Shutdown(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestSampledRemoteParentCannotForceSamplingOfEveryRequest(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider, err := newTracerProvider(context.Background(), testConfig(.05), exporter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	traceID, _ := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
+	var sampled int
+	const requests = 256
+	for index := 0; index < requests; index++ {
+		var parentSpanID trace.SpanID
+		parentSpanID[6] = 1
+		parentSpanID[7] = byte(index)
+		parent := trace.NewSpanContext(trace.SpanContextConfig{
+			TraceID: traceID, SpanID: parentSpanID, TraceFlags: trace.FlagsSampled, Remote: true,
+		})
+		_, span := provider.Tracer("test").Start(
+			trace.ContextWithRemoteSpanContext(context.Background(), parent),
+			"http.server",
+		)
+		if span.IsRecording() {
+			sampled++
+		}
+		span.End()
+	}
+	if sampled == requests {
+		t.Fatalf("an untrusted sampled remote parent forced all %d requests to record", requests)
+	}
+	if err := provider.ForceFlush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sampled != len(exporter.GetSpans()) {
+		t.Fatalf("recorded decisions=%d exported spans=%d", sampled, len(exporter.GetSpans()))
+	}
+	if err := provider.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTracerProviderStillHonorsSampledLocalParent(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider, err := newTracerProvider(context.Background(), testConfig(0), exporter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	traceID, _ := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
+	parentSpanID, _ := trace.SpanIDFromHex("00f067aa0ba902b7")
+	parent := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: traceID, SpanID: parentSpanID, TraceFlags: trace.FlagsSampled,
+	})
+	parentCtx := trace.ContextWithSpanContext(context.Background(), parent)
+	_, span := provider.Tracer("test").Start(parentCtx, "recommendation.child")
+	if !span.IsRecording() {
+		t.Fatal("a sampled local parent was not honored")
+	}
+	span.End()
+	if err := provider.ForceFlush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	spans := exporter.GetSpans()
+	if len(spans) != 1 || spans[0].Parent.SpanID() != parentSpanID {
+		t.Fatalf("local parent relationship was not retained: %#v", spans)
+	}
+	if err := provider.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 

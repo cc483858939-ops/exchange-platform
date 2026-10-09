@@ -96,18 +96,21 @@ func (handler *RecommendationHandler) serve(ctx *gin.Context, viewer recommendat
 			Browser: browserPrior, BrowserPrimary: browserPrimary,
 		},
 	})
+	if result.RequestID != "" {
+		trace.SpanFromContext(requestCtx).SetAttributes(attribute.String("recommendation.request_id", result.RequestID))
+	}
 	if err != nil {
 		recommendationErrorResponse(ctx, err, result.StrategyID)
 		return
-	}
-	if result.RequestID != "" {
-		trace.SpanFromContext(requestCtx).SetAttributes(attribute.String("recommendation.request_id", result.RequestID))
 	}
 	if err := servingCtx.Err(); err != nil {
 		recommendationErrorResponse(ctx, err, result.StrategyID)
 		return
 	}
 	recommendations, err := func() ([]RecommendedPostResponse, error) {
+		if !recommendation.TracingEnabled() {
+			return handler.responseMapper.Map(servingCtx, result.Selected, result.Now)
+		}
 		mapCtx, mapSpan := trace.SpanFromContext(requestCtx).TracerProvider().Tracer("Go.exchange/controllers/recommendation").Start(
 			servingCtx,
 			"recommendation.response.map",

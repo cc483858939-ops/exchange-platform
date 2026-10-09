@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 	"gorm.io/gorm"
 )
 
@@ -97,6 +98,28 @@ func TestRecommendationServiceTracingRecordsAuthenticatedStageHierarchy(t *testi
 		if span.Name == "recommendation.recall" && recommendationSpanHasString(span, "recommendation.phase", "soft") {
 			t.Fatal("unexpected soft recall span when the fresh selection filled the request")
 		}
+	}
+}
+
+func TestRecommendationTracingDisabledKeepsParentContextWithoutStartingChildren(t *testing.T) {
+	previous := TracingEnabled()
+	SetTracingEnabled(false)
+	t.Cleanup(func() { SetTracingEnabled(previous) })
+
+	exporter, provider := newRecommendationTracingTestProvider(t)
+	parentCtx, parent := provider.Tracer("test").Start(context.Background(), "http.root")
+	spanCtx, span := startRecommendationSpan(parentCtx, "recommendation.service", attribute.String("recommendation.viewer_kind", "guest"))
+	if span.IsRecording() {
+		t.Fatal("disabled recommendation tracing started a recording span")
+	}
+	if got := trace.SpanFromContext(spanCtx).SpanContext(); got.SpanID() != parent.SpanContext().SpanID() {
+		t.Fatalf("disabled path did not preserve its parent context: got=%s want=%s", got.SpanID(), parent.SpanContext().SpanID())
+	}
+	span.End()
+	parent.End()
+
+	if spans := exporter.GetSpans(); len(spans) != 1 || spans[0].Name != "http.root" {
+		t.Fatalf("disabled path exported a recommendation child: %#v", spans)
 	}
 }
 

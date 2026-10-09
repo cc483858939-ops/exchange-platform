@@ -236,13 +236,18 @@ func TestRecommendationHandlerMapsResponseMapperFailureToHTTP500(t *testing.T) {
 	}
 }
 
-func TestRecommendationResponseMapSpanLinksRequestIDAndSanitizesErrors(t *testing.T) {
+func TestRecommendationHTTPSpanLinksRequestIDForSuccessAndFailures(t *testing.T) {
 	for _, test := range []struct {
-		name      string
-		mapperErr error
+		name       string
+		requestID  string
+		serviceErr error
+		mapperErr  error
+		wantStatus int
 	}{
-		{name: "success"},
-		{name: "error", mapperErr: errors.New("private SQL parameter and token")},
+		{name: "success", requestID: "business-request-17", wantStatus: http.StatusOK},
+		{name: "service error with request ID", requestID: "failed-request-18", serviceErr: errors.New("service unavailable"), wantStatus: http.StatusInternalServerError},
+		{name: "service error without request ID", serviceErr: errors.New("service unavailable"), wantStatus: http.StatusInternalServerError},
+		{name: "mapper error", requestID: "mapper-request-19", mapperErr: errors.New("private SQL parameter and token"), wantStatus: http.StatusInternalServerError},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			exporter := tracetest.NewInMemoryExporter()
@@ -253,7 +258,10 @@ func TestRecommendationResponseMapSpanLinksRequestIDAndSanitizesErrors(t *testin
 				}
 			})
 			requestCtx, serverSpan := provider.Tracer("test").Start(context.Background(), "GET /api/public/recommendations/posts")
-			service := &fakeRecommendationService{result: recommendation.ServeResult{RequestID: "business-request-17", Now: time.Now().UTC()}}
+			service := &fakeRecommendationService{
+				result: recommendation.ServeResult{RequestID: test.requestID, Now: time.Now().UTC()},
+				err:    test.serviceErr,
+			}
 			mapper := &fakeRecommendationResponseMapper{err: test.mapperErr}
 			handler := newRecommendationHandlerForTest(t, service, mapper, 0)
 			ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/public/recommendations/posts")
@@ -271,17 +279,27 @@ func TestRecommendationResponseMapSpanLinksRequestIDAndSanitizesErrors(t *testin
 					mapperSpan = &spans[index]
 				}
 			}
-			if server == nil || mapperSpan == nil {
-				t.Fatalf("missing server or response map span: %#v", spans)
+			if server == nil {
+				t.Fatalf("missing server span: %#v", spans)
 			}
-			if mapperSpan.Parent.SpanID() != server.SpanContext.SpanID() {
+			if test.serviceErr == nil && mapperSpan == nil {
+				t.Fatalf("missing response map span: %#v", spans)
+			}
+			if mapperSpan != nil && mapperSpan.Parent.SpanID() != server.SpanContext.SpanID() {
 				t.Fatalf("response map parent=%s server span=%s", mapperSpan.Parent.SpanID(), server.SpanContext.SpanID())
 			}
-			if !hasStringAttribute(server.Attributes, "recommendation.request_id", "business-request-17") {
-				t.Fatalf("business request ID missing from HTTP span: %#v", server.Attributes)
+			if test.requestID != "" {
+				if !hasStringAttribute(server.Attributes, "recommendation.request_id", test.requestID) {
+					t.Fatalf("business request ID missing from HTTP span: %#v", server.Attributes)
+				}
+			} else if hasAttribute(server.Attributes, "recommendation.request_id") {
+				t.Fatalf("empty request ID created an HTTP attribute: %#v", server.Attributes)
 			}
-			if test.mapperErr == nil && recorder.Code != http.StatusOK {
-				t.Fatalf("success status=%d body=%s", recorder.Code, recorder.Body.String())
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status=%d want=%d body=%s", recorder.Code, test.wantStatus, recorder.Body.String())
+			}
+			if test.serviceErr != nil && !strings.Contains(recorder.Body.String(), test.serviceErr.Error()) {
+				t.Fatalf("service error response changed: %s", recorder.Body.String())
 			}
 			if test.mapperErr != nil {
 				if mapperSpan.Status.Code != codes.Error {
@@ -297,6 +315,15 @@ func TestRecommendationResponseMapSpanLinksRequestIDAndSanitizesErrors(t *testin
 			}
 		})
 	}
+}
+
+func hasAttribute(attributes []attribute.KeyValue, key string) bool {
+	for _, item := range attributes {
+		if string(item.Key) == key {
+			return true
+		}
+	}
+	return false
 }
 
 func hasStringAttribute(attributes []attribute.KeyValue, key, want string) bool {

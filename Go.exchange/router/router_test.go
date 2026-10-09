@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
@@ -60,7 +62,7 @@ func TestSetupRouterCapturesRouteTemplatesAndFiltersNoiseRoutes(t *testing.T) {
 		}
 	})
 
-	engine, err := setupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil, nil, provider)
+	engine, err := setupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil, nil, provider, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,14 +95,8 @@ func TestSetupRouterCapturesRouteTemplatesAndFiltersNoiseRoutes(t *testing.T) {
 		spanNames[span.Name] = true
 		for _, item := range span.Attributes {
 			switch string(item.Key) {
-			case "url.path", "client.address", "http.client_ip", "network.peer.address", "user_agent.original":
-				if item.Value.AsString() != "" {
-					t.Errorf("sensitive HTTP attribute %q was recorded in span %q: %q", item.Key, span.Name, item.Value.AsString())
-				}
-			case "network.peer.port":
-				if item.Value.AsInt64() != 0 {
-					t.Errorf("client port was recorded in span %q", span.Name)
-				}
+			case "url.path", "client.address", "http.client_ip", "network.peer.address", "network.peer.port", "user_agent.original":
+				t.Errorf("sensitive HTTP attribute %q was emitted by span %q", item.Key, span.Name)
 			}
 			if item.Value.Type() == attribute.STRING && (strings.Contains(item.Value.AsString(), "token=not-recorded") || strings.Contains(item.Value.AsString(), "private-test-token") || strings.Contains(item.Value.AsString(), "private-test-user-agent")) {
 				t.Errorf("request detail leaked into span %q", span.Name)
@@ -124,6 +120,146 @@ func TestSetupRouterCapturesRouteTemplatesAndFiltersNoiseRoutes(t *testing.T) {
 	}
 }
 
+func TestHTTPTracingRedactsGinErrorsAndRequestDetails(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter), sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	t.Cleanup(func() {
+		if err := provider.Shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown tracer provider: %v", err)
+		}
+	})
+
+	engine, err := setupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil, nil, provider, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.POST("/__otel-error/:id", func(ctx *gin.Context) {
+		_ = ctx.Error(errors.New("secret-token=private-value"))
+		ctx.Status(http.StatusInternalServerError)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/__otel-error/member-42?api_key=query-private-value", strings.NewReader("body-private-value"))
+	request.Header.Set("Authorization", "Bearer header-private-value")
+	request.Header.Set("Cookie", "refresh=private-value")
+	request.Header.Set("User-Agent", "agent-private-value")
+	request.Header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d, want 500", response.Code)
+	}
+
+	spans := exporter.GetSpans()
+	var server *tracetest.SpanStub
+	for index := range spans {
+		if strings.HasPrefix(spans[index].Name, "POST /__otel-error") {
+			server = &spans[index]
+			break
+		}
+	}
+	if server == nil {
+		t.Fatalf("missing server span: %#v", spans)
+	}
+	if server.Name != "POST /__otel-error/:id" {
+		t.Fatalf("span name=%q, want normalized route", server.Name)
+	}
+	if server.Parent.TraceID().String() != "4bf92f3577b34da6a3ce929d0e0e4736" || server.Parent.SpanID().String() != "00f067aa0ba902b7" {
+		t.Fatalf("W3C parent not propagated: %v", server.Parent)
+	}
+	if !hasStringAttribute(server.Attributes, "http.request.method", http.MethodPost) || !hasStringAttribute(server.Attributes, "http.route", "/__otel-error/:id") || !hasIntAttribute(server.Attributes, "http.response.status_code", http.StatusInternalServerError) {
+		t.Fatalf("reviewed HTTP attributes missing: %#v", server.Attributes)
+	}
+	if server.Status.Code != codes.Error || server.Status.Description != "HTTP request failed" {
+		t.Fatalf("status=%#v, want sanitized HTTP error", server.Status)
+	}
+	if len(server.Events) != 0 {
+		t.Fatalf("unexpected events may contain raw Gin errors: %#v", server.Events)
+	}
+	allowed := map[string]bool{
+		"http.request.method":       true,
+		"http.route":                true,
+		"http.response.status_code": true,
+	}
+	for _, item := range server.Attributes {
+		if !allowed[string(item.Key)] {
+			t.Errorf("unexpected HTTP attribute %q", item.Key)
+		}
+	}
+	for _, secret := range []string{
+		"secret-token=private-value", "query-private-value", "header-private-value",
+		"refresh=private-value", "agent-private-value", "body-private-value",
+	} {
+		if exportedSpanContains(server, secret) {
+			t.Errorf("sensitive value %q appeared in exported span", secret)
+		}
+	}
+}
+
+func TestSetupRouterTracingDisabledOmitsHTTPMiddleware(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter), sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	t.Cleanup(func() {
+		if err := provider.Shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown tracer provider: %v", err)
+		}
+	})
+
+	engine, err := setupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil, nil, provider, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.GET("/__otel-disabled/:id", func(ctx *gin.Context) { ctx.Status(http.StatusNoContent) })
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/__otel-disabled/member-42", nil))
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status=%d, want 204", response.Code)
+	}
+	if spans := exporter.GetSpans(); len(spans) != 0 {
+		t.Fatalf("disabled tracing emitted spans: %#v", spans)
+	}
+}
+
+func exportedSpanContains(span *tracetest.SpanStub, value string) bool {
+	if strings.Contains(span.Name, value) || strings.Contains(span.Status.Description, value) {
+		return true
+	}
+	for _, item := range span.Attributes {
+		if strings.Contains(item.Value.AsString(), value) {
+			return true
+		}
+	}
+	for _, event := range span.Events {
+		if strings.Contains(event.Name, value) {
+			return true
+		}
+		for _, item := range event.Attributes {
+			if strings.Contains(item.Value.AsString(), value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasStringAttribute(attributes []attribute.KeyValue, key, want string) bool {
+	for _, item := range attributes {
+		if string(item.Key) == key && item.Value.AsString() == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hasIntAttribute(attributes []attribute.KeyValue, key string, want int) bool {
+	for _, item := range attributes {
+		if string(item.Key) == key && item.Value.AsInt64() == int64(want) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestSetupRouterTracingPreservesAuthRateLimitAndTimeoutStatuses(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
 	t.Setenv("API_REQUEST_TIMEOUT", "10ms")
@@ -135,7 +271,7 @@ func TestSetupRouterTracingPreservesAuthRateLimitAndTimeoutStatuses(t *testing.T
 		}
 	})
 
-	engine, err := setupRouter(nil, rateLimitRouteVerifier{}, nil, nil, &rateLimitRouteLimiter{}, newRouterRecommendationHandler(t), nil, nil, provider)
+	engine, err := setupRouter(nil, rateLimitRouteVerifier{}, nil, nil, &rateLimitRouteLimiter{}, newRouterRecommendationHandler(t), nil, nil, provider, true)
 	if err != nil {
 		t.Fatal(err)
 	}

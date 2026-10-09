@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"Go.exchange/config"
@@ -14,7 +15,27 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+var recommendationTracingEnabled atomic.Bool
+var disabledRecommendationSpan = trace.SpanFromContext(context.Background())
+
+func init() {
+	recommendationTracingEnabled.Store(true)
+}
+
+// SetTracingEnabled configures recommendation stage spans once during process
+// startup. The default stays enabled for existing library callers.
+func SetTracingEnabled(enabled bool) {
+	recommendationTracingEnabled.Store(enabled)
+}
+
+func TracingEnabled() bool {
+	return recommendationTracingEnabled.Load()
+}
+
 func startRecommendationSpan(ctx context.Context, name string, attributes ...attribute.KeyValue) (context.Context, trace.Span) {
+	if !TracingEnabled() {
+		return ctx, disabledRecommendationSpan
+	}
 	options := make([]trace.SpanStartOption, 0, 1)
 	if len(attributes) > 0 {
 		options = append(options, trace.WithAttributes(attributes...))
@@ -49,6 +70,9 @@ func recommendationErrorType(err error) string {
 }
 
 func traceRecommendationOperation[T any](ctx context.Context, name string, attributes []attribute.KeyValue, operation func(context.Context) (T, error)) (T, error) {
+	if !TracingEnabled() {
+		return operation(ctx)
+	}
 	spanCtx, span := startRecommendationSpan(ctx, name, attributes...)
 	defer span.End()
 	result, err := operation(spanCtx)
@@ -57,12 +81,18 @@ func traceRecommendationOperation[T any](ctx context.Context, name string, attri
 }
 
 func traceRecommendationResult[T any](ctx context.Context, name string, attributes []attribute.KeyValue, operation func(trace.Span) T) T {
+	if !TracingEnabled() {
+		return operation(disabledRecommendationSpan)
+	}
 	_, span := startRecommendationSpan(ctx, name, attributes...)
 	defer span.End()
 	return operation(span)
 }
 
 func traceHydrateRecommendationCandidates(ctx context.Context, repository CandidateRepository, servingVersion string, candidates []Candidate, now time.Time, phase string) ([]RankedCandidate, error) {
+	if !TracingEnabled() {
+		return repository.HydrateCandidates(ctx, servingVersion, candidates, now)
+	}
 	attributes := []attribute.KeyValue{attribute.String("recommendation.phase", phase)}
 	spanCtx, span := startRecommendationSpan(ctx, "recommendation.hydrate", attributes...)
 	defer span.End()
@@ -73,6 +103,9 @@ func traceHydrateRecommendationCandidates(ctx context.Context, repository Candid
 }
 
 func loadRecommendationCandidates(ctx context.Context, name, source, phase string, load func(context.Context) ([]Candidate, error)) ([]Candidate, error) {
+	if !TracingEnabled() {
+		return load(ctx)
+	}
 	spanCtx, span := startRecommendationSpan(ctx, name,
 		attribute.String("recommendation.source", source),
 		attribute.String("recommendation.phase", phase),
@@ -85,6 +118,9 @@ func loadRecommendationCandidates(ctx context.Context, name, source, phase strin
 }
 
 func loadRecommendationAuthorContext(ctx context.Context, repository ProfileRepository, userID uint, profile *Profile, candidates []RankedCandidate, loadedAuthors map[uint]struct{}, cfg config.RecommendationConfig, phase string) error {
+	if !TracingEnabled() {
+		return loadMaterializedCandidateAuthorContext(ctx, repository, userID, profile, candidates, loadedAuthors, cfg)
+	}
 	spanCtx, span := startRecommendationSpan(ctx, "recommendation.author_context.load",
 		attribute.String("recommendation.phase", phase),
 		attribute.Int("recommendation.candidate_count", len(candidates)),
@@ -96,6 +132,9 @@ func loadRecommendationAuthorContext(ctx context.Context, repository ProfileRepo
 }
 
 func traceRankRecommendationCandidates(ctx context.Context, profile ProfileFeatures, candidates []RankedCandidate, now time.Time, cfg RankingConfig, languageContext LanguageContext, phase string) []RankedCandidate {
+	if !TracingEnabled() {
+		return RankCandidates(profile, candidates, now, cfg, languageContext)
+	}
 	return traceRecommendationResult(ctx, "recommendation.rank", []attribute.KeyValue{
 		attribute.String("recommendation.phase", phase),
 		attribute.Int("recommendation.candidate_count", len(candidates)),
@@ -107,6 +146,9 @@ func traceRankRecommendationCandidates(ctx context.Context, profile ProfileFeatu
 }
 
 func traceSelectRecommendationCandidates(ctx context.Context, input SelectionInput, phase string) []SelectedCandidate {
+	if !TracingEnabled() {
+		return SelectCandidates(input)
+	}
 	return traceRecommendationResult(ctx, "recommendation.select", []attribute.KeyValue{
 		attribute.String("recommendation.phase", phase),
 		attribute.String("recommendation.selection_phase", string(input.Phase)),
