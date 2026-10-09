@@ -67,7 +67,7 @@ func TestDeletedPostFenceSurvivesCleanupFailureAndStaleRecoveryIntegration(t *te
 		t.Fatalf("stale initializer=%v", err)
 	}
 	version := int64(7)
-	if _, err := recoverLikeStore(store, t.Context(), postID, FullState{Count: 1, Version: 7}, RecoveryFence{ExpectedVersion: &version}); !errors.Is(err, ErrLikeRecoveryUnsafe) {
+	if _, err := recoverLikeStore(store, t.Context(), postID, FullState{Count: 1, Version: 7}, RecoveryFence{ExpectedVersion: &version}); !errors.Is(err, ErrPostLikeUnavailable) {
 		t.Fatalf("stale recovery=%v", err)
 	}
 	if err := client.Del(CountKey(postID)).Err(); err != nil {
