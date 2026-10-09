@@ -2,6 +2,7 @@ package likes
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strconv"
 	"testing"
@@ -172,6 +173,79 @@ func TestStoreGetManyIntegration(t *testing.T) {
 	}
 	if state, err := store.Get(ctx, 11, postIDs[0]); err != nil || !state.Liked || state.Count != 1 {
 		t.Fatalf("article A changed with article D state=%+v err=%v", state, err)
+	}
+}
+
+func TestStoreGetManyDeletedCountWrongTypeIntegration(t *testing.T) {
+	addr := os.Getenv("REDIS_TEST_ADDR")
+	if addr == "" {
+		t.Skip("set REDIS_TEST_ADDR to run Redis integration test")
+	}
+	db, _ := strconv.Atoi(os.Getenv("REDIS_TEST_DB"))
+	client := redis.NewClient(&redis.Options{Addr: addr, DB: db})
+	t.Cleanup(func() { client.Close() })
+	if err := client.Ping().Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(client)
+	base := uint(time.Now().UnixNano() & 0x3fffffff)
+	deletedID, liveID, userID := base, base+1, base+2
+	t.Cleanup(func() {
+		for _, id := range []uint{deletedID, liveID} {
+			client.Del(ReadyKey(id), CountKey(id), UsersKey(id), VersionKey(id))
+			client.SRem(RegistryKey, id)
+			client.ZRem(ExpiryCandidatesKey, id)
+			client.HDel(RecoverableVersionsKey, strconv.FormatUint(uint64(id), 10))
+		}
+		client.Del(UserLikesKey(userID))
+	})
+	ctx := t.Context()
+	if created, err := initializeLikeStore(store, ctx, liveID, 0, 0, nil); err != nil || !created {
+		t.Fatalf("initialize live Post created=%t err=%v", created, err)
+	}
+	if err := store.InitializeUserEmpty(ctx, userID); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Set(ReadyKey(deletedID), "deleted", 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.LPush(CountKey(deletedID), "corrupt").Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, read := range map[string]func() (map[uint]State, []uint, error){
+		"GetMany": func() (map[uint]State, []uint, error) { return store.GetMany(ctx, userID, []uint{deletedID, liveID}) },
+		"GetManyForServing": func() (map[uint]State, []uint, error) {
+			return store.GetManyForServing(ctx, userID, []uint{deletedID, liveID}, 0, 0)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			states, unavailable, err := read()
+			if err != nil || len(states) != 1 || states[liveID] != (State{}) || !equalUintSlices(unavailable, []uint{deletedID}) {
+				t.Fatalf("states=%v unavailable=%v err=%v", states, unavailable, err)
+			}
+		})
+	}
+	if err := client.Del(CountKey(liveID)).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.LPush(CountKey(liveID), "corrupt").Err(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.GetMany(ctx, userID, []uint{deletedID, liveID}); !errors.Is(err, ErrLikeRedisType) {
+		t.Fatalf("active Post Count type error=%v want ErrLikeRedisType", err)
+	}
+}
+
+func TestStoreGetManyClosedClientFailsClosed(t *testing.T) {
+	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	states, unavailable, err := NewStore(client).GetMany(t.Context(), 0, []uint{1})
+	if err == nil || states != nil || unavailable != nil {
+		t.Fatalf("closed Redis client: states=%v unavailable=%v err=%v", states, unavailable, err)
 	}
 }
 

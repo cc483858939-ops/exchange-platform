@@ -192,6 +192,7 @@ func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint) (map[u
 		batch = append(batch, command)
 	}
 	_, execErr := pipe.ExecContext(ctx)
+	ignoredExecErr := false
 	if initialized != nil {
 		if err := userCommandErrorOrNotReady(initialized.Err()); err != nil {
 			recordStoreLifecycleFailure(err, userID, 0)
@@ -205,6 +206,24 @@ func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint) (map[u
 	}
 	for _, command := range batch {
 		if command.ready.Err() == nil && command.ready.Val() == "deleted" {
+			for _, commandErr := range []error{command.count.Err(), command.version.Err()} {
+				if commandErr != nil && commandErr != redis.Nil {
+					mapped := mapScriptError(commandErr)
+					if !errors.Is(mapped, ErrLikeRedisType) {
+						recordStoreLifecycleFailure(mapped, userID, command.postID)
+						return nil, nil, mapped
+					}
+					if execErr == commandErr {
+						ignoredExecErr = true
+					}
+				}
+			}
+			if command.member != nil {
+				if err := userCommandErrorOrNotReady(command.member.Err()); err != nil {
+					recordStoreLifecycleFailure(err, userID, command.postID)
+					return nil, nil, err
+				}
+			}
 			unavailable = append(unavailable, command.postID)
 			continue
 		}
@@ -237,7 +256,7 @@ func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint) (map[u
 			Liked:   command.member != nil && command.member.Val(),
 		}
 	}
-	if execErr != nil && execErr != redis.Nil {
+	if execErr != nil && execErr != redis.Nil && !ignoredExecErr {
 		mapped := mapScriptError(execErr)
 		recordStoreLifecycleFailure(mapped, userID, 0)
 		return nil, nil, mapped
