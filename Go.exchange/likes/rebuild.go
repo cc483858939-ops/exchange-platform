@@ -31,8 +31,13 @@ func (s *Store) BeginRebuildMany(ctx context.Context, postIDs []uint) (map[uint]
 }
 
 // InitializeFrom reads current SQL only after the rebuild token exists.
-// Explicit DevData reactivation may replace a deleted fence after that read.
+// Reactivation is rejected until SPEC-02 can remove stale User -> Posts links.
 func (s *Store) InitializeFrom(ctx context.Context, postID uint, reactivation bool, load func(context.Context) (FullState, error)) (bool, error) {
+	if reactivation {
+		// User -> Posts has no reverse index, so Post reactivation cannot prove
+		// or clear stale membership until SPEC-02 owns the lifecycle transition.
+		return false, ErrLikeRecoveryUnsafe
+	}
 	tokens, unavailable, err := s.beginRebuildMany(ctx, []uint{postID}, reactivation)
 	if err != nil {
 		return false, err
@@ -45,7 +50,7 @@ func (s *Store) InitializeFrom(ctx context.Context, postID uint, reactivation bo
 	if err != nil {
 		return false, err
 	}
-	return s.Initialize(ctx, postID, baseline.Count, baseline.Version, baseline.UserIDs, tokens[postID])
+	return s.Initialize(ctx, postID, baseline.Count, baseline.Version, tokens[postID])
 }
 
 func (s *Store) beginRebuildMany(ctx context.Context, postIDs []uint, reactivation bool) (map[uint]string, map[uint]error, error) {

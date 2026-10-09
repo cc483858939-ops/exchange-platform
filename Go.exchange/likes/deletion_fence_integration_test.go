@@ -25,6 +25,8 @@ func TestDeletedPostFenceSurvivesCleanupFailureAndStaleRecoveryIntegration(t *te
 	t.Cleanup(func() {
 		for _, id := range []uint{postID, liveID} {
 			client.Del(ReadyKey(id), CountKey(id), UsersKey(id), VersionKey(id))
+			client.SRem(UserLikesKey(11), strconv.FormatUint(uint64(id), 10))
+			client.SRem(UserLikesKey(12), strconv.FormatUint(uint64(id), 10))
 			client.SRem(RegistryKey, id)
 			client.ZRem(ExpiryCandidatesKey, id)
 			client.HDel(RecoverableVersionsKey, strconv.FormatUint(uint64(id), 10))
@@ -54,7 +56,7 @@ func TestDeletedPostFenceSurvivesCleanupFailureAndStaleRecoveryIntegration(t *te
 	if _, err := store.Mutate(t.Context(), 12, postID, true); !errors.Is(err, ErrPostLikeUnavailable) {
 		t.Fatalf("deleted mutation=%v", err)
 	}
-	states, missing, err := store.GetManyForServing(t.Context(), 11, []uint{postID, liveID}, time.Hour, time.Minute)
+	states, missing, err := store.GetManyForServing(t.Context(), 11, []uint{postID, liveID}, 0, 0)
 	if err != nil || len(states) != 1 || states[liveID].Count != 1 || len(missing) != 1 || missing[0] != postID {
 		t.Fatalf("batch=%v unavailable=%v err=%v", states, missing, err)
 	}
@@ -62,7 +64,7 @@ func TestDeletedPostFenceSurvivesCleanupFailureAndStaleRecoveryIntegration(t *te
 		t.Fatalf("stale initializer=%v", err)
 	}
 	version := int64(7)
-	if _, err := recoverLikeStore(store, t.Context(), postID, FullState{Count: 1, Version: 7, UserIDs: []uint{11}}, RecoveryFence{ExpectedVersion: &version}); !errors.Is(err, ErrPostLikeUnavailable) {
+	if _, err := recoverLikeStore(store, t.Context(), postID, FullState{Count: 1, Version: 7}, RecoveryFence{ExpectedVersion: &version}); !errors.Is(err, ErrLikeRecoveryUnsafe) {
 		t.Fatalf("stale recovery=%v", err)
 	}
 	if err := client.Del(CountKey(postID)).Err(); err != nil {

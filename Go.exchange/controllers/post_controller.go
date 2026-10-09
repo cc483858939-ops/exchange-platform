@@ -54,7 +54,7 @@ var initializePostLikeState = func(ctx context.Context, postID uint) error {
 		if err := validatePostLikeBaseline(baseline); err != nil {
 			return likes.FullState{}, err
 		}
-		return likes.FullState{Count: baseline.Count, Version: baseline.Version, UserIDs: baseline.UserIDs}, nil
+		return likes.FullState{Count: baseline.Count, Version: baseline.Version}, nil
 	})
 	return err
 }

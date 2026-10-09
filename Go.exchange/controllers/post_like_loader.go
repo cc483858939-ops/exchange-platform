@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log"
-	"sort"
 
 	"Go.exchange/global"
 	"Go.exchange/likes"
@@ -14,13 +13,9 @@ import (
 )
 
 type postLikeBaseline struct {
-	Count              int64
-	Version            int64
-	UserIDs            []uint
-	ReactionRowCount   int
-	MaxReactionVersion int64
-
-	invalidReactionVersion bool
+	Count            int64
+	Version          int64
+	ReactionRowCount int64
 }
 
 var (
@@ -60,12 +55,13 @@ func loadActivePostLikeBaselineFromDB(db *gorm.DB, postID uint) (postLikeBaselin
 		return postLikeBaseline{}, err
 	}
 
-	var reactions []models.PostReaction
-	if err := db.Where("post_id = ? AND reaction = ?", postID, models.PostReactionLike).
-		Find(&reactions).Error; err != nil {
+	var reactionRows int64
+	if err := db.Model(&models.PostReaction{}).
+		Where("post_id = ? AND reaction = ?", postID, models.PostReactionLike).
+		Count(&reactionRows).Error; err != nil {
 		return postLikeBaseline{}, err
 	}
-	return buildPostLikeBaseline(post.LikeCount, post.LikeSyncVersion, reactions), nil
+	return postLikeBaseline{Count: post.LikeCount, Version: post.LikeSyncVersion, ReactionRowCount: reactionRows}, nil
 }
 
 func loadPostLikeBaselinesFromDBWithDB(db *gorm.DB, postIDs []uint) (map[uint]postLikeBaseline, error) {
@@ -89,66 +85,36 @@ func loadPostLikeBaselinesFromDBWithDB(db *gorm.DB, postIDs []uint) (map[uint]po
 		return result, nil
 	}
 
-	postByID := make(map[uint]models.Post, len(posts))
 	activeIDs := make([]uint, 0, len(posts))
+	postByID := make(map[uint]models.Post, len(posts))
 	for _, post := range posts {
 		postByID[post.ID] = post
 		activeIDs = append(activeIDs, post.ID)
-		result[post.ID] = buildPostLikeBaseline(post.LikeCount, post.LikeSyncVersion, nil)
 	}
 
-	var reactions []models.PostReaction
-	if err := db.Where("post_id IN ? AND reaction = ?", activeIDs, models.PostReactionLike).
-		Find(&reactions).Error; err != nil {
+	type reactionCount struct {
+		PostID        uint
+		ReactionCount int64
+	}
+	var reactionCounts []reactionCount
+	if err := db.Model(&models.PostReaction{}).
+		Select("post_id, COUNT(*) AS reaction_count").
+		Where("post_id IN ? AND reaction = ?", activeIDs, models.PostReactionLike).
+		Group("post_id").Scan(&reactionCounts).Error; err != nil {
 		return nil, err
 	}
-	byPost := make(map[uint][]models.PostReaction, len(activeIDs))
-	for _, reaction := range reactions {
-		byPost[reaction.PostID] = append(byPost[reaction.PostID], reaction)
+	byPost := make(map[uint]int64, len(reactionCounts))
+	for _, row := range reactionCounts {
+		byPost[row.PostID] = row.ReactionCount
 	}
 	for postID, post := range postByID {
-		result[postID] = buildPostLikeBaseline(post.LikeCount, post.LikeSyncVersion, byPost[postID])
+		result[postID] = postLikeBaseline{Count: post.LikeCount, Version: post.LikeSyncVersion, ReactionRowCount: byPost[postID]}
 	}
 	return result, nil
 }
 
-func buildPostLikeBaseline(count, version int64, reactions []models.PostReaction) postLikeBaseline {
-	baseline := postLikeBaseline{
-		Count:            count,
-		Version:          version,
-		ReactionRowCount: len(reactions),
-		UserIDs:          make([]uint, 0),
-	}
-	seen := make(map[uint]struct{}, len(reactions))
-	for _, reaction := range reactions {
-		if reaction.Version > baseline.MaxReactionVersion {
-			baseline.MaxReactionVersion = reaction.Version
-		}
-		if reaction.Version <= 0 {
-			baseline.invalidReactionVersion = true
-		}
-		if reaction.Liked {
-			if _, exists := seen[reaction.UserID]; !exists {
-				seen[reaction.UserID] = struct{}{}
-				baseline.UserIDs = append(baseline.UserIDs, reaction.UserID)
-			}
-		}
-	}
-	sort.Slice(baseline.UserIDs, func(i, j int) bool { return baseline.UserIDs[i] < baseline.UserIDs[j] })
-	return baseline
-}
-
 func validatePostLikeBaseline(baseline postLikeBaseline) error {
-	if baseline.invalidReactionVersion || baseline.Count < 0 || baseline.Version < 0 || baseline.ReactionRowCount < 0 {
-		return likes.ErrLikeProjectionNotReady
-	}
-	if baseline.ReactionRowCount == 0 {
-		if baseline.Count != 0 || baseline.Version != 0 || baseline.MaxReactionVersion != 0 || len(baseline.UserIDs) != 0 {
-			return likes.ErrLikeProjectionNotReady
-		}
-		return nil
-	}
-	if baseline.Version <= 0 || baseline.MaxReactionVersion != baseline.Version || int64(len(baseline.UserIDs)) != baseline.Count {
+	if baseline.Count < 0 || baseline.Version < 0 || baseline.ReactionRowCount < 0 {
 		return likes.ErrLikeProjectionNotReady
 	}
 	return nil
@@ -158,14 +124,7 @@ func classifyPostLikeRecovery(registered bool, marker *int64, baseline postLikeB
 	if err := validatePostLikeBaseline(baseline); err != nil {
 		return likes.RecoveryFence{}, err
 	}
-	if marker != nil {
-		if !registered || baseline.Version != *marker {
-			return likes.RecoveryFence{}, likes.ErrLikeRecoveryUnsafe
-		}
-		expectedVersion := *marker
-		return likes.RecoveryFence{ExpectedVersion: &expectedVersion}, nil
-	}
-	if registered || baseline.Count != 0 || baseline.Version != 0 || baseline.ReactionRowCount != 0 || len(baseline.UserIDs) != 0 {
+	if marker != nil || registered || baseline.Count != 0 || baseline.Version != 0 || baseline.ReactionRowCount != 0 {
 		return likes.RecoveryFence{}, likes.ErrLikeRecoveryUnsafe
 	}
 	return likes.RecoveryFence{AllowZeroBootstrap: true}, nil

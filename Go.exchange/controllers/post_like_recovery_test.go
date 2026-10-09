@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"Go.exchange/likes"
-	"Go.exchange/models"
 )
 
 // Exercise the actual coordinator and baseline validation with a controlled
@@ -151,7 +150,7 @@ func TestPostLikeRecoveryAcquiresTokenBeforeLoadAndRejectsRevocation(t *testing.
 		}
 		// Deletion revokes the token while the old SQL baseline is in flight.
 		delete(store.tokens, 9)
-		return map[uint]postLikeBaseline{9: buildPostLikeBaseline(0, 0, nil)}, nil
+		return map[uint]postLikeBaseline{9: {}}, nil
 	})
 	if err != nil || !errors.Is(results[9], likes.ErrLikeRecoveryFenceLost) || len(store.writes) != 0 {
 		t.Fatalf("stale baseline accepted: results=%v writes=%v err=%v", results, store.writes, err)
@@ -162,11 +161,6 @@ func TestPostLikeRecoveryCoalescesConcurrentBaselineLoads(t *testing.T) {
 	var group postLikeRecoveryFlights
 	store := newRecoveryTestStore()
 	const callers = 32
-	store.registered[9], store.markers[9] = true, 10000
-	rows := make([]models.PostReaction, 10000)
-	for i := range rows {
-		rows[i] = models.PostReaction{UserID: uint(i + 1), Version: int64(i + 1), Liked: i%2 == 0}
-	}
 	var loads atomic.Int32
 	release := make(chan struct{})
 	releaseLoad := sync.OnceFunc(func() { close(release) })
@@ -178,7 +172,7 @@ func TestPostLikeRecoveryCoalescesConcurrentBaselineLoads(t *testing.T) {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-		return map[uint]postLikeBaseline{9: buildPostLikeBaseline(5000, 10000, rows)}, nil
+		return map[uint]postLikeBaseline{9: {}}, nil
 	}
 	results := make(chan error, callers)
 	waiters := make([]*recoveryWaitContext, callers)
@@ -210,8 +204,8 @@ func TestPostLikeRecoveryCoalescesConcurrentBaselineLoads(t *testing.T) {
 		t.Fatalf("loads=%d ready reads=%d registry=%d markers=%d", loads.Load(), store.reads, store.registries, store.versions)
 	}
 	state := store.writes[9]
-	if len(state.UserIDs) != 5000 || state.Count != 5000 || state.Version != 10000 || *store.fences[9].ExpectedVersion != 10000 {
-		t.Fatalf("recovered state/fence lost members or version: %+v", store.fences[9])
+	if state.Count != 0 || state.Version != 0 || !store.fences[9].AllowZeroBootstrap || store.fences[9].ExpectedVersion != nil {
+		t.Fatalf("recovered state/fence=%+v state=%+v", store.fences[9], state)
 	}
 	group.mu.Lock()
 	defer group.mu.Unlock()
@@ -345,22 +339,22 @@ func TestPostLikeRecoveryPerPostFencesAndReadyRecheck(t *testing.T) {
 			return nil, errors.New("ready post was included in SQL batch")
 		}
 		return map[uint]postLikeBaseline{
-			1: {}, 2: {Count: 1, Version: 7, UserIDs: []uint{10}, ReactionRowCount: 2, MaxReactionVersion: 7},
+			1: {}, 2: {Count: 1, Version: 7, ReactionRowCount: 2},
 			4: {Count: 1}, 5: {}, 6: {}, 7: {},
 		}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for id, want := range map[uint]error{1: nil, 2: nil, 3: likes.ErrPostLikeUnavailable, 4: likes.ErrLikeProjectionNotReady, 5: likes.ErrLikeRecoveryUnsafe, 6: likes.ErrLikeRecoveryFenceLost, 7: likes.ErrLikeRecoveryUnsafe, 8: nil} {
+	for id, want := range map[uint]error{1: nil, 2: likes.ErrLikeRecoveryUnsafe, 3: likes.ErrPostLikeUnavailable, 4: likes.ErrLikeRecoveryUnsafe, 5: likes.ErrLikeRecoveryUnsafe, 6: likes.ErrLikeRecoveryFenceLost, 7: likes.ErrLikeRecoveryUnsafe, 8: nil} {
 		if !errors.Is(results[id], want) {
 			t.Fatalf("post=%d err=%v want=%v", id, results[id], want)
 		}
 	}
-	if len(store.writes) != 2 || !store.fences[1].AllowZeroBootstrap || *store.fences[2].ExpectedVersion != 7 {
+	if len(store.writes) != 1 || !store.fences[1].AllowZeroBootstrap {
 		t.Fatal("invalid recovery writes/fences")
 	}
-	results, err = group.recover(t.Context(), store, []uint{1, 2, 8}, func(context.Context, []uint) (map[uint]postLikeBaseline, error) {
+	results, err = group.recover(t.Context(), store, []uint{1, 8}, func(context.Context, []uint) (map[uint]postLikeBaseline, error) {
 		return nil, errors.New("ready recheck loaded SQL")
 	})
 	if err != nil {

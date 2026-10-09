@@ -591,14 +591,15 @@ func syncExistingPost(tx *gorm.DB, account models.DevDataMirrorAccount, mapping 
 }
 
 func loadReactivationLikeState(tx *gorm.DB, postID uint, count, version int64) (likes.FullState, error) {
-	var userIDs []uint
-	if err := tx.Model(&models.PostReaction{}).
-		Where("post_id = ? AND reaction = ? AND liked = TRUE", postID, models.PostReactionLike).
-		Order("user_id ASC").
-		Pluck("user_id", &userIDs).Error; err != nil {
-		return likes.FullState{}, fmt.Errorf("load canonical like state for reactivated Post %d: %w", postID, err)
+	if tx == nil {
+		return likes.FullState{}, errors.New("database is not initialized")
 	}
-	return likes.FullState{Count: count, Version: version, UserIDs: userIDs}, nil
+	if postID == 0 || count < 0 || version < 0 {
+		return likes.FullState{}, likes.ErrLikeRecoveryUnsafe
+	}
+	// SPEC-01 records only the aggregate and cannot restore User -> Posts. The
+	// reactivation transition itself is rejected by InitializeFrom until SPEC-02.
+	return likes.FullState{Count: count, Version: version}, nil
 }
 
 func insertPost(tx *gorm.DB, account models.DevDataMirrorAccount, desired SnapshotPost, syncAt time.Time, options SyncOptions, maintenance *syncMaintenance) error {

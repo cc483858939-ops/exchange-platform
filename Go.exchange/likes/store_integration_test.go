@@ -28,6 +28,7 @@ func TestStoreMutationAndClaimOwnershipIntegration(t *testing.T) {
 	ctx := context.Background()
 	cleanup := func() {
 		client.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
+		client.SRem(UserLikesKey(userID), strconv.FormatUint(uint64(postID), 10))
 		client.SRem(DirtyKey, postID)
 		client.ZRem(ProcessingKey, postID)
 		client.HDel(ClaimsKey, strconv.FormatUint(uint64(postID), 10))
@@ -44,6 +45,9 @@ func TestStoreMutationAndClaimOwnershipIntegration(t *testing.T) {
 	created, err := initializeLikeStore(store, ctx, postID, 0, 0, nil)
 	if err != nil || !created {
 		t.Fatalf("initialize created=%t err=%v", created, err)
+	}
+	if err := store.InitializeUserEmpty(ctx, userID); err != nil {
+		t.Fatal(err)
 	}
 	first, err := store.Mutate(ctx, userID, postID, true)
 	if err != nil {
@@ -91,6 +95,12 @@ func TestStoreMutationAndClaimOwnershipIntegration(t *testing.T) {
 	if !last.Changed || last.Liked || last.Count != 0 || last.Version != 2 {
 		t.Fatalf("unlike=%+v", last)
 	}
+	if initialized, err := client.SIsMember(UserLikesKey(userID), UserLikesInitSentinel).Result(); err != nil || !initialized {
+		t.Fatalf("last unlike removed User sentinel initialized=%t err=%v", initialized, err)
+	}
+	if liked, err := client.SIsMember(UserLikesKey(userID), strconv.FormatUint(uint64(postID), 10)).Result(); err != nil || liked {
+		t.Fatalf("last unlike retained relation liked=%t err=%v", liked, err)
+	}
 }
 
 func TestStoreGetManyIntegration(t *testing.T) {
@@ -106,17 +116,23 @@ func TestStoreGetManyIntegration(t *testing.T) {
 	}
 	store := NewStore(client)
 	base := uint(time.Now().UnixNano() & 0x3fffffff)
-	postIDs := []uint{base, base + 1, base + 2}
+	postIDs := []uint{base, base + 1, base + 2, base + 3}
 	ctx := context.Background()
 	cleanup := func() {
 		for _, postID := range postIDs {
 			client.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
+			client.SRem(UserLikesKey(11), strconv.FormatUint(uint64(postID), 10))
 			client.SRem(DirtyKey, postID)
 			client.ZRem(ProcessingKey, postID)
 			client.HDel(ClaimsKey, strconv.FormatUint(uint64(postID), 10))
 			client.SRem(RegistryKey, postID)
 			client.ZRem(ExpiryCandidatesKey, postID)
 			client.HDel(RecoverableVersionsKey, strconv.FormatUint(uint64(postID), 10))
+			pair := BehaviorPair(11, postID)
+			client.SRem(BehaviorDirtyKey, pair)
+			client.HDel(BehaviorStateKey, pair)
+			client.ZRem(BehaviorProcessingKey, pair)
+			client.HDel(BehaviorClaimsKey, pair)
 		}
 	}
 	cleanup()
@@ -127,6 +143,12 @@ func TestStoreGetManyIntegration(t *testing.T) {
 	}
 	if created, err := initializeLikeStore(store, ctx, postIDs[1], 0, 0, nil); err != nil || !created {
 		t.Fatalf("article B initialize created=%t err=%v", created, err)
+	}
+	if created, err := initializeLikeStore(store, ctx, postIDs[3], 0, 0, nil); err != nil || !created {
+		t.Fatalf("article D initialize created=%t err=%v", created, err)
+	}
+	if mutation, err := store.Mutate(ctx, 11, postIDs[3], true); err != nil || !mutation.Changed {
+		t.Fatalf("article D mutation=%+v err=%v", mutation, err)
 	}
 
 	states, unavailable, err := store.GetMany(ctx, 11, postIDs)
@@ -139,8 +161,17 @@ func TestStoreGetManyIntegration(t *testing.T) {
 	if states[postIDs[1]].Count != 0 || states[postIDs[1]].Liked {
 		t.Fatalf("article B state=%+v", states[postIDs[1]])
 	}
+	if states[postIDs[3]].Count != 1 || !states[postIDs[3]].Liked {
+		t.Fatalf("article D state=%+v", states[postIDs[3]])
+	}
 	if !equalUintSlices(unavailable, []uint{postIDs[2]}) {
 		t.Fatalf("unavailable=%v", unavailable)
+	}
+	if mutation, err := store.Mutate(ctx, 11, postIDs[3], false); err != nil || !mutation.Changed || mutation.Count != 0 {
+		t.Fatalf("article D unlike=%+v err=%v", mutation, err)
+	}
+	if state, err := store.Get(ctx, 11, postIDs[0]); err != nil || !state.Liked || state.Count != 1 {
+		t.Fatalf("article A changed with article D state=%+v err=%v", state, err)
 	}
 }
 
@@ -166,6 +197,7 @@ func TestStorePurgePostRemovesOnlyTargetLikeStateIntegration(t *testing.T) {
 	cleanup := func() {
 		for _, postID := range []uint{target, unrelated} {
 			client.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
+			client.SRem(UserLikesKey(userID), strconv.FormatUint(uint64(postID), 10))
 			client.SRem(DirtyKey, postID)
 			client.ZRem(ProcessingKey, postID)
 			client.HDel(ClaimsKey, strconv.FormatUint(uint64(postID), 10))
@@ -204,6 +236,11 @@ func TestStorePurgePostRemovesOnlyTargetLikeStateIntegration(t *testing.T) {
 			t.Fatalf("target key=%q exists=%d err=%v", key, exists, err)
 		}
 	}
+	for _, postID := range []uint{target, unrelated} {
+		if liked, err := client.SIsMember(UserLikesKey(userID), strconv.FormatUint(uint64(postID), 10)).Result(); err != nil || !liked {
+			t.Fatalf("PurgePost changed User relation post=%d liked=%t err=%v", postID, liked, err)
+		}
+	}
 	if member, err := client.SIsMember(DirtyKey, target).Result(); err != nil || member {
 		t.Fatalf("target dirty member=%t err=%v", member, err)
 	}
@@ -214,10 +251,13 @@ func TestStorePurgePostRemovesOnlyTargetLikeStateIntegration(t *testing.T) {
 		t.Fatalf("target claim exists=%t err=%v", exists, err)
 	}
 
-	for _, key := range []string{ReadyKey(unrelated), CountKey(unrelated), UsersKey(unrelated), VersionKey(unrelated)} {
+	for _, key := range []string{ReadyKey(unrelated), CountKey(unrelated), VersionKey(unrelated)} {
 		if exists, err := client.Exists(key).Result(); err != nil || exists != 1 {
 			t.Fatalf("unrelated key=%q exists=%d err=%v", key, exists, err)
 		}
+	}
+	if exists, err := client.Exists(UsersKey(unrelated)).Result(); err != nil || exists != 0 {
+		t.Fatalf("legacy unrelated Post Users key=%q exists=%d err=%v", UsersKey(unrelated), exists, err)
 	}
 	if member, err := client.SIsMember(DirtyKey, unrelated).Result(); err != nil || !member {
 		t.Fatalf("unrelated dirty member=%t err=%v", member, err)

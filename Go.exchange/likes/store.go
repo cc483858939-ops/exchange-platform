@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -19,23 +18,19 @@ type Store struct{ client *redis.Client }
 
 func NewStore(client *redis.Client) *Store { return &Store{client: client} }
 
-type expiryLeaseCandidate struct {
-	postID          uint
-	expectedVersion int64
-}
-
-type expiryLeaseRenewalFunc func(context.Context, uint, int64, time.Duration, time.Duration) (bool, error)
-
 func (s *Store) Mutate(ctx context.Context, userID, postID uint, liked bool) (MutationResult, error) {
 	if s == nil || s.client == nil {
 		return MutationResult{}, errors.New("redis is not initialized")
+	}
+	if userID == 0 || postID == 0 {
+		return MutationResult{}, ErrNotReady
 	}
 	desired := "0"
 	if liked {
 		desired = "1"
 	}
 	keys := []string{
-		ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID),
+		ReadyKey(postID), CountKey(postID), VersionKey(postID), UserLikesKey(userID),
 		DirtyKey, BehaviorDirtyKey, BehaviorStateKey, RegistryKey,
 		ExpiryCandidatesKey, RecoverableVersionsKey,
 	}
@@ -55,45 +50,43 @@ func (s *Store) Mutate(ctx context.Context, userID, postID uint, liked bool) (Mu
 }
 
 func (s *Store) Get(ctx context.Context, userID, postID uint) (State, error) {
-	return s.get(ctx, userID, postID, 0, 0, nil)
+	return s.get(ctx, userID, postID)
 }
 
 // GetForServing reads and validates Like state for a client-facing request.
-// When ttl and renewalThreshold form a valid lease policy, it observes the
-// Ready key's PTTL in the read pipeline and best-effort renews an existing
-// lease inside the renewal window. Passing zero durations keeps the read pure.
+// Lease arguments are rejected because Post-only expiry cannot preserve the
+// User -> Posts relation until SPEC-02 implements coordinated recovery.
 func (s *Store) GetForServing(ctx context.Context, userID, postID uint, ttl, renewalThreshold time.Duration) (State, error) {
-	var renew expiryLeaseRenewalFunc
-	if validExpiryLeaseDurations(ttl, renewalThreshold) {
-		renew = s.RenewExpiryLease
+	if config.LikeStateExpiryEnabled() || ttl != 0 || renewalThreshold != 0 {
+		return State{}, ErrLikeStateExpiryUnsupported
 	}
-	return s.get(ctx, userID, postID, ttl, renewalThreshold, renew)
+	return s.get(ctx, userID, postID)
 }
 
-func (s *Store) get(ctx context.Context, userID, postID uint, ttl, renewalThreshold time.Duration, renew expiryLeaseRenewalFunc) (State, error) {
+func (s *Store) get(ctx context.Context, userID, postID uint) (State, error) {
 	if s == nil || s.client == nil {
 		return State{}, errors.New("redis is not initialized")
 	}
-	renewalEnabled := validExpiryLeaseDurations(ttl, renewalThreshold)
+	if postID == 0 {
+		return State{}, ErrNotReady
+	}
 	pipe := s.client.WithContext(ctx).Pipeline()
 	ready := pipe.Get(ReadyKey(postID))
 	count := pipe.Get(CountKey(postID))
 	version := pipe.Get(VersionKey(postID))
-	cardinality := pipe.SCard(UsersKey(postID))
+	var initialized *redis.BoolCmd
 	var member *redis.BoolCmd
 	if userID > 0 {
-		member = pipe.SIsMember(UsersKey(postID), strconv.FormatUint(uint64(userID), 10))
-	}
-	var pttl *redis.DurationCmd
-	if renewalEnabled {
-		pttl = pipe.PTTL(ReadyKey(postID))
+		userKey := UserLikesKey(userID)
+		initialized = pipe.SIsMember(userKey, UserLikesInitSentinel)
+		member = pipe.SIsMember(userKey, strconv.FormatUint(uint64(postID), 10))
 	}
 	_, execErr := pipe.ExecContext(ctx)
 	if ready.Err() == nil && ready.Val() == "deleted" {
 		return State{}, ErrPostLikeUnavailable
 	}
-	if execErr != nil && execErr != redis.Nil && pttl == nil {
-		return State{}, execErr
+	if execErr != nil && execErr != redis.Nil {
+		return State{}, mapScriptError(execErr)
 	}
 	if err := requireReadyCommand(ready); err != nil {
 		return State{}, err
@@ -104,10 +97,13 @@ func (s *Store) get(ctx context.Context, userID, postID uint, ttl, renewalThresh
 	if err := commandErrorOrNotReady(version.Err()); err != nil {
 		return State{}, err
 	}
-	if err := commandErrorOrNotReady(cardinality.Err()); err != nil {
-		return State{}, err
-	}
 	if member != nil {
+		if err := commandErrorOrNotReady(initialized.Err()); err != nil {
+			return State{}, err
+		}
+		if !initialized.Val() {
+			return State{}, ErrNotReady
+		}
 		if err := commandErrorOrNotReady(member.Err()); err != nil {
 			return State{}, err
 		}
@@ -117,18 +113,12 @@ func (s *Store) get(ctx context.Context, userID, postID uint, ttl, renewalThresh
 		return State{}, ErrNotReady
 	}
 	versionValue, ok := parseNonNegativeInt64(version.Val())
-	if !ok || version.Err() == redis.Nil || cardinality.Val() != countValue {
+	if !ok || version.Err() == redis.Nil {
 		return State{}, ErrNotReady
 	}
 	state := State{Count: countValue, Version: versionValue}
 	if member != nil {
 		state.Liked = member.Val()
-	}
-	if execErr != nil && execErr != redis.Nil && (pttl == nil || pttl.Err() == nil) {
-		return State{}, execErr
-	}
-	if renew != nil && pttl != nil && pttl.Err() == nil && pttl.Val() > 0 && pttl.Val() <= renewalThreshold {
-		_, _ = renew(ctx, postID, versionValue, ttl, renewalThreshold)
 	}
 	return state, nil
 }
@@ -140,21 +130,22 @@ func (s *Store) LoadSummary(ctx context.Context, postID uint) (State, error) {
 }
 
 func (s *Store) GetMany(ctx context.Context, userID uint, postIDs []uint) (map[uint]State, []uint, error) {
-	return s.getMany(ctx, userID, postIDs, 0, 0)
+	return s.getMany(ctx, userID, postIDs)
 }
 
-// GetManyForServing keeps the batched read pipeline and renews eligible
-// expiring states in one optional follow-up pipeline. Invalid or zero lease
-// durations disable PTTL observation and renewal while preserving read semantics.
+// GetManyForServing keeps batched read semantics. Lease arguments are rejected
+// until expiry can preserve both aggregate and per-user relation state.
 func (s *Store) GetManyForServing(ctx context.Context, userID uint, postIDs []uint, ttl, renewalThreshold time.Duration) (map[uint]State, []uint, error) {
-	return s.getMany(ctx, userID, postIDs, ttl, renewalThreshold)
+	if config.LikeStateExpiryEnabled() || ttl != 0 || renewalThreshold != 0 {
+		return nil, nil, ErrLikeStateExpiryUnsupported
+	}
+	return s.getMany(ctx, userID, postIDs)
 }
 
-func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint, ttl, renewalThreshold time.Duration) (map[uint]State, []uint, error) {
+func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint) (map[uint]State, []uint, error) {
 	if s == nil || s.client == nil {
 		return nil, nil, errors.New("redis is not initialized")
 	}
-	renewalEnabled := validExpiryLeaseDurations(ttl, renewalThreshold)
 	states := make(map[uint]State, len(postIDs))
 	unavailable := make([]uint, 0)
 	if len(postIDs) == 0 {
@@ -162,106 +153,113 @@ func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint, ttl, r
 	}
 
 	type commands struct {
-		postID      uint
-		ready       *redis.StringCmd
-		count       *redis.StringCmd
-		version     *redis.StringCmd
-		cardinality *redis.IntCmd
-		member      *redis.BoolCmd
-		pttl        *redis.DurationCmd
+		postID  uint
+		ready   *redis.StringCmd
+		count   *redis.StringCmd
+		version *redis.StringCmd
+		member  *redis.BoolCmd
 	}
 	pipe := s.client.WithContext(ctx).Pipeline()
 	batch := make([]commands, 0, len(postIDs))
-	user := strconv.FormatUint(uint64(userID), 10)
+	var initialized *redis.BoolCmd
+	userKey := ""
+	if userID > 0 {
+		userKey = UserLikesKey(userID)
+		initialized = pipe.SIsMember(userKey, UserLikesInitSentinel)
+	}
 	for _, postID := range postIDs {
-		command := commands{
-			postID:      postID,
-			ready:       pipe.Get(ReadyKey(postID)),
-			count:       pipe.Get(CountKey(postID)),
-			version:     pipe.Get(VersionKey(postID)),
-			cardinality: pipe.SCard(UsersKey(postID)),
-			member:      pipe.SIsMember(UsersKey(postID), user),
+		if postID == 0 {
+			unavailable = append(unavailable, postID)
+			continue
 		}
-		if renewalEnabled {
-			command.pttl = pipe.PTTL(ReadyKey(postID))
+		command := commands{
+			postID:  postID,
+			ready:   pipe.Get(ReadyKey(postID)),
+			count:   pipe.Get(CountKey(postID)),
+			version: pipe.Get(VersionKey(postID)),
+		}
+		if userID > 0 {
+			command.member = pipe.SIsMember(userKey, strconv.FormatUint(uint64(postID), 10))
 		}
 		batch = append(batch, command)
 	}
 	_, execErr := pipe.ExecContext(ctx)
-	var renewCandidates []expiryLeaseCandidate
-	ignoredDeletedError := false
-	var renewCandidateIDs map[uint]struct{}
-	if renewalEnabled {
-		renewCandidateIDs = make(map[uint]struct{})
+	if initialized != nil {
+		if err := commandErrorOrNotReady(initialized.Err()); err != nil {
+			return nil, nil, err
+		}
+		if !initialized.Val() {
+			return nil, nil, ErrNotReady
+		}
 	}
 	for _, command := range batch {
 		if command.ready.Err() == nil && command.ready.Val() == "deleted" {
 			unavailable = append(unavailable, command.postID)
-			if command.count.Err() != nil && command.count.Err() != redis.Nil || command.version.Err() != nil && command.version.Err() != redis.Nil || command.cardinality.Err() != nil && command.cardinality.Err() != redis.Nil || command.member.Err() != nil && command.member.Err() != redis.Nil {
-				ignoredDeletedError = true
-			}
 			continue
 		}
-		for _, commandErr := range []error{command.ready.Err(), command.count.Err(), command.version.Err(), command.cardinality.Err(), command.member.Err()} {
+		for _, commandErr := range []error{command.ready.Err(), command.count.Err(), command.version.Err()} {
 			if commandErr != nil && commandErr != redis.Nil {
-				return nil, nil, commandErr
+				return nil, nil, mapScriptError(commandErr)
+			}
+		}
+		if command.member != nil {
+			if err := commandErrorOrNotReady(command.member.Err()); err != nil {
+				return nil, nil, err
 			}
 		}
 		count, countOK := parseNonNegativeInt64(command.count.Val())
 		version, versionOK := parseNonNegativeInt64(command.version.Val())
 		if command.ready.Val() != "1" || command.ready.Err() == redis.Nil ||
 			command.count.Err() == redis.Nil || command.version.Err() == redis.Nil ||
-			!countOK || !versionOK || command.cardinality.Val() != count {
+			!countOK || !versionOK {
 			unavailable = append(unavailable, command.postID)
 			continue
 		}
 		states[command.postID] = State{
 			Count:   count,
 			Version: version,
-			Liked:   command.member.Val(),
-		}
-		if command.pttl != nil && command.pttl.Err() == nil && command.pttl.Val() > 0 && command.pttl.Val() <= renewalThreshold {
-			if _, seen := renewCandidateIDs[command.postID]; !seen {
-				renewCandidateIDs[command.postID] = struct{}{}
-				renewCandidates = append(renewCandidates, expiryLeaseCandidate{postID: command.postID, expectedVersion: version})
-			}
+			Liked:   command.member != nil && command.member.Val(),
 		}
 	}
-	hasPTTLError := false
-	for _, command := range batch {
-		if command.pttl != nil && command.pttl.Err() != nil {
-			hasPTTLError = true
-			break
-		}
-	}
-	if execErr != nil && execErr != redis.Nil && !hasPTTLError && !ignoredDeletedError {
-		return nil, nil, execErr
-	}
-	if renewalEnabled && len(renewCandidates) > 0 {
-		s.renewExpiryLeases(ctx, renewCandidates, ttl, renewalThreshold)
+	if execErr != nil && execErr != redis.Nil {
+		return nil, nil, mapScriptError(execErr)
 	}
 	return states, unavailable, nil
 }
 
-// Initialize requires a token acquired before loading the active SQL baseline.
-func (s *Store) Initialize(ctx context.Context, postID uint, count, version int64, userIDs []uint, rebuildToken string) (bool, error) {
+// InitializeUserEmpty creates the explicit initialized-empty relation only for
+// callers that know this user has no prior Like state. It never repairs a
+// partially lost or malformed relation set.
+func (s *Store) InitializeUserEmpty(ctx context.Context, userID uint) error {
+	if s == nil || s.client == nil {
+		return errors.New("redis is not initialized")
+	}
+	if userID == 0 {
+		return errors.New("invalid user id")
+	}
+	_, err := initializeUserEmptyScript.Run(
+		s.client.WithContext(ctx), []string{UserLikesKey(userID)},
+	).Int64()
+	return mapScriptError(err)
+}
+
+// Initialize requires a rebuild token acquired before loading the active SQL
+// baseline. SPEC-01 only permits a confirmed zero-state bootstrap because it
+// cannot reconstruct User -> Posts relationships from a Post aggregate.
+func (s *Store) Initialize(ctx context.Context, postID uint, count, version int64, rebuildToken string) (bool, error) {
 	if s == nil || s.client == nil {
 		return false, errors.New("redis is not initialized")
 	}
 	if postID == 0 || count < 0 || version < 0 {
-		return false, errors.New("invalid post like baseline")
+		return false, ErrLikeRecoveryUnsafe
 	}
-	userIDs, ok := normalizeUserIDs(userIDs)
-	if !ok || int64(len(userIDs)) != count {
-		return false, errors.New("invalid post like baseline")
+	if count != 0 || version != 0 {
+		return false, ErrLikeRecoveryUnsafe
 	}
 	args := []interface{}{count, version, postID, time.Now().UTC().UnixMilli(), rebuildToken}
-	for _, id := range userIDs {
-		args = append(args, id)
-	}
 	value, err := initializeScript.Run(
 		s.client.WithContext(ctx),
-		[]string{ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID), RegistryKey, ExpiryCandidatesKey, RecoverableVersionsKey, RebuildTokenKey(postID)},
+		[]string{ReadyKey(postID), CountKey(postID), VersionKey(postID), RegistryKey, ExpiryCandidatesKey, RecoverableVersionsKey, RebuildTokenKey(postID)},
 		args...,
 	).Int64()
 	return value == 1, mapScriptError(err)
@@ -271,35 +269,14 @@ func (s *Store) Recover(ctx context.Context, postID uint, baseline FullState, fe
 	if s == nil || s.client == nil {
 		return false, errors.New("redis is not initialized")
 	}
-	if postID == 0 || baseline.Count < 0 || baseline.Version < 0 {
+	if postID == 0 || baseline.Count != 0 || baseline.Version != 0 ||
+		fence.ExpectedVersion != nil || !fence.AllowZeroBootstrap {
 		return false, ErrLikeRecoveryUnsafe
 	}
-	userIDs, ok := normalizeUserIDs(baseline.UserIDs)
-	if !ok || int64(len(userIDs)) != baseline.Count {
-		return false, ErrLikeRecoveryUnsafe
-	}
-
-	mode := "zero"
-	expectedVersion := ""
-	if fence.ExpectedVersion != nil {
-		if *fence.ExpectedVersion < 0 {
-			return false, ErrLikeRecoveryUnsafe
-		}
-		mode = "marker"
-		expectedVersion = strconv.FormatInt(*fence.ExpectedVersion, 10)
-	} else if !fence.AllowZeroBootstrap {
-		return false, ErrLikeRecoveryUnsafe
-	}
-	args := []interface{}{
-		baseline.Count, baseline.Version, postID, mode, expectedVersion,
-		len(userIDs), time.Now().UTC().UnixMilli(), fence.RebuildToken,
-	}
-	for _, id := range userIDs {
-		args = append(args, id)
-	}
+	args := []interface{}{baseline.Count, baseline.Version, postID, time.Now().UTC().UnixMilli(), fence.RebuildToken}
 	value, err := recoverScript.Run(
 		s.client.WithContext(ctx),
-		[]string{ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID), RegistryKey, ExpiryCandidatesKey, RecoverableVersionsKey, RebuildTokenKey(postID)},
+		[]string{ReadyKey(postID), CountKey(postID), VersionKey(postID), RegistryKey, ExpiryCandidatesKey, RecoverableVersionsKey, RebuildTokenKey(postID)},
 		args...,
 	).Int64()
 	return value == 1, mapScriptError(err)
@@ -309,91 +286,16 @@ func (s *Store) ArmExpiry(ctx context.Context, postID uint, expectedVersion int6
 	if s == nil || s.client == nil {
 		return false, errors.New("redis is not initialized")
 	}
-	if postID == 0 || expectedVersion < 0 || ttl <= 0 {
-		return false, errors.New("invalid like state expiry arguments")
-	}
-	seconds := int64(ttl / time.Second)
-	if ttl%time.Second != 0 {
-		seconds++
-	}
-	if seconds < 1 {
-		seconds = 1
-	}
-	value, err := armExpiryScript.Run(
-		s.client.WithContext(ctx),
-		[]string{
-			ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID),
-			RegistryKey, ExpiryCandidatesKey, RecoverableVersionsKey,
-			DirtyKey, ProcessingKey, ClaimsKey,
-		},
-		postID, expectedVersion, seconds,
-	).Int64()
-	return value == 1, mapScriptError(err)
+	return false, ErrLikeStateExpiryUnsupported
 }
 
-// RenewExpiryLease extends an existing recovery-backed expiry lease. It never
-// creates a marker or changes mutation-driven expiry candidate chronology.
+// RenewExpiryLease is disabled until expiration can preserve both aggregate
+// and per-user relation state.
 func (s *Store) RenewExpiryLease(ctx context.Context, postID uint, expectedVersion int64, ttl, renewalThreshold time.Duration) (bool, error) {
 	if s == nil || s.client == nil {
 		return false, errors.New("redis is not initialized")
 	}
-	if postID == 0 || expectedVersion < 0 || !validExpiryLeaseDurations(ttl, renewalThreshold) {
-		return false, errors.New("invalid like state expiry renewal arguments")
-	}
-	ttlMillis, thresholdMillis := expiryLeaseMilliseconds(ttl, renewalThreshold)
-	if ttlMillis <= 0 || thresholdMillis <= 0 || thresholdMillis >= ttlMillis {
-		return false, errors.New("invalid like state expiry renewal durations")
-	}
-	value, err := s.client.WithContext(ctx).Eval(
-		renewExpiryLeaseScript,
-		[]string{ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID), RegistryKey, RecoverableVersionsKey},
-		postID, strconv.FormatInt(expectedVersion, 10), ttlMillis, thresholdMillis,
-	).Int64()
-	return value == 1, mapScriptError(err)
-}
-
-func (s *Store) renewExpiryLeases(ctx context.Context, candidates []expiryLeaseCandidate, ttl, renewalThreshold time.Duration) {
-	if s == nil || s.client == nil || len(candidates) == 0 || !validExpiryLeaseDurations(ttl, renewalThreshold) {
-		return
-	}
-	ttlMillis, thresholdMillis := expiryLeaseMilliseconds(ttl, renewalThreshold)
-	if ttlMillis <= 0 || thresholdMillis <= 0 || thresholdMillis >= ttlMillis {
-		return
-	}
-	pipe := s.client.WithContext(ctx).Pipeline()
-	seen := make(map[uint]struct{}, len(candidates))
-	for _, candidate := range candidates {
-		if _, exists := seen[candidate.postID]; exists {
-			continue
-		}
-		seen[candidate.postID] = struct{}{}
-		pipe.Eval(
-			renewExpiryLeaseScript,
-			[]string{ReadyKey(candidate.postID), CountKey(candidate.postID), UsersKey(candidate.postID), VersionKey(candidate.postID), RegistryKey, RecoverableVersionsKey},
-			candidate.postID, strconv.FormatInt(candidate.expectedVersion, 10), ttlMillis, thresholdMillis,
-		)
-	}
-	_, _ = pipe.ExecContext(ctx)
-}
-
-func validExpiryLeaseDurations(ttl, renewalThreshold time.Duration) bool {
-	return ttl > 0 && renewalThreshold > 0 && renewalThreshold < ttl &&
-		durationMillisecondsCeil(renewalThreshold) < durationMillisecondsCeil(ttl)
-}
-
-func expiryLeaseMilliseconds(ttl, renewalThreshold time.Duration) (int64, int64) {
-	return durationMillisecondsCeil(ttl), durationMillisecondsCeil(renewalThreshold)
-}
-
-func durationMillisecondsCeil(duration time.Duration) int64 {
-	millis := int64(duration / time.Millisecond)
-	if duration%time.Millisecond != 0 {
-		millis++
-	}
-	if millis < 1 {
-		return 1
-	}
-	return millis
+	return false, ErrLikeStateExpiryUnsupported
 }
 
 // DeletePost first fences the identity using the existing Ready key, so partial
@@ -414,9 +316,9 @@ func (s *Store) DeletePost(ctx context.Context, postID uint) error {
 	return s.PurgePost(ctx, postID)
 }
 
-// PurgePost removes live Redis-owned Like state, preserving a deletion fence. Relational
-// PostReaction rows and behavior-relay keys are intentionally outside this
-// cleanup contract.
+// PurgePost removes live Post aggregate and snapshot-relay state, preserving a
+// deletion fence. It cannot remove that Post from every User set without a
+// reverse index; SPEC-02 owns that lifecycle cleanup.
 func (s *Store) PurgePost(ctx context.Context, postID uint) error {
 	if s == nil || s.client == nil {
 		return errors.New("redis is not initialized")
@@ -432,7 +334,7 @@ func (s *Store) PurgePost(ctx context.Context, postID uint) error {
 	_, err := purgePostScript.Run(
 		s.client.WithContext(ctx),
 		[]string{
-			ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID),
+			ReadyKey(postID), CountKey(postID), VersionKey(postID),
 			DirtyKey, ProcessingKey, ClaimsKey,
 			RegistryKey, ExpiryCandidatesKey, RecoverableVersionsKey,
 			RebuildTokenKey(postID),
@@ -454,7 +356,6 @@ func (s *Store) LoadFullState(ctx context.Context, postID uint) (FullState, erro
 	ready := pipe.Get(ReadyKey(postID))
 	count := pipe.Get(CountKey(postID))
 	version := pipe.Get(VersionKey(postID))
-	users := pipe.SMembers(UsersKey(postID))
 	_, execErr := pipe.ExecContext(ctx)
 	if ready.Err() == nil && ready.Val() == "deleted" {
 		return FullState{}, ErrPostLikeUnavailable
@@ -482,14 +383,7 @@ func (s *Store) LoadFullState(ctx context.Context, postID uint) (FullState, erro
 	if version.Err() == redis.Nil || !ok {
 		return FullState{}, ErrNotReady
 	}
-	if err := commandErrorOrNotReady(users.Err()); err != nil {
-		return FullState{}, err
-	}
-	userIDs, ok := parseUserIDs(users.Val())
-	if !ok || int64(len(userIDs)) != countValue {
-		return FullState{}, ErrNotReady
-	}
-	return FullState{Count: countValue, Version: versionValue, UserIDs: userIDs}, nil
+	return FullState{Count: countValue, Version: versionValue}, nil
 }
 
 func (s *Store) RegistryContains(ctx context.Context, postID uint) (bool, error) {
@@ -747,9 +641,8 @@ func (s *Store) loadAggregateState(ctx context.Context, postID uint) (State, err
 	ready := pipe.Get(ReadyKey(postID))
 	count := pipe.Get(CountKey(postID))
 	version := pipe.Get(VersionKey(postID))
-	cardinality := pipe.SCard(UsersKey(postID))
 	if _, err := pipe.ExecContext(ctx); err != nil && err != redis.Nil {
-		return State{}, err
+		return State{}, mapScriptError(err)
 	}
 	if err := commandErrorOrNotReady(ready.Err()); err != nil {
 		return State{}, err
@@ -763,12 +656,9 @@ func (s *Store) loadAggregateState(ctx context.Context, postID uint) (State, err
 	if err := commandErrorOrNotReady(version.Err()); err != nil {
 		return State{}, err
 	}
-	if err := commandErrorOrNotReady(cardinality.Err()); err != nil {
-		return State{}, err
-	}
 	countValue, countOK := parseNonNegativeInt64(count.Val())
 	versionValue, versionOK := parseNonNegativeInt64(version.Val())
-	if !countOK || !versionOK || cardinality.Val() != countValue {
+	if !countOK || !versionOK {
 		return State{}, ErrNotReady
 	}
 	return State{Count: countValue, Version: versionValue}, nil
@@ -794,6 +684,9 @@ func commandErrorOrNotReady(err error) error {
 	if err == redis.Nil {
 		return ErrNotReady
 	}
+	if strings.Contains(strings.ToUpper(err.Error()), "WRONGTYPE") {
+		return fmt.Errorf("like Redis key type preflight failed: %w", ErrLikeRedisType)
+	}
 	return err
 }
 
@@ -806,36 +699,6 @@ func parseNonNegativeInt64(value string) (int64, bool) {
 		return 0, false
 	}
 	return number, true
-}
-
-func parseUserIDs(values []string) ([]uint, bool) {
-	userIDs := make([]uint, 0, len(values))
-	seen := make(map[uint]struct{}, len(values))
-	for _, value := range values {
-		parsed, err := strconv.ParseUint(value, 10, 64)
-		if err != nil || parsed == 0 || uint64(uint(parsed)) != parsed {
-			return nil, false
-		}
-		userID := uint(parsed)
-		if _, exists := seen[userID]; exists {
-			return nil, false
-		}
-		seen[userID] = struct{}{}
-		userIDs = append(userIDs, userID)
-	}
-	sort.Slice(userIDs, func(i, j int) bool { return userIDs[i] < userIDs[j] })
-	return userIDs, true
-}
-
-func normalizeUserIDs(userIDs []uint) ([]uint, bool) {
-	copyIDs := append([]uint(nil), userIDs...)
-	return parseUserIDs(func() []string {
-		values := make([]string, 0, len(copyIDs))
-		for _, userID := range copyIDs {
-			values = append(values, strconv.FormatUint(uint64(userID), 10))
-		}
-		return values
-	}())
 }
 
 func mapScriptError(err error) error {
@@ -852,7 +715,9 @@ func mapScriptError(err error) error {
 		return ErrLikeRecoveryUnsafe
 	case strings.Contains(message, "LIKE_RECOVERY_FENCE_LOST"):
 		return ErrLikeRecoveryFenceLost
-	case strings.Contains(message, "LIKE_TYPE_PRECHECK"):
+	case strings.Contains(message, "LIKE_COUNT_INCONSISTENT"):
+		return ErrLikeCountInconsistent
+	case strings.Contains(message, "LIKE_TYPE_PRECHECK"), strings.Contains(strings.ToUpper(message), "WRONGTYPE"):
 		return fmt.Errorf("like Redis key type preflight failed: %w", ErrLikeRedisType)
 	default:
 		return err

@@ -53,9 +53,15 @@ func TestDeletePostPurgesOnlyTargetRedisLikeStateIntegration(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	store := likes.NewStore(redisClient)
+	if err := store.InitializeUserEmpty(t.Context(), other.ID); err != nil {
+		t.Fatal(err)
+	}
 	for _, postID := range postIDs {
-		if created, err := initializeLikeStore(store, t.Context(), postID, 1, 4, []uint{other.ID}); err != nil || !created {
+		if created, err := initializeLikeStore(store, t.Context(), postID, 0, 0, nil); err != nil || !created {
 			t.Fatalf("initialize post=%d created=%t err=%v", postID, created, err)
+		}
+		if mutation, err := store.Mutate(t.Context(), other.ID, postID, true); err != nil || !mutation.Changed {
+			t.Fatalf("seed post=%d mutation=%+v err=%v", postID, mutation, err)
 		}
 	}
 	redisClient.SAdd(likes.DirtyKey, target.ID, unrelated.ID)
@@ -79,6 +85,11 @@ func TestDeletePostPurgesOnlyTargetRedisLikeStateIntegration(t *testing.T) {
 	}
 	assertTargetLikeKeysPurged(t, redisClient, target.ID)
 	assertUnrelatedLikeKeysRemain(t, redisClient, unrelated.ID)
+	for _, id := range postIDs {
+		if liked, err := redisClient.SIsMember(likes.UserLikesKey(other.ID), strconv.FormatUint(uint64(id), 10)).Result(); err != nil || !liked {
+			t.Fatalf("Post purge changed User relation post=%d liked=%t err=%v", id, liked, err)
+		}
+	}
 	for _, check := range []struct {
 		key   string
 		field string
@@ -132,7 +143,7 @@ func assertTargetLikeKeysPurged(t *testing.T, client *redis.Client, postID uint)
 
 func assertUnrelatedLikeKeysRemain(t *testing.T, client *redis.Client, postID uint) {
 	t.Helper()
-	for _, key := range []string{likes.ReadyKey(postID), likes.CountKey(postID), likes.UsersKey(postID), likes.VersionKey(postID)} {
+	for _, key := range []string{likes.ReadyKey(postID), likes.CountKey(postID), likes.VersionKey(postID)} {
 		if exists, err := client.Exists(key).Result(); err != nil || exists != 1 {
 			t.Fatalf("unrelated key=%q exists=%d err=%v", key, exists, err)
 		}

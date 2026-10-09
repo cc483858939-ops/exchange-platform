@@ -17,8 +17,20 @@ func ValidateAPIEventingConfig(cfg *Config) error {
 	if cfg == nil {
 		return errors.New("application configuration is not initialized")
 	}
+	if err := ValidateLikeStateExpiryConfig(); err != nil {
+		return err
+	}
 	if strings.TrimSpace(cfg.Kafka.ActivityEventsTopic) == "" {
 		return errors.New("Kafka activity events topic is not configured")
+	}
+	return nil
+}
+
+// ValidateLikeStateExpiryConfig prevents Post aggregate expiration while
+// User -> Posts relationships still lack coordinated recovery and cleanup.
+func ValidateLikeStateExpiryConfig() error {
+	if LikeStateExpiryEnabled() {
+		return errors.New("LIKE_STATE_EXPIRY_ENABLED is unsupported until SPEC-02 implements User Like state recovery")
 	}
 	return nil
 }

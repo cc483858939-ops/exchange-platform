@@ -61,11 +61,10 @@ func TestDevDataMaintenanceReloadsCurrentLikesAndRejectsDeletedPostIntegration(t
 	}
 	maintenance := newSyncMaintenance()
 	// A stale transaction-time snapshot must not be written back.
-	maintenance.addReactivation(postID, likes.FullState{Count: 2, Version: 3, UserIDs: []uint{22, 33}})
+	maintenance.addReactivation(postID, likes.FullState{Count: 2, Version: 3})
 	performPostCommitMaintenance(t.Context(), tx, client, maintenance)
-	state, err := store.Get(t.Context(), 11, postID)
-	if err != nil || state.Count != 1 || state.Version != 9 || !state.Liked {
-		t.Fatalf("did not reload SQL: state=%+v err=%v", state, err)
+	if _, err := store.Get(t.Context(), 11, postID); !errors.Is(err, likes.ErrPostLikeUnavailable) {
+		t.Fatalf("SPEC-01 unexpectedly reactivated nonzero state: %v", err)
 	}
 	if err := tx.Exec("UPDATE posts SET deleted_at=now() WHERE id=?", postID).Error; err != nil {
 		t.Fatal(err)

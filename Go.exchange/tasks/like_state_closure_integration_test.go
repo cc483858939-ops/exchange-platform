@@ -2,7 +2,6 @@ package tasks
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -202,7 +201,7 @@ func assertLikeStateClosureRedisDeleted(t *testing.T, client *redis.Client, post
 	if _, err := store.Mutate(t.Context(), 1, postID, true); !errors.Is(err, likes.ErrPostLikeUnavailable) {
 		t.Fatalf("deleted state mutation=%v", err)
 	}
-	for _, key := range []string{likes.CountKey(postID), likes.UsersKey(postID), likes.VersionKey(postID)} {
+	for _, key := range []string{likes.CountKey(postID), likes.VersionKey(postID)} {
 		if exists, err := client.Exists(key).Result(); err != nil || exists != 0 {
 			t.Fatalf("purged key=%q exists=%d err=%v", key, exists, err)
 		}
@@ -228,30 +227,34 @@ func assertLikeStateClosureRedisDeleted(t *testing.T, client *redis.Client, post
 	}
 }
 
-func TestPostLikeSafeExpiryRecoveryIntegration(t *testing.T) {
+func TestPostLikeRelaysPreservedAndNonzeroRecoveryFailsClosedIntegration(t *testing.T) {
 	env := openLikeStateClosureIntegration(t)
-	env.author = models.User{Username: "like-expiry-author-" + uuid.NewString(), Password: "test"}
-	env.actor = models.User{Username: "like-expiry-actor-" + uuid.NewString(), Password: "test"}
-	env.actor2 = models.User{Username: "like-expiry-actor-two-" + uuid.NewString(), Password: "test"}
+	env.author = models.User{Username: "like-relay-author-" + uuid.NewString(), Password: "test"}
+	env.actor = models.User{Username: "like-relay-actor-" + uuid.NewString(), Password: "test"}
+	env.actor2 = models.User{Username: "like-relay-actor-two-" + uuid.NewString(), Password: "test"}
 	if err := env.db.Create(&[]*models.User{&env.author, &env.actor, &env.actor2}).Error; err != nil {
 		t.Fatal(err)
 	}
 	env.users = []uint{env.author.ID, env.actor.ID, env.actor2.ID}
-	env.post = models.Post{AuthorID: env.author.ID, Content: "safe expiry recovery", Visibility: "public"}
+	env.post = models.Post{AuthorID: env.author.ID, Content: "User to Posts relays", Visibility: "public"}
 	if err := env.db.Create(&env.post).Error; err != nil {
 		t.Fatal(err)
 	}
 	env.posts = []uint{env.post.ID}
-
 	ctx := context.Background()
 	if initialized, err := initializeLikeStore(env.store, ctx, env.post.ID, 0, 0, nil); err != nil || !initialized {
 		t.Fatalf("initialize created=%t err=%v", initialized, err)
 	}
+	for _, userID := range []uint{env.actor.ID, env.actor2.ID} {
+		if err := env.store.InitializeUserEmpty(ctx, userID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	first := invokeLikeStateClosureHandler(t, http.MethodPut, "/api/posts/"+strconv.FormatUint(uint64(env.post.ID), 10)+"/like", env.post.ID, env.actor.ID, controllers.LikePost)
 	if first.Code != http.StatusOK {
 		t.Fatalf("first like status=%d body=%s", first.Code, first.Body.String())
 	}
-
 	snapshotPublisher := &relayTestPublisher{}
 	if err := runLikeSnapshotRelayBatch(ctx, env.store, snapshotPublisher); err != nil {
 		t.Fatal(err)
@@ -263,7 +266,6 @@ func TestPostLikeSafeExpiryRecoveryIntegration(t *testing.T) {
 	if _, err := applyLikeSnapshotEvent(ctx, env.db, snapshotEvent); err != nil {
 		t.Fatal(err)
 	}
-
 	behaviorPublisher := &relayTestPublisher{}
 	if err := runLikeBehaviorRelayBatch(ctx, env.store, behaviorPublisher); err != nil {
 		t.Fatal(err)
@@ -275,128 +277,42 @@ func TestPostLikeSafeExpiryRecoveryIntegration(t *testing.T) {
 	if err := applyUserBehaviorEventForIntegration(t, env.db, config.AppConfig.Kafka, behaviorEvent); err != nil {
 		t.Fatal(err)
 	}
-
 	assertCanonicalLikeProjectionRows(t, env.db, env.post.ID, env.actor.ID, 1)
 	state, err := env.store.LoadFullState(ctx, env.post.ID)
-	if err != nil || state.Count != 1 || state.Version != 1 || len(state.UserIDs) != 1 || state.UserIDs[0] != env.actor.ID {
-		t.Fatalf("durable Redis state=%+v err=%v", state, err)
+	if err != nil || state.Count != 1 || state.Version != 1 {
+		t.Fatalf("aggregate Redis state=%+v err=%v", state, err)
 	}
-	if quiescent, err := env.store.SnapshotQueueQuiescent(ctx, env.post.ID); err != nil || !quiescent {
-		t.Fatalf("snapshot queue quiescent=%t err=%v", quiescent, err)
+	if initialized, err := env.redis.SIsMember(likes.UserLikesKey(env.actor.ID), likes.UserLikesInitSentinel).Result(); err != nil || !initialized {
+		t.Fatalf("actor sentinel=%t err=%v", initialized, err)
 	}
-	assertLikeStateClosureBehaviorQuiescent(t, env.redis, env.actor.ID, env.post.ID)
-
-	if armed, err := env.store.ArmExpiry(ctx, env.post.ID, 1, 2*time.Second); err != nil || !armed {
+	if liked, err := env.redis.SIsMember(likes.UserLikesKey(env.actor.ID), strconv.FormatUint(uint64(env.post.ID), 10)).Result(); err != nil || !liked {
+		t.Fatalf("actor relation=%t err=%v", liked, err)
+	}
+	if exists, err := env.redis.Exists(likes.UsersKey(env.post.ID)).Result(); err != nil || exists != 0 {
+		t.Fatalf("legacy Post Users key exists=%d err=%v", exists, err)
+	}
+	if armed, err := env.store.ArmExpiry(ctx, env.post.ID, 1, time.Second); armed || !errors.Is(err, likes.ErrLikeStateExpiryUnsupported) {
 		t.Fatalf("ArmExpiry armed=%t err=%v", armed, err)
 	}
-	postIDString := strconv.FormatUint(uint64(env.post.ID), 10)
-	if marker, err := env.redis.HGet(likes.RecoverableVersionsKey, postIDString).Result(); err != nil || marker != "1" {
-		t.Fatalf("expiry marker=%q err=%v", marker, err)
-	}
-	if ttl, err := env.redis.TTL(likes.ReadyKey(env.post.ID)).Result(); err != nil || ttl <= 0 {
-		t.Fatalf("Ready ttl=%s err=%v", ttl, err)
-	}
-	if registered, err := env.redis.SIsMember(likes.RegistryKey, env.post.ID).Result(); err != nil || !registered {
-		t.Fatalf("registry=%t err=%v", registered, err)
-	}
-	if _, err := env.redis.ZScore(likes.ExpiryCandidatesKey, postIDString).Result(); err != redis.Nil {
-		t.Fatalf("expiry candidate was not removed err=%v", err)
-	}
-
-	// Simulate expiry without touching the retained Registry or recovery marker.
-	if err := env.redis.Del(likes.ReadyKey(env.post.ID), likes.CountKey(env.post.ID), likes.UsersKey(env.post.ID), likes.VersionKey(env.post.ID)).Err(); err != nil {
-		t.Fatal(err)
-	}
-	if registered, err := env.redis.SIsMember(likes.RegistryKey, env.post.ID).Result(); err != nil || !registered {
-		t.Fatalf("registry after state deletion=%t err=%v", registered, err)
-	}
-	if marker, err := env.redis.HGet(likes.RecoverableVersionsKey, postIDString).Result(); err != nil || marker != "1" {
-		t.Fatalf("marker after state deletion=%q err=%v", marker, err)
-	}
-
-	second := invokeLikeStateClosureHandler(t, http.MethodPut, "/api/posts/"+postIDString+"/like", env.post.ID, env.actor2.ID, controllers.LikePost)
-	if second.Code != http.StatusOK {
-		t.Fatalf("recovered like status=%d body=%s", second.Code, second.Body.String())
-	}
-	var secondPayload struct {
-		Likes int64 `json:"likes"`
-		Liked bool  `json:"liked"`
-	}
-	if err := json.Unmarshal(second.Body.Bytes(), &secondPayload); err != nil {
-		t.Fatal(err)
-	}
-	if secondPayload.Likes != 2 || !secondPayload.Liked {
-		t.Fatalf("recovered like payload=%#v", secondPayload)
-	}
-
-	state, err = env.store.LoadFullState(ctx, env.post.ID)
-	if err != nil || state.Count != 2 || state.Version != 2 || len(state.UserIDs) != 2 || state.UserIDs[0] != env.actor.ID || state.UserIDs[1] != env.actor2.ID {
-		t.Fatalf("recovered Redis state=%+v err=%v", state, err)
-	}
-	if marker, err := env.redis.HExists(likes.RecoverableVersionsKey, postIDString).Result(); err != nil || marker {
-		t.Fatalf("marker after recovery exists=%t err=%v", marker, err)
-	}
-	if registered, err := env.redis.SIsMember(likes.RegistryKey, env.post.ID).Result(); err != nil || !registered {
-		t.Fatalf("registry after recovery=%t err=%v", registered, err)
-	}
-	if _, err := env.redis.ZScore(likes.ExpiryCandidatesKey, postIDString).Result(); err != nil {
-		t.Fatalf("refreshed expiry candidate err=%v", err)
-	}
-	for _, key := range []string{likes.ReadyKey(env.post.ID), likes.CountKey(env.post.ID), likes.UsersKey(env.post.ID), likes.VersionKey(env.post.ID)} {
+	for _, key := range []string{likes.ReadyKey(env.post.ID), likes.CountKey(env.post.ID), likes.VersionKey(env.post.ID), likes.UserLikesKey(env.actor.ID)} {
 		if ttl, err := env.redis.TTL(key).Result(); err != nil || ttl != -1 {
-			t.Fatalf("persistent key=%q ttl=%s err=%v", key, ttl, err)
+			t.Fatalf("key=%q TTL=%s err=%v want persistent", key, ttl, err)
 		}
 	}
 
-	secondSnapshotPublisher := &relayTestPublisher{}
-	if err := runLikeSnapshotRelayBatch(ctx, env.store, secondSnapshotPublisher); err != nil {
+	// Simulated loss of Post aggregates cannot rebuild a nonzero user relation
+	// from the SQL PostReaction projection in SPEC-01.
+	if err := env.redis.Del(likes.ReadyKey(env.post.ID), likes.CountKey(env.post.ID), likes.VersionKey(env.post.ID)).Err(); err != nil {
 		t.Fatal(err)
 	}
-	secondSnapshot, ok := findLikeStateClosureEvent(secondSnapshotPublisher.events, fmt.Sprintf("like-snapshot:%d:2", env.post.ID))
-	if !ok {
-		t.Fatalf("second snapshot event missing events=%#v", secondSnapshotPublisher.events)
+	second := invokeLikeStateClosureHandler(t, http.MethodPut, "/api/posts/"+strconv.FormatUint(uint64(env.post.ID), 10)+"/like", env.post.ID, env.actor2.ID, controllers.LikePost)
+	if second.Code != http.StatusServiceUnavailable {
+		t.Fatalf("nonzero recovery status=%d body=%s want 503", second.Code, second.Body.String())
 	}
-	if _, err := applyLikeSnapshotEvent(ctx, env.db, secondSnapshot); err != nil {
-		t.Fatal(err)
+	if exists, err := env.redis.Exists(likes.ReadyKey(env.post.ID), likes.CountKey(env.post.ID), likes.VersionKey(env.post.ID)).Result(); err != nil || exists != 0 {
+		t.Fatalf("unsafe recovery partially restored aggregate keys: exists=%d err=%v", exists, err)
 	}
-	secondBehaviorPublisher := &relayTestPublisher{}
-	if err := runLikeBehaviorRelayBatch(ctx, env.store, secondBehaviorPublisher); err != nil {
-		t.Fatal(err)
-	}
-	secondBehavior, ok := findLikeStateClosureEvent(secondBehaviorPublisher.events, fmt.Sprintf("like-state:%d:%d:2", env.actor2.ID, env.post.ID))
-	if !ok {
-		t.Fatalf("second behavior event missing events=%#v", secondBehaviorPublisher.events)
-	}
-	if err := applyUserBehaviorEventForIntegration(t, env.db, config.AppConfig.Kafka, secondBehavior); err != nil {
-		t.Fatal(err)
-	}
-
-	var projectedPost models.Post
-	if err := env.db.First(&projectedPost, env.post.ID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if projectedPost.LikeCount != 2 || projectedPost.LikeSyncVersion != 2 {
-		t.Fatalf("post after recovered projection=%#v", projectedPost)
-	}
-	for _, userID := range []uint{env.actor.ID, env.actor2.ID} {
-		var reaction models.PostReaction
-		if err := env.db.Where("user_id = ? AND post_id = ?", userID, env.post.ID).First(&reaction).Error; err != nil {
-			t.Fatal(err)
-		}
-		wantVersion := int64(1)
-		if userID == env.actor2.ID {
-			wantVersion = 2
-		}
-		if !reaction.Liked || reaction.Version != wantVersion {
-			t.Fatalf("reaction user=%d=%#v", userID, reaction)
-		}
-	}
-	if quiescent, err := env.store.SnapshotQueueQuiescent(ctx, env.post.ID); err != nil || !quiescent {
-		t.Fatalf("recovered snapshot queue quiescent=%t err=%v", quiescent, err)
-	}
-	assertLikeStateClosureBehaviorQuiescent(t, env.redis, env.actor2.ID, env.post.ID)
 }
-
 func TestPostLikeDeletePurgeFailureReconcilesIntegration(t *testing.T) {
 	env := openLikeStateClosureIntegration(t)
 	env.author = models.User{Username: "like-delete-author-" + uuid.NewString(), Password: "test"}
@@ -411,6 +327,9 @@ func TestPostLikeDeletePurgeFailureReconcilesIntegration(t *testing.T) {
 	env.posts = []uint{env.post.ID}
 	if initialized, err := initializeLikeStore(env.store, t.Context(), env.post.ID, 0, 0, nil); err != nil || !initialized {
 		t.Fatalf("initialize created=%t err=%v", initialized, err)
+	}
+	if err := env.store.InitializeUserEmpty(t.Context(), env.author.ID); err != nil {
+		t.Fatal(err)
 	}
 	likeRecorder := invokeLikeStateClosureHandler(t, http.MethodPut, "/api/posts/"+strconv.FormatUint(uint64(env.post.ID), 10)+"/like", env.post.ID, env.author.ID, controllers.LikePost)
 	if likeRecorder.Code != http.StatusOK {
@@ -445,6 +364,9 @@ func TestPostLikeDeletePurgeFailureReconcilesIntegration(t *testing.T) {
 	}
 	if exists, err := env.redis.Exists(likes.ReadyKey(env.post.ID)).Result(); err != nil || exists != 1 {
 		t.Fatalf("residual Ready exists=%d err=%v", exists, err)
+	}
+	if liked, err := env.redis.SIsMember(likes.UserLikesKey(env.author.ID), strconv.FormatUint(uint64(env.post.ID), 10)).Result(); err != nil || !liked {
+		t.Fatalf("Post purge unexpectedly removed User relation liked=%t err=%v", liked, err)
 	}
 	if registered, err := env.redis.SIsMember(likes.RegistryKey, env.post.ID).Result(); err != nil || !registered {
 		t.Fatalf("residual registry=%t err=%v", registered, err)

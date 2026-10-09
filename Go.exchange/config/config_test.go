@@ -162,6 +162,7 @@ func TestTranslationConfigDefaultsAndEnvironmentOverrides(t *testing.T) {
 }
 
 func TestValidateEventingConfigByRuntime(t *testing.T) {
+	t.Setenv("LIKE_STATE_EXPIRY_ENABLED", "false")
 	cfg := &Config{Kafka: KafkaConfig{
 		ActivityEventsTopic: "activity",
 		ConsumerDLQTopic:    "consumer-dlq",
@@ -190,6 +191,17 @@ func TestValidateEventingConfigByRuntime(t *testing.T) {
 	cfg.Kafka.NotificationGroupID = ""
 	if err := ValidateWorkerEventingConfig(cfg); err == nil {
 		t.Fatal("worker without notification group must fail")
+	}
+}
+
+func TestValidateEventingRejectsLikeStateExpiryUntilSPEC02(t *testing.T) {
+	t.Setenv("LIKE_STATE_EXPIRY_ENABLED", "true")
+	cfg := &Config{Kafka: KafkaConfig{ActivityEventsTopic: "activity", ConsumerDLQTopic: "consumer-dlq", NotificationGroupID: "notifications"}}
+	if err := ValidateAPIEventingConfig(cfg); err == nil || !strings.Contains(err.Error(), "SPEC-02") {
+		t.Fatalf("API expiry validation error=%v want SPEC-02 rejection", err)
+	}
+	if err := ValidateWorkerEventingConfig(cfg); err == nil || !strings.Contains(err.Error(), "SPEC-02") {
+		t.Fatalf("worker expiry validation error=%v want SPEC-02 rejection", err)
 	}
 }
 

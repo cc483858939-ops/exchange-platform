@@ -33,6 +33,12 @@ func TestPostCreationFormsAreImmediatelyLikeReadyIntegration(t *testing.T) {
 
 	createdIDs := make([]uint, 0, 6)
 	userIDs := []uint{fixture.Author.ID, fixture.Commenter.ID, fixture.Other.ID}
+	store := likes.NewStore(redisClient)
+	for _, userID := range userIDs {
+		if err := store.InitializeUserEmpty(t.Context(), userID); err != nil {
+			t.Fatal(err)
+		}
+	}
 	t.Cleanup(func() {
 		if err := cleanupPostLikeIntegrationState(redisClient, createdIDs, userIDs); err != nil {
 			t.Errorf("cleanup post-like Redis integration state: %v", err)
@@ -136,6 +142,7 @@ func cleanupPostLikeIntegrationState(client *redis.Client, postIDs, userIDs []ui
 			if userID == 0 {
 				continue
 			}
+			pipe.SRem(likes.UserLikesKey(userID), postIDString)
 			pair := likes.BehaviorPair(userID, postID)
 			pipe.SRem(likes.BehaviorDirtyKey, pair)
 			pipe.HDel(likes.BehaviorStateKey, pair)
@@ -166,7 +173,7 @@ func TestCleanupPostLikeIntegrationStateRemovesOwnedRedisMetadata(t *testing.T) 
 	pipe := client.Pipeline()
 	pipe.Set(likes.ReadyKey(postID), "1", 0)
 	pipe.Set(likes.CountKey(postID), "1", 0)
-	pipe.SAdd(likes.UsersKey(postID), userID)
+	pipe.SAdd(likes.UserLikesKey(userID), likes.UserLikesInitSentinel, postIDString)
 	pipe.Set(likes.VersionKey(postID), "1", 0)
 	pipe.SAdd(likes.DirtyKey, postID)
 	pipe.ZAdd(likes.ProcessingKey, &redis.Z{Score: 1, Member: postIDString})
@@ -189,6 +196,12 @@ func TestCleanupPostLikeIntegrationStateRemovesOwnedRedisMetadata(t *testing.T) 
 		if exists, err := client.Exists(key).Result(); err != nil || exists != 0 {
 			t.Fatalf("owned key=%q exists=%d err=%v", key, exists, err)
 		}
+	}
+	if initialized, err := client.SIsMember(likes.UserLikesKey(userID), likes.UserLikesInitSentinel).Result(); err != nil || !initialized {
+		t.Fatalf("cleanup removed User initialization sentinel=%t err=%v", initialized, err)
+	}
+	if liked, err := client.SIsMember(likes.UserLikesKey(userID), postIDString).Result(); err != nil || liked {
+		t.Fatalf("cleanup retained User relation=%t err=%v", liked, err)
 	}
 	if dirty, err := client.SIsMember(likes.DirtyKey, postID).Result(); err != nil || dirty {
 		t.Fatalf("dirty membership=%t err=%v", dirty, err)

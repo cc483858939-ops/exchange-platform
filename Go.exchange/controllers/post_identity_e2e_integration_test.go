@@ -37,6 +37,12 @@ func TestCanonicalPostDeletePGRedisIdentityE2E(t *testing.T) {
 	}
 	createdIDs := make([]uint, 0, 4)
 	userIDs := []uint{alice.ID, bob.ID}
+	likeStore := likes.NewStore(redisClient)
+	for _, userID := range userIDs {
+		if err := likeStore.InitializeUserEmpty(t.Context(), userID); err != nil {
+			t.Fatal(err)
+		}
+	}
 	t.Cleanup(func() {
 		if err := cleanupPostLikeIntegrationState(redisClient, createdIDs, userIDs); err != nil {
 			t.Errorf("cleanup post-like Redis integration state: %v", err)
@@ -332,7 +338,10 @@ func assertAuthoritativeLikeStateForIdentityE2E(t *testing.T, client *redis.Clie
 	if version, err := client.Get(likes.VersionKey(postID)).Result(); err != nil || version != "1" {
 		t.Fatalf("P2 like version=%q err=%v", version, err)
 	}
-	if liked, err := client.SIsMember(likes.UsersKey(postID), strconvUint(userID)).Result(); err != nil || !liked {
+	if initialized, err := client.SIsMember(likes.UserLikesKey(userID), likes.UserLikesInitSentinel).Result(); err != nil || !initialized {
+		t.Fatalf("P2 like user sentinel=%t err=%v", initialized, err)
+	}
+	if liked, err := client.SIsMember(likes.UserLikesKey(userID), strconvUint(postID)).Result(); err != nil || !liked {
 		t.Fatalf("P2 like user membership=%t err=%v", liked, err)
 	}
 	if dirty, err := client.SIsMember(likes.DirtyKey, postID).Result(); err != nil || !dirty {

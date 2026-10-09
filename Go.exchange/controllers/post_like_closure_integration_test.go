@@ -56,6 +56,9 @@ func TestPostLikeHotPathDoesNotLoadPostgres(t *testing.T) {
 	if created, err := initializeLikeStore(store, t.Context(), postID, 0, 0, nil); err != nil || !created {
 		t.Fatalf("initialize created=%t err=%v", created, err)
 	}
+	if err := store.InitializeUserEmpty(t.Context(), userID); err != nil {
+		t.Fatal(err)
+	}
 	assertPostLikeMutationIntegration(t, postID, userID, true, 1, true)
 	assertPostLikeMutationIntegration(t, postID, userID, false, 0, false)
 	assertPostLikeStateIntegration(t, postID, userID, 0, false)
@@ -127,6 +130,9 @@ func TestPostLikeStatesProjectionNotReadyIsPerIDUnavailable(t *testing.T) {
 	}
 
 	store := likes.NewStore(redisClient)
+	if err := store.InitializeUserEmpty(t.Context(), viewer.ID); err != nil {
+		t.Fatal(err)
+	}
 	if created, err := initializeLikeStore(store, t.Context(), posts[0].ID, 0, 0, nil); err != nil || !created {
 		t.Fatalf("hot initialize created=%t err=%v", created, err)
 	}

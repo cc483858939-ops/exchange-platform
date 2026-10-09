@@ -43,7 +43,7 @@ func TestRebuildRejectsPreDeletionBaselineAfterTombstoneExpiresIntegration(t *te
 	if created, err := store.Recover(t.Context(), postID, baseline, RecoveryFence{AllowZeroBootstrap: true, RebuildToken: token}); created || !errors.Is(err, ErrLikeRecoveryFenceLost) {
 		t.Fatalf("stale zero recovery: created=%t err=%v", created, err)
 	}
-	if created, err := store.Initialize(t.Context(), postID, 0, 0, nil, token); created || !errors.Is(err, ErrLikeRecoveryFenceLost) {
+	if created, err := store.Initialize(t.Context(), postID, 0, 0, token); created || !errors.Is(err, ErrLikeRecoveryFenceLost) {
 		t.Fatalf("stale initializer: created=%t err=%v", created, err)
 	}
 	if exists, err := client.Exists(ReadyKey(postID), CountKey(postID), VersionKey(postID), RebuildTokenKey(postID)).Result(); err != nil || exists != 0 {
@@ -131,30 +131,27 @@ func TestExpiredRebuildTokenCannotWriteOrReleaseNewOwnerIntegration(t *testing.T
 	if current, err := client.Get(RebuildTokenKey(postID)).Result(); err != nil || current != newToken {
 		t.Fatalf("new owner removed: current=%q err=%v", current, err)
 	}
-	if created, err := store.Initialize(t.Context(), postID, 0, 0, nil, oldToken); created || !errors.Is(err, ErrLikeRecoveryFenceLost) {
+	if created, err := store.Initialize(t.Context(), postID, 0, 0, oldToken); created || !errors.Is(err, ErrLikeRecoveryFenceLost) {
 		t.Fatalf("expired owner wrote: created=%t err=%v", created, err)
 	}
 }
 
-func TestExplicitReactivationUsesCurrentBaselineAndIsRevocableIntegration(t *testing.T) {
+func TestExplicitReactivationFailsClosedUntilUserLifecycleIsImplementedIntegration(t *testing.T) {
 	_, store, postID := openRecoverableStoreIntegration(t)
 	if err := store.DeletePost(t.Context(), postID); err != nil {
 		t.Fatal(err)
 	}
+	loaded := false
 	if created, err := store.InitializeFrom(t.Context(), postID, true, func(context.Context) (FullState, error) {
-		return FullState{Count: 1, Version: 3, UserIDs: []uint{11}}, nil
-	}); err != nil || !created {
-		t.Fatalf("confirmed active reactivation: created=%t err=%v", created, err)
+		loaded = true
+		return FullState{}, nil
+	}); created || !errors.Is(err, ErrLikeRecoveryUnsafe) {
+		t.Fatalf("reactivation created=%t err=%v want explicit unsafe state", created, err)
 	}
-	if err := store.DeletePost(t.Context(), postID); err != nil {
-		t.Fatal(err)
+	if loaded {
+		t.Fatal("unsafe reactivation loaded SQL before lifecycle support")
 	}
-	if created, err := store.InitializeFrom(t.Context(), postID, true, func(context.Context) (FullState, error) {
-		if err := store.DeletePost(t.Context(), postID); err != nil {
-			t.Fatal(err)
-		}
-		return FullState{Count: 1, Version: 3, UserIDs: []uint{11}}, nil
-	}); created || !errors.Is(err, ErrLikeRecoveryFenceLost) {
-		t.Fatalf("deleted during reactivation: created=%t err=%v", created, err)
+	if ready, err := store.client.Get(ReadyKey(postID)).Result(); err != nil || ready != "deleted" {
+		t.Fatalf("reactivation changed deletion fence=%q err=%v", ready, err)
 	}
 }

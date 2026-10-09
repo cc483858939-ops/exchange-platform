@@ -131,6 +131,9 @@ func TestCanonicalPostLikeRedisToPostgresProjectionIntegration(t *testing.T) {
 	if err != nil || !initialized {
 		t.Fatalf("like state initialized=%t err=%v", initialized, err)
 	}
+	if err := store.InitializeUserEmpty(ctx, actor.ID); err != nil {
+		t.Fatal(err)
+	}
 	mutation, err := store.Mutate(ctx, actor.ID, post.ID, true)
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +150,7 @@ func TestCanonicalPostLikeRedisToPostgresProjectionIntegration(t *testing.T) {
 	if version, err := redisClient.Get(likes.VersionKey(post.ID)).Result(); err != nil || version != "1" {
 		t.Fatalf("redis version=%q err=%v", version, err)
 	}
-	if liked, err := redisClient.SIsMember(likes.UsersKey(post.ID), strconv.FormatUint(uint64(actor.ID), 10)).Result(); err != nil || !liked {
+	if liked, err := redisClient.SIsMember(likes.UserLikesKey(actor.ID), strconv.FormatUint(uint64(post.ID), 10)).Result(); err != nil || !liked {
 		t.Fatalf("redis user membership=%t err=%v", liked, err)
 	}
 	pair := likes.BehaviorPair(actor.ID, post.ID)

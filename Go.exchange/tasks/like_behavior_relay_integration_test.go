@@ -84,6 +84,9 @@ func TestLikeBehaviorRelayBatchesAndAcksAfterPublishIntegration(t *testing.T) {
 	if created, err := initializeLikeStore(store, ctx, postID, 0, 0, nil); err != nil || !created {
 		t.Fatalf("initialize created=%t err=%v", created, err)
 	}
+	if err := store.InitializeUserEmpty(ctx, userID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.Mutate(ctx, userID, postID, true); err != nil {
 		t.Fatal(err)
 	}

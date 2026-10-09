@@ -149,7 +149,7 @@ func recoverPostLikeBatch(ctx context.Context, store postLikeRecoveryStore, ids 
 			continue
 		}
 		fence.RebuildToken = tokens[id]
-		_, err = store.Recover(ctx, id, likes.FullState{Count: baseline.Count, Version: baseline.Version, UserIDs: baseline.UserIDs}, fence)
+		_, err = store.Recover(ctx, id, likes.FullState{Count: baseline.Count, Version: baseline.Version}, fence)
 		results[id] = err
 		if err != nil && !isPostLikeBatchUnavailableError(err) {
 			return results, err

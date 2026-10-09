@@ -53,6 +53,9 @@ func startLikeStateMaintenance(ctx context.Context, wg interface {
 }
 
 func runLikeStateMaintenancePass(ctx context.Context, store *likes.Store, db *gorm.DB, registryCursor uint64, now time.Time) (uint64, error) {
+	if err := config.ValidateLikeStateExpiryConfig(); err != nil {
+		return registryCursor, err
+	}
 	if ctx == nil {
 		return registryCursor, errors.New("like state maintenance context is nil")
 	}
@@ -107,6 +110,9 @@ func reconcileLikeStateRegistry(ctx context.Context, store *likes.Store, db *gor
 }
 
 func verifyIdleLikeStates(ctx context.Context, store *likes.Store, db *gorm.DB, now time.Time) error {
+	if err := config.ValidateLikeStateExpiryConfig(); err != nil {
+		return err
+	}
 	if !config.LikeStateExpiryEnabled() {
 		return nil
 	}
