@@ -6,11 +6,17 @@ import (
 	"time"
 
 	"Go.exchange/config"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 func buildCandidateSet(ctx context.Context, repository CandidateRepository, servingVersion string, userID uint, profile Profile, served ServedHistory, now time.Time, cfg config.RecommendationConfig, softOnly bool) (CandidateSetSummary, error) {
+	phase := phaseName(softOnly)
+	ctx, span := startRecommendationSpan(ctx, "recommendation.recall", attribute.String("recommendation.phase", phase))
+	defer span.End()
 	if repository == nil {
-		return CandidateSetSummary{}, errors.New("recommendation candidate repository is nil")
+		err := errors.New("recommendation candidate repository is nil")
+		finishRecommendationSpan(span, err)
+		return CandidateSetSummary{}, err
 	}
 	caps := candidateCaps(profile, cfg)
 	query := CandidateQuery{
@@ -24,47 +30,69 @@ func buildCandidateSet(ctx context.Context, repository CandidateRepository, serv
 		InteractedPostIDs:             profile.InteractedPostIDs,
 	}
 	query.Limit = caps.Semantic
-	semantic, err := repository.LoadSemanticCandidates(ctx, query)
+	semantic, err := loadRecommendationCandidates(ctx, "recommendation.recall.semantic", "semantic", phase, func(stageCtx context.Context) ([]Candidate, error) {
+		return repository.LoadSemanticCandidates(stageCtx, query)
+	})
 	if err != nil {
+		finishRecommendationSpan(span, err)
 		return CandidateSetSummary{}, err
 	}
 	query.Limit = caps.Following
-	following, err := repository.LoadFollowingCandidates(ctx, query)
+	following, err := loadRecommendationCandidates(ctx, "recommendation.recall.following", "following", phase, func(stageCtx context.Context) ([]Candidate, error) {
+		return repository.LoadFollowingCandidates(stageCtx, query)
+	})
 	if err != nil {
+		finishRecommendationSpan(span, err)
 		return CandidateSetSummary{}, err
 	}
 	query.Limit = caps.Recent
-	recent, err := repository.LoadRecentCandidates(ctx, query)
+	recent, err := loadRecommendationCandidates(ctx, "recommendation.recall.recent", "recent", phase, func(stageCtx context.Context) ([]Candidate, error) {
+		return repository.LoadRecentCandidates(stageCtx, query)
+	})
 	if err != nil {
+		finishRecommendationSpan(span, err)
 		return CandidateSetSummary{}, err
 	}
 	query.Limit = caps.Trending
-	trending, err := repository.LoadTrendingCandidates(ctx, query)
+	trending, err := loadRecommendationCandidates(ctx, "recommendation.recall.trending", "trending", phase, func(stageCtx context.Context) ([]Candidate, error) {
+		return repository.LoadTrendingCandidates(stageCtx, query)
+	})
 	if err != nil {
+		finishRecommendationSpan(span, err)
 		return CandidateSetSummary{}, err
 	}
-	merged := FuseCandidates(
-		caps.Merged, fusionConfig(cfg),
+	_, fusionSpan := startRecommendationSpan(ctx, "recommendation.recall.fusion",
+		attribute.String("recommendation.source", "fused"),
+		attribute.String("recommendation.phase", phase),
+	)
+	merged := FuseCandidates(caps.Merged, fusionConfig(cfg),
 		CandidateSet{Source: CandidateSourceSemantic, Candidates: semantic},
 		CandidateSet{Source: CandidateSourceFollowing, Candidates: following},
 		CandidateSet{Source: CandidateSourceRecent, Candidates: recent},
 		CandidateSet{Source: CandidateSourceTrending, Candidates: trending},
 	)
+	fusionSpan.SetAttributes(attribute.Int("recommendation.candidate_count", len(merged)))
+	fusionSpan.End()
 	for index := range merged {
 		if item, ok := served[merged[index].PostID]; ok {
 			merged[index].LastServedAt = item.LastServedAt
 			merged[index].WasSoftServed = softOnly && item.Soft && !item.Hard
 		}
 	}
+	span.SetAttributes(attribute.Int("recommendation.candidate_count", len(merged)))
 	return CandidateSetSummary{
 		Candidates: merged, SemanticCount: len(semantic), FollowingCount: len(following),
 		RecentCount: len(recent), RecentPostIDs: CandidatePostIDs(recent), TrendingCount: len(trending),
 	}, nil
 }
 
-func buildPublicCandidateSet(ctx context.Context, repository CandidateRepository, now time.Time, cfg config.RecommendationConfig, excluded map[uint]struct{}) (CandidateSetSummary, error) {
+func buildPublicCandidateSet(ctx context.Context, repository CandidateRepository, now time.Time, cfg config.RecommendationConfig, excluded map[uint]struct{}, phase string) (CandidateSetSummary, error) {
+	ctx, span := startRecommendationSpan(ctx, "recommendation.recall", attribute.String("recommendation.phase", phase))
+	defer span.End()
 	if repository == nil {
-		return CandidateSetSummary{}, errors.New("recommendation candidate repository is nil")
+		err := errors.New("recommendation candidate repository is nil")
+		finishRecommendationSpan(span, err)
+		return CandidateSetSummary{}, err
 	}
 	caps := cfg.Candidates.ColdStart
 	query := PublicCandidateQuery{
@@ -73,20 +101,33 @@ func buildPublicCandidateSet(ctx context.Context, repository CandidateRepository
 		ExcludedPostIDs: excluded,
 	}
 	query.Limit = caps.Recent
-	recent, err := repository.LoadPublicRecentCandidates(ctx, query)
+	recent, err := loadRecommendationCandidates(ctx, "recommendation.recall.recent", "public_recent", phase, func(stageCtx context.Context) ([]Candidate, error) {
+		return repository.LoadPublicRecentCandidates(stageCtx, query)
+	})
 	if err != nil {
+		finishRecommendationSpan(span, err)
 		return CandidateSetSummary{}, err
 	}
 	query.Limit = caps.Trending
-	trending, err := repository.LoadPublicTrendingCandidates(ctx, query)
+	trending, err := loadRecommendationCandidates(ctx, "recommendation.recall.trending", "public_trending", phase, func(stageCtx context.Context) ([]Candidate, error) {
+		return repository.LoadPublicTrendingCandidates(stageCtx, query)
+	})
 	if err != nil {
+		finishRecommendationSpan(span, err)
 		return CandidateSetSummary{}, err
 	}
+	_, fusionSpan := startRecommendationSpan(ctx, "recommendation.recall.fusion",
+		attribute.String("recommendation.source", "fused"),
+		attribute.String("recommendation.phase", phase),
+	)
 	merged := FuseCandidates(
 		caps.Merged, fusionConfig(cfg),
 		CandidateSet{Source: CandidateSourceRecent, Candidates: recent},
 		CandidateSet{Source: CandidateSourceTrending, Candidates: trending},
 	)
+	fusionSpan.SetAttributes(attribute.Int("recommendation.candidate_count", len(merged)))
+	fusionSpan.End()
+	span.SetAttributes(attribute.Int("recommendation.candidate_count", len(merged)))
 	return CandidateSetSummary{
 		Candidates: merged, RecentCount: len(recent), RecentPostIDs: CandidatePostIDs(recent), TrendingCount: len(trending),
 	}, nil

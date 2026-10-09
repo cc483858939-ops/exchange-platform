@@ -13,6 +13,10 @@ import (
 	"Go.exchange/recommendation"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 type fakeRecommendationService struct {
@@ -230,4 +234,76 @@ func TestRecommendationHandlerMapsResponseMapperFailureToHTTP500(t *testing.T) {
 	if len(mapper.contexts) != 1 {
 		t.Fatalf("mapper calls=%d, want one", len(mapper.contexts))
 	}
+}
+
+func TestRecommendationResponseMapSpanLinksRequestIDAndSanitizesErrors(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		mapperErr error
+	}{
+		{name: "success"},
+		{name: "error", mapperErr: errors.New("private SQL parameter and token")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			exporter := tracetest.NewInMemoryExporter()
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter), sdktrace.WithSampler(sdktrace.AlwaysSample()))
+			t.Cleanup(func() {
+				if err := provider.Shutdown(context.Background()); err != nil {
+					t.Errorf("shutdown tracer provider: %v", err)
+				}
+			})
+			requestCtx, serverSpan := provider.Tracer("test").Start(context.Background(), "GET /api/public/recommendations/posts")
+			service := &fakeRecommendationService{result: recommendation.ServeResult{RequestID: "business-request-17", Now: time.Now().UTC()}}
+			mapper := &fakeRecommendationResponseMapper{err: test.mapperErr}
+			handler := newRecommendationHandlerForTest(t, service, mapper, 0)
+			ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/public/recommendations/posts")
+			ctx.Request = ctx.Request.WithContext(requestCtx)
+			handler.GetPublicPostRecommendations(ctx)
+			serverSpan.End()
+
+			spans := exporter.GetSpans()
+			var server, mapperSpan *tracetest.SpanStub
+			for index := range spans {
+				switch spans[index].Name {
+				case "GET /api/public/recommendations/posts":
+					server = &spans[index]
+				case "recommendation.response.map":
+					mapperSpan = &spans[index]
+				}
+			}
+			if server == nil || mapperSpan == nil {
+				t.Fatalf("missing server or response map span: %#v", spans)
+			}
+			if mapperSpan.Parent.SpanID() != server.SpanContext.SpanID() {
+				t.Fatalf("response map parent=%s server span=%s", mapperSpan.Parent.SpanID(), server.SpanContext.SpanID())
+			}
+			if !hasStringAttribute(server.Attributes, "recommendation.request_id", "business-request-17") {
+				t.Fatalf("business request ID missing from HTTP span: %#v", server.Attributes)
+			}
+			if test.mapperErr == nil && recorder.Code != http.StatusOK {
+				t.Fatalf("success status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if test.mapperErr != nil {
+				if mapperSpan.Status.Code != codes.Error {
+					t.Fatalf("mapper status=%v, want error", mapperSpan.Status.Code)
+				}
+				for _, event := range mapperSpan.Events {
+					for _, item := range event.Attributes {
+						if strings.Contains(item.Value.AsString(), "private SQL") || strings.Contains(item.Value.AsString(), "token") {
+							t.Fatalf("sensitive mapper error leaked into trace: %#v", event.Attributes)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func hasStringAttribute(attributes []attribute.KeyValue, key, want string) bool {
+	for _, item := range attributes {
+		if string(item.Key) == key && item.Value.AsString() == want {
+			return true
+		}
+	}
+	return false
 }

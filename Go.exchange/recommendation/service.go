@@ -11,6 +11,8 @@ import (
 	"Go.exchange/config"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -43,8 +45,31 @@ func NewService(dependencies ServiceDependencies, cfg ServiceConfig) (Verificati
 	return &RecommendationService{dependencies: dependencies, config: cfg, metrics: dependencies.Metrics}, nil
 }
 
-func (service *RecommendationService) Serve(ctx context.Context, request ServeRequest) (ServeResult, error) {
+func (service *RecommendationService) Serve(ctx context.Context, request ServeRequest) (output ServeResult, returnErr error) {
 	started := time.Now()
+	var span trace.Span
+	if ctx != nil {
+		ctx, span = startRecommendationSpan(ctx, "recommendation.service",
+			attribute.String("recommendation.viewer_kind", viewerKindName(request.Viewer.Kind)),
+		)
+		defer func() {
+			if output.RequestID != "" {
+				span.SetAttributes(attribute.String("recommendation.request_id", output.RequestID))
+			}
+			if output.StrategyID != "" {
+				span.SetAttributes(attribute.String("recommendation.strategy_id", output.StrategyID))
+			}
+			if output.PersonalizationMode != "" {
+				span.SetAttributes(attribute.String("recommendation.personalization_mode", output.PersonalizationMode))
+			}
+			span.SetAttributes(
+				attribute.Int("recommendation.candidate_count", len(output.CandidateSummary.Candidates)),
+				attribute.Int("recommendation.result_count", len(output.Selected)),
+			)
+			finishRecommendationSpan(span, returnErr)
+			span.End()
+		}()
+	}
 	request, err := normalizeServeRequest(request)
 	if err != nil {
 		service.metrics.RecordRequest("error", RecommendationColdStartStrategyID)
@@ -58,7 +83,15 @@ func (service *RecommendationService) Serve(ctx context.Context, request ServeRe
 		service.metrics.RecordRequest(contextOutcome(err), serviceStrategyFor(request.Viewer, Profile{}))
 		return ServeResult{}, err
 	}
-	servingVersion, err := service.dependencies.ServingVersions.LoadServingVersion(ctx)
+	if span != nil {
+		span.SetAttributes(
+			attribute.String("recommendation.request_id", request.RequestID),
+			attribute.Int("recommendation.requested_limit", request.Limit),
+		)
+	}
+	servingVersion, err := traceRecommendationOperation(ctx, "recommendation.serving_version.load", nil, func(stageCtx context.Context) (string, error) {
+		return service.dependencies.ServingVersions.LoadServingVersion(stageCtx)
+	})
 	if err != nil {
 		service.recordFailedRequest(request.Viewer, err, Profile{})
 		return ServeResult{RequestID: request.RequestID, Now: request.Now, Viewer: request.Viewer}, err
@@ -223,21 +256,21 @@ func (service *RecommendationService) executeUser(ctx context.Context, request S
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	freshHydrated, err := service.dependencies.Candidates.HydrateCandidates(ctx, servingVersion, freshSet.Candidates, request.Now)
+	freshHydrated, err := traceHydrateRecommendationCandidates(ctx, service.dependencies.Candidates, servingVersion, freshSet.Candidates, request.Now, phaseName(false))
 	if err != nil {
 		return result, err
 	}
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	if err := loadMaterializedCandidateAuthorContext(ctx, service.dependencies.Profiles, request.Viewer.UserID, &profile, freshHydrated, loadedAuthors, service.config.Recommendation); err != nil {
+	if err := loadRecommendationAuthorContext(ctx, service.dependencies.Profiles, request.Viewer.UserID, &profile, freshHydrated, loadedAuthors, service.config.Recommendation, phaseName(false)); err != nil {
 		return result, err
 	}
-	rankedFresh := RankCandidates(profileFeatures(profile), freshHydrated, request.Now, rankingConfig(service.config.Recommendation), languageContext)
-	selected := SelectCandidates(SelectionInput{
+	rankedFresh := traceRankRecommendationCandidates(ctx, profileFeatures(profile), freshHydrated, request.Now, rankingConfig(service.config.Recommendation), languageContext, phaseName(false))
+	selected := traceSelectRecommendationCandidates(ctx, SelectionInput{
 		Candidates: rankedFresh, Limit: request.Limit, Now: request.Now, Phase: SelectionPhaseFresh,
 		RequestID: request.RequestID, Config: selectionConfig(service.config.Recommendation),
-	})
+	}, phaseName(false))
 	finalSet := freshSet
 	if len(selected) < request.Limit {
 		if err := ctx.Err(); err != nil {
@@ -252,21 +285,21 @@ func (service *RecommendationService) executeUser(ctx context.Context, request S
 		}
 		result.RecallSets = append(result.RecallSets, softSet)
 		service.recordRecallMetrics(softSet, observe)
-		softHydrated, softErr := service.dependencies.Candidates.HydrateCandidates(ctx, servingVersion, softSet.Candidates, request.Now)
+		softHydrated, softErr := traceHydrateRecommendationCandidates(ctx, service.dependencies.Candidates, servingVersion, softSet.Candidates, request.Now, phaseName(true))
 		if softErr != nil {
 			return result, softErr
 		}
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		if err := loadMaterializedCandidateAuthorContext(ctx, service.dependencies.Profiles, request.Viewer.UserID, &profile, softHydrated, loadedAuthors, service.config.Recommendation); err != nil {
+		if err := loadRecommendationAuthorContext(ctx, service.dependencies.Profiles, request.Viewer.UserID, &profile, softHydrated, loadedAuthors, service.config.Recommendation, phaseName(true)); err != nil {
 			return result, err
 		}
-		rankedSoft := RankCandidates(profileFeatures(profile), softHydrated, request.Now, rankingConfig(service.config.Recommendation), languageContext)
-		selected = SelectCandidates(SelectionInput{
+		rankedSoft := traceRankRecommendationCandidates(ctx, profileFeatures(profile), softHydrated, request.Now, rankingConfig(service.config.Recommendation), languageContext, phaseName(true))
+		selected = traceSelectRecommendationCandidates(ctx, SelectionInput{
 			Candidates: rankedSoft, Initial: selected, Limit: request.Limit, Now: request.Now, Phase: SelectionPhaseSoft,
 			RequestID: request.RequestID, Config: selectionConfig(service.config.Recommendation),
-		})
+		}, phaseName(true))
 		finalSet = mergeCandidateSets(freshSet, softSet, candidateCaps(profile, service.config.Recommendation).Merged)
 	}
 	result.Profile = profile
@@ -284,7 +317,7 @@ func (service *RecommendationService) executeGuest(ctx context.Context, request 
 	}
 	cfg := service.config.Recommendation
 	languageContext := BuildLanguageContext(request.BrowserLanguage, LanguagePrior{}, 0, languageConfig(cfg))
-	freshSet, err := buildPublicCandidateSet(ctx, service.dependencies.Candidates, request.Now, cfg, freshGuestExclusions(served))
+	freshSet, err := buildPublicCandidateSet(ctx, service.dependencies.Candidates, request.Now, cfg, freshGuestExclusions(served), "fresh")
 	if err != nil {
 		return result, err
 	}
@@ -293,31 +326,39 @@ func (service *RecommendationService) executeGuest(ctx context.Context, request 
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	hydrated, err := service.dependencies.Candidates.HydrateCandidates(ctx, servingVersion, freshSet.Candidates, request.Now)
+	hydrated, err := traceHydrateRecommendationCandidates(ctx, service.dependencies.Candidates, servingVersion, freshSet.Candidates, request.Now, "fresh")
 	if err != nil {
 		return result, err
 	}
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	ranked := RankCandidates(ProfileFeatures{}, hydrated, request.Now, rankingConfig(cfg), languageContext)
-	diversified := DiversifyPublicCandidates(ranked, request.Limit, request.RequestID)
-	selected := SelectCandidates(SelectionInput{
-		Candidates: diversified, Limit: request.Limit, Now: request.Now, Phase: SelectionPhaseFresh,
-		RequestID: request.RequestID, Config: selectionConfig(cfg),
+	ranked := traceRankRecommendationCandidates(ctx, ProfileFeatures{}, hydrated, request.Now, rankingConfig(cfg), languageContext, "fresh")
+	selected := traceRecommendationResult(ctx, "recommendation.select", []attribute.KeyValue{
+		attribute.String("recommendation.phase", "fresh"),
+		attribute.String("recommendation.selection_phase", string(SelectionPhaseFresh)),
+		attribute.Int("recommendation.candidate_count", len(ranked)),
+	}, func(span trace.Span) []SelectedCandidate {
+		diversified := DiversifyPublicCandidates(ranked, request.Limit, request.RequestID)
+		selected := SelectCandidates(SelectionInput{
+			Candidates: diversified, Limit: request.Limit, Now: request.Now, Phase: SelectionPhaseFresh,
+			RequestID: request.RequestID, Config: selectionConfig(cfg),
+		})
+		span.SetAttributes(attribute.Int("recommendation.result_count", len(selected)))
+		return selected
 	})
 	finalSet := freshSet
 	if len(selected) < request.Limit {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		fallbackSet, fallbackErr := buildPublicCandidateSet(ctx, service.dependencies.Candidates, request.Now, cfg, fallbackGuestExclusions(served, selected))
+		fallbackSet, fallbackErr := buildPublicCandidateSet(ctx, service.dependencies.Candidates, request.Now, cfg, fallbackGuestExclusions(served, selected), "guest_fallback")
 		if fallbackErr != nil {
 			return result, fallbackErr
 		}
 		result.RecallSets = append(result.RecallSets, fallbackSet)
 		service.recordRecallMetrics(fallbackSet, observe)
-		fallbackHydrated, fallbackErr := service.dependencies.Candidates.HydrateCandidates(ctx, servingVersion, fallbackSet.Candidates, request.Now)
+		fallbackHydrated, fallbackErr := traceHydrateRecommendationCandidates(ctx, service.dependencies.Candidates, servingVersion, fallbackSet.Candidates, request.Now, "guest_fallback")
 		if fallbackErr != nil {
 			return result, fallbackErr
 		}
@@ -325,16 +366,16 @@ func (service *RecommendationService) executeGuest(ctx context.Context, request 
 			return result, err
 		}
 		annotateGuestFallbackServedState(fallbackHydrated, served)
-		rankedFallback := RankCandidates(ProfileFeatures{}, fallbackHydrated, request.Now, rankingConfig(cfg), languageContext)
-		selected = SelectCandidates(SelectionInput{
+		rankedFallback := traceRankRecommendationCandidates(ctx, ProfileFeatures{}, fallbackHydrated, request.Now, rankingConfig(cfg), languageContext, "guest_fallback")
+		selected = traceSelectRecommendationCandidates(ctx, SelectionInput{
 			Candidates: rankedFallback, Initial: selected, Limit: request.Limit, Now: request.Now, Phase: SelectionPhaseFresh,
 			RequestID: request.RequestID, Config: selectionConfig(cfg),
-		})
+		}, "guest_fallback")
 		if len(selected) < request.Limit {
-			selected = SelectCandidates(SelectionInput{
+			selected = traceSelectRecommendationCandidates(ctx, SelectionInput{
 				Candidates: rankedFallback, Initial: selected, Limit: request.Limit, Now: request.Now, Phase: SelectionPhaseSoft,
 				RequestID: request.RequestID, Config: selectionConfig(cfg),
-			})
+			}, "guest_fallback")
 		}
 		finalSet = mergeCandidateSets(freshSet, fallbackSet, cfg.Candidates.ColdStart.Merged)
 	}
@@ -346,12 +387,16 @@ func (service *RecommendationService) executeGuest(ctx context.Context, request 
 }
 
 func (service *RecommendationService) loadProfile(ctx context.Context, userID uint, servingVersion string, now time.Time, observe bool) (Profile, error) {
+	ctx, span := startRecommendationSpan(ctx, "recommendation.profile.load")
+	defer span.End()
 	repository := service.dependencies.Profiles
 	if repository == nil {
 		if observe {
 			service.metrics.RecordProfileLoad("error")
 		}
-		return Profile{}, errors.New("recommendation profile repository is nil")
+		err := errors.New("recommendation profile repository is nil")
+		finishRecommendationSpan(span, err)
+		return Profile{}, err
 	}
 	cfg := service.config.Recommendation
 	loaded, err := repository.Load(ctx, ProfileLoadQuery{
@@ -361,6 +406,11 @@ func (service *RecommendationService) loadProfile(ctx context.Context, userID ui
 		Now:                       now, NegativeConfidenceHalfLifeDays: cfg.SignalHalfLifeDays,
 		NegativeConfidenceSaturation: cfg.NegativeConfidenceSaturationScale,
 	})
+	span.SetAttributes(attribute.String("recommendation.profile.status", loaded.Profile.ProfileStatus))
+	if loaded.Profile.ProfileAgeMS >= 0 && (loaded.Profile.ProfileStatus == ProfileStatusHit || loaded.Profile.ProfileStatus == ProfileStatusStale) {
+		span.SetAttributes(attribute.Int64("recommendation.profile.age_ms", loaded.Profile.ProfileAgeMS))
+	}
+	finishRecommendationSpan(span, err)
 	if observe {
 		status := loaded.Profile.ProfileStatus
 		if err != nil {
@@ -368,6 +418,9 @@ func (service *RecommendationService) loadProfile(ctx context.Context, userID ui
 		}
 		service.metrics.RecordProfileLoad(status)
 		if loaded.RecoveryError != nil {
+			if err == nil {
+				finishRecommendationSpan(span, loaded.RecoveryError)
+			}
 			log.Printf("[RecommendationProfile] queue recovery user=%d reason=%s: %v", userID, loaded.RecoveryReason, loaded.RecoveryError)
 			service.metrics.RecordProfileLoad("error")
 		}
@@ -380,6 +433,13 @@ func (service *RecommendationService) loadProfile(ctx context.Context, userID ui
 
 func (service *RecommendationService) loadHistory(ctx context.Context, request ServeRequest) (ServedHistory, error) {
 	history := make(ServedHistory)
+	if request.Viewer.Kind == ViewerGuest && request.Viewer.GuestSessionID == "" {
+		return history, nil
+	}
+	ctx, span := startRecommendationSpan(ctx, "recommendation.history.load",
+		attribute.String("recommendation.viewer_kind", viewerKindName(request.Viewer.Kind)),
+	)
+	defer span.End()
 	store := service.dependencies.History
 	switch request.Viewer.Kind {
 	case ViewerAuthenticated:
@@ -390,6 +450,7 @@ func (service *RecommendationService) loadHistory(ctx context.Context, request S
 		}
 		loaded, err := store.LoadUserHistory(ctx, request.Viewer.UserID, userHistoryWindow(request.Now, service.config.Recommendation))
 		if err != nil {
+			finishRecommendationSpan(span, err)
 			if ctx.Err() != nil {
 				return history, ctx.Err()
 			}
@@ -407,6 +468,7 @@ func (service *RecommendationService) loadHistory(ctx context.Context, request S
 		}
 		loaded, err := store.LoadGuestHistory(ctx, request.Viewer.GuestSessionID, guestHistoryWindow(request.Now, service.config.Recommendation))
 		if err != nil {
+			finishRecommendationSpan(span, err)
 			if ctx.Err() != nil {
 				return history, ctx.Err()
 			}
@@ -427,6 +489,14 @@ func (service *RecommendationService) recordHistory(ctx context.Context, request
 	if len(postIDs) == 0 || service.dependencies.History == nil {
 		return
 	}
+	if request.Viewer.Kind == ViewerGuest && request.Viewer.GuestSessionID == "" {
+		return
+	}
+	ctx, span := startRecommendationSpan(ctx, "recommendation.history.record",
+		attribute.String("recommendation.viewer_kind", viewerKindName(request.Viewer.Kind)),
+		attribute.Int("recommendation.result_count", len(postIDs)),
+	)
+	defer span.End()
 	var err error
 	switch request.Viewer.Kind {
 	case ViewerAuthenticated:
@@ -435,14 +505,12 @@ func (service *RecommendationService) recordHistory(ctx context.Context, request
 			log.Printf("[Recommendation] user served-history persist failed for user %d: %v", request.Viewer.UserID, err)
 		}
 	case ViewerGuest:
-		if request.Viewer.GuestSessionID == "" {
-			return
-		}
 		err = service.dependencies.History.RecordGuestServed(ctx, request.Viewer.GuestSessionID, postIDs, guestHistoryWindow(request.Now, service.config.Recommendation))
 		if err != nil {
 			log.Printf("[Recommendation] guest served-history persist failed: %v", err)
 		}
 	}
+	finishRecommendationSpan(span, err)
 }
 
 func (service *RecommendationService) recordRecallMetrics(set CandidateSetSummary, observe bool) {

@@ -146,6 +146,12 @@ services:
       RECOMMENDATION_TELEMETRY_TOKEN_TTL: ${RECOMMENDATION_TELEMETRY_TOKEN_TTL:-24h}
       RECOMMENDATION_TELEMETRY_MAX_CLOCK_SKEW: ${RECOMMENDATION_TELEMETRY_MAX_CLOCK_SKEW:-5m}
       RECOMMENDATION_TELEMETRY_EVENTS_PER_MINUTE: ${RECOMMENDATION_TELEMETRY_EVENTS_PER_MINUTE:-1000}
+      TRACING_ENABLED: ${TRACING_ENABLED:-false}
+      TRACING_SERVICE_NAME: ${TRACING_SERVICE_NAME:-exchange-api}
+      TRACING_OTLP_ENDPOINT: ${TRACING_OTLP_ENDPOINT:-tempo:4317}
+      TRACING_SAMPLE_RATIO: ${TRACING_SAMPLE_RATIO:-0.05}
+      TRACING_EXPORT_TIMEOUT: ${TRACING_EXPORT_TIMEOUT:-3s}
+      TRACING_SHUTDOWN_TIMEOUT: ${TRACING_SHUTDOWN_TIMEOUT:-5s}
     ports:
       - "127.0.0.1:3000:3000"
 
@@ -266,6 +272,19 @@ services:
       - ./Go.exchange/observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
     restart: unless-stopped
 
+  tempo:
+    image: grafana/tempo:3.1.0
+    profiles:
+      - observability
+    command: ["-target=all", "-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./Go.exchange/observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "127.0.0.1:3200:3200"
+      - "127.0.0.1:4317:4317"
+    restart: unless-stopped
+
   grafana:
     image: grafana/grafana:latest
     ports:
@@ -298,6 +317,8 @@ volumes:
   go-build-cache:
     external: true
     name: goexchange_go-build-cache
+  tempo-data:
+    name: goexchange_tempo-data
   minio-data:
     external: true
     name: mf_minio-data

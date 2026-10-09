@@ -1,12 +1,16 @@
 package router
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestSetupRouterIgnoresForwardedHeadersWithoutTrustedProxy(t *testing.T) {
@@ -43,6 +47,132 @@ func TestSetupRouterRejectsInvalidTrustedProxyConfiguration(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "0.0.0.0/0")
 	if _, err := SetupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil); err == nil {
 		t.Fatal("SetupRouter unexpectedly accepted a trust-all proxy configuration")
+	}
+}
+
+func TestSetupRouterCapturesRouteTemplatesAndFiltersNoiseRoutes(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter), sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	t.Cleanup(func() {
+		if err := provider.Shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown tracer provider: %v", err)
+		}
+	})
+
+	engine, err := setupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil, nil, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.GET("/__otel/:id", func(ctx *gin.Context) { ctx.Status(http.StatusNoContent) })
+	for _, test := range []struct {
+		path       string
+		wantStatus int
+	}{
+		{path: "/api/public/recommendations/posts?limit=17", wantStatus: http.StatusOK},
+		{path: "/api/recommendations/posts", wantStatus: http.StatusUnauthorized},
+		{path: "/__otel/member-42?token=not-recorded", wantStatus: http.StatusNoContent},
+		{path: "/healthz", wantStatus: http.StatusOK},
+		{path: "/readyz", wantStatus: http.StatusServiceUnavailable},
+		{path: "/metrics", wantStatus: http.StatusOK},
+	} {
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, test.path, nil)
+		if test.path == "/__otel/member-42?token=not-recorded" {
+			request.Header.Set("Authorization", "Bearer private-test-token")
+			request.Header.Set("User-Agent", "private-test-user-agent")
+		}
+		engine.ServeHTTP(response, request)
+		if response.Code != test.wantStatus {
+			t.Errorf("GET %s status=%d want=%d", test.path, response.Code, test.wantStatus)
+		}
+	}
+
+	spanNames := make(map[string]bool)
+	for _, span := range exporter.GetSpans() {
+		spanNames[span.Name] = true
+		for _, item := range span.Attributes {
+			switch string(item.Key) {
+			case "url.path", "client.address", "http.client_ip", "network.peer.address", "user_agent.original":
+				if item.Value.AsString() != "" {
+					t.Errorf("sensitive HTTP attribute %q was recorded in span %q: %q", item.Key, span.Name, item.Value.AsString())
+				}
+			case "network.peer.port":
+				if item.Value.AsInt64() != 0 {
+					t.Errorf("client port was recorded in span %q", span.Name)
+				}
+			}
+			if item.Value.Type() == attribute.STRING && (strings.Contains(item.Value.AsString(), "token=not-recorded") || strings.Contains(item.Value.AsString(), "private-test-token") || strings.Contains(item.Value.AsString(), "private-test-user-agent")) {
+				t.Errorf("request detail leaked into span %q", span.Name)
+			}
+		}
+	}
+	for _, name := range []string{
+		"GET /api/public/recommendations/posts",
+		"GET /api/recommendations/posts",
+		"GET /__otel/:id",
+	} {
+		if !spanNames[name] {
+			t.Errorf("missing span named %q; got %v", name, spanNames)
+		}
+	}
+	if len(spanNames) != 4 {
+		t.Fatalf("spans include unexpected or duplicate names: %v", spanNames)
+	}
+	if !spanNames["recommendation.response.map"] {
+		t.Fatalf("missing response mapping span; got %v", spanNames)
+	}
+}
+
+func TestSetupRouterTracingPreservesAuthRateLimitAndTimeoutStatuses(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	t.Setenv("API_REQUEST_TIMEOUT", "10ms")
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter), sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	t.Cleanup(func() {
+		if err := provider.Shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown tracer provider: %v", err)
+		}
+	})
+
+	engine, err := setupRouter(nil, rateLimitRouteVerifier{}, nil, nil, &rateLimitRouteLimiter{}, newRouterRecommendationHandler(t), nil, nil, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.GET("/__slow", func(ctx *gin.Context) {
+		<-ctx.Request.Context().Done()
+	})
+
+	for _, test := range []struct {
+		path       string
+		authorized bool
+		wantStatus int
+	}{{path: "/api/recommendations/posts", wantStatus: http.StatusUnauthorized},
+		{path: "/api/recommendations/posts", authorized: true, wantStatus: http.StatusTooManyRequests},
+		{path: "/__slow", wantStatus: http.StatusGatewayTimeout},
+	} {
+		request := httptest.NewRequest(http.MethodGet, test.path, nil)
+		if test.authorized {
+			request.Header.Set("Authorization", "Bearer test-token")
+		}
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, request)
+		if response.Code != test.wantStatus {
+			t.Errorf("GET %s status=%d want=%d body=%s", test.path, response.Code, test.wantStatus, response.Body.String())
+		}
+	}
+
+	spanNames := make(map[string]bool)
+	for _, span := range exporter.GetSpans() {
+		spanNames[span.Name] = true
+	}
+	for _, name := range []string{
+		"GET /api/recommendations/posts",
+		"GET /__slow",
+	} {
+		if !spanNames[name] {
+			t.Errorf("missing HTTP span %q; got %v", name, spanNames)
+		}
 	}
 }
 

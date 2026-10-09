@@ -11,6 +11,7 @@ import (
 	"Go.exchange/core"
 	"Go.exchange/eventing"
 	"Go.exchange/global"
+	"Go.exchange/observability/tracing"
 
 	"github.com/gin-gonic/gin"
 )
@@ -24,6 +25,24 @@ func main() {
 func run() error {
 	gin.SetMode(gin.ReleaseMode)
 	gin.DefaultWriter = io.Discard
+
+	tracingConfig, err := tracing.LoadConfig()
+	if err != nil {
+		return err
+	}
+	tracerProvider, err := tracing.Initialize(context.Background(), tracingConfig)
+	if err != nil {
+		return err
+	}
+	if tracerProvider != nil {
+		defer func() {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), tracingConfig.ShutdownTimeout)
+			defer shutdownCancel()
+			if err := tracerProvider.Shutdown(shutdownCtx); err != nil {
+				log.Printf("shutdown OpenTelemetry tracer provider: %v", err)
+			}
+		}()
+	}
 
 	cfg, err := config.Load()
 	if err != nil {

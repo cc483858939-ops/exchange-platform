@@ -103,7 +103,7 @@ func servicePublicCandidateSetFromDB(db *gorm.DB, now time.Time, cfg config.Reco
 	if err != nil {
 		return CandidateSetSummary{}, err
 	}
-	return buildPublicCandidateSet(recommendationDBTestContext(db), repository, now, cfg, excluded)
+	return buildPublicCandidateSet(recommendationDBTestContext(db), repository, now, cfg, excluded, "fresh")
 }
 
 func loadRecommendationSemanticCandidates(db *gorm.DB, version string, userID uint, profile Profile, served ServedHistory, now time.Time, cfg config.RecommendationConfig, softOnly bool, limit int) ([]Candidate, error) {

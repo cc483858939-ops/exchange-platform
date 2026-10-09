@@ -33,6 +33,37 @@ func TestMiddlewareRecordsHTTPMetricsAndSkipsMetricsEndpoint(t *testing.T) {
 		t.Fatal(body)
 	}
 }
+
+func TestMiddlewareRecordsRecommendationHTTPHistogramOnlyForRecommendationRoutes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(Middleware())
+	router.GET("/api/recommendations/posts", func(c *gin.Context) { c.Status(http.StatusOK) })
+	router.GET("/api/public/recommendations/posts", func(c *gin.Context) { c.Status(http.StatusUnauthorized) })
+	router.GET("/api/posts/:id", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	for _, path := range []string{"/api/recommendations/posts", "/api/public/recommendations/posts", "/api/posts/123"} {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+	}
+
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := response.Body.String()
+	for _, line := range []string{
+		`go_exchange_recommendation_http_duration_seconds_count{route="/api/recommendations/posts",status="200"} 1`,
+		`go_exchange_recommendation_http_duration_seconds_count{route="/api/public/recommendations/posts",status="401"} 1`,
+		`go_exchange_recommendation_http_duration_seconds_bucket{route="/api/recommendations/posts",status="200",le="0.003"}`,
+	} {
+		if !strings.Contains(body, line) {
+			t.Errorf("recommendation histogram missing %q", line)
+		}
+	}
+	if strings.Contains(body, `go_exchange_recommendation_http_duration_seconds_count{route="/api/posts/:id"`) {
+		t.Fatalf("non-recommendation route was observed: %s", body)
+	}
+}
+
 func TestHandlerExposesPipelineMetrics(t *testing.T) {
 	recommendationTelemetryEvents.WithLabelValues("accepted", "impression", "")
 	recommendationTelemetryProjection.WithLabelValues("applied")

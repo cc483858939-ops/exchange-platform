@@ -14,6 +14,7 @@ var (
 	registry                                     = prometheus.NewRegistry()
 	httpRequestsTotal                            = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_http_requests_total", Help: "Total number of HTTP requests handled by the Gin server."}, []string{"method", "route", "status"})
 	httpRequestDuration                          = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "go_exchange_http_request_duration_seconds", Help: "HTTP request latency in seconds.", Buckets: prometheus.DefBuckets}, []string{"method", "route", "status"})
+	recommendationHTTPDuration                   = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "go_exchange_recommendation_http_duration_seconds", Help: "Recommendation HTTP request latency in seconds, measured by the Gin metrics middleware around downstream middleware and handler execution.", Buckets: []float64{0.001, 0.002, 0.003, 0.004, 0.005, 0.0075, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}}, []string{"route", "status"})
 	postEmbeddingEvents                          = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_post_embedding_events_total", Help: "Post embedding event outcomes."}, []string{"result"})
 	postEmbeddingFailures                        = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_post_embedding_failures_total", Help: "Post embedding processing failures by stage."}, []string{"stage"})
 	postEmbeddingPublishFailures                 = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_post_embedding_publish_failures_total", Help: "Post embedding publish failures by source."}, []string{"source"})
@@ -81,7 +82,7 @@ var (
 
 func init() {
 	registry.MustRegister(
-		httpRequestsTotal, httpRequestDuration, postEmbeddingEvents, postEmbeddingFailures, postEmbeddingPublishFailures, postEmbeddingProcessingDuration, kafkaConsumerRecovery,
+		httpRequestsTotal, httpRequestDuration, recommendationHTTPDuration, postEmbeddingEvents, postEmbeddingFailures, postEmbeddingPublishFailures, postEmbeddingProcessingDuration, kafkaConsumerRecovery,
 		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxRowsLastSuccess, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, consumerInboxRowsLastSuccess, notificationProjectionFailures, notificationProjectionLatency, likePipelineDepth,
 		recommendationTelemetryEvents, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests,
@@ -136,8 +137,12 @@ func Middleware() gin.HandlerFunc {
 			route = "unmatched"
 		}
 		status := strconv.Itoa(ctx.Writer.Status())
+		duration := time.Since(started).Seconds()
 		httpRequestsTotal.WithLabelValues(ctx.Request.Method, route, status).Inc()
-		httpRequestDuration.WithLabelValues(ctx.Request.Method, route, status).Observe(time.Since(started).Seconds())
+		httpRequestDuration.WithLabelValues(ctx.Request.Method, route, status).Observe(duration)
+		if ctx.Request.Method == http.MethodGet && (route == "/api/recommendations/posts" || route == "/api/public/recommendations/posts") {
+			recommendationHTTPDuration.WithLabelValues(route, status).Observe(duration)
+		}
 	}
 }
 

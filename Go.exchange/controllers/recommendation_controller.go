@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,6 +12,9 @@ import (
 	"Go.exchange/recommendation"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const guestRecommendationSessionHeader = "X-Guest-Recommendation-Session"
@@ -96,11 +100,25 @@ func (handler *RecommendationHandler) serve(ctx *gin.Context, viewer recommendat
 		recommendationErrorResponse(ctx, err, result.StrategyID)
 		return
 	}
+	if result.RequestID != "" {
+		trace.SpanFromContext(requestCtx).SetAttributes(attribute.String("recommendation.request_id", result.RequestID))
+	}
 	if err := servingCtx.Err(); err != nil {
 		recommendationErrorResponse(ctx, err, result.StrategyID)
 		return
 	}
-	recommendations, err := handler.responseMapper.Map(servingCtx, result.Selected, result.Now)
+	recommendations, err := func() ([]RecommendedPostResponse, error) {
+		mapCtx, mapSpan := trace.SpanFromContext(requestCtx).TracerProvider().Tracer("Go.exchange/controllers/recommendation").Start(
+			servingCtx,
+			"recommendation.response.map",
+		)
+		defer mapSpan.End()
+		mapped, mapErr := handler.responseMapper.Map(mapCtx, result.Selected, result.Now)
+		if mapErr != nil {
+			recordRecommendationControllerSpanError(mapSpan, mapErr)
+		}
+		return mapped, mapErr
+	}()
 	if err != nil {
 		recommendationErrorResponse(ctx, err, result.StrategyID)
 		return
@@ -109,6 +127,20 @@ func (handler *RecommendationHandler) serve(ctx *gin.Context, viewer recommendat
 	ctx.JSON(http.StatusOK, postRecommendationPageResponse{
 		Items: recommendations, RequestID: result.RequestID, Depleted: result.Depleted,
 	})
+}
+
+func recordRecommendationControllerSpanError(span trace.Span, err error) {
+	if err == nil {
+		return
+	}
+	errorType := fmt.Sprintf("%T", err)
+	if errors.Is(err, context.Canceled) {
+		errorType = "context.canceled"
+	} else if errors.Is(err, context.DeadlineExceeded) {
+		errorType = "context.deadline_exceeded"
+	}
+	span.RecordError(errors.New("recommendation response mapping failed"), trace.WithAttributes(attribute.String("error.type", errorType)))
+	span.SetStatus(codes.Error, "recommendation response mapping failed")
 }
 
 func attachRecommendationTrackingFacts(recommendations []RecommendedPostResponse, facts []recommendation.TrackingFact) {
