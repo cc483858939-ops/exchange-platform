@@ -1335,17 +1335,31 @@ describe('postPublish store', () => {
   });
 
   it('fails closed and exposes a viewer-scoped error when hydration fails', async () => {
-    mocks.getPostPublishOperation.mockRejectedValueOnce(new Error('IndexedDB unavailable'));
+    const recoveryFailure = new DOMException('IndexedDB transaction failed', 'UnknownError');
+    const recoveryLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.getPostPublishOperation.mockRejectedValue(recoveryFailure);
     const draft = usePostDraftStore();
-    draft.setContent('Do not send without checking recovery');
+    draft.setContent('private post body must not enter recovery logs');
+    draft.addMedia(file('private-image.png'));
     const store = usePostPublishStore();
 
-    const result = await store.startOrRetryDraft();
+    const firstResult = await store.startOrRetryDraft();
+    const retryResult = await store.startOrRetryDraft();
 
-    expect(result).toEqual({ status: 'rejected', reason: 'persistence_unavailable' });
-    expect(store.recoveryError).toContain('Couldn’t restore the pending post');
+    expect(firstResult).toEqual({ status: 'rejected', reason: 'persistence_unavailable' });
+    expect(retryResult).toEqual({ status: 'rejected', reason: 'persistence_unavailable' });
+    expect(store.recoveryError).toBe(
+      'Couldn’t restore the pending post from this device. Publishing is paused to prevent duplicate submissions.',
+    );
+    expect(mocks.getPostPublishOperation).toHaveBeenCalledTimes(2);
+    expect(recoveryLog.mock.calls).toEqual([
+      ['[postPublish] Recovery failed', recoveryFailure],
+      ['[postPublish] Recovery failed', recoveryFailure],
+    ]);
     expect(mocks.claimPostPublishOperation).not.toHaveBeenCalled();
+    expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
     expect(mocks.createPost).not.toHaveBeenCalled();
+    recoveryLog.mockRestore();
   });
 
   it('deduplicates concurrent hydration for the same viewer', async () => {

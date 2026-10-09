@@ -82,6 +82,7 @@ const mediaUploadConcurrency = 2;
 const publishSuccessNoticeDurationMs = 4000;
 const publishFailureMessage = 'Couldn’t confirm this post. Retry safely.';
 const publishPersistenceMessage = 'Couldn’t save publish progress on this device. Retry.';
+const publishRecoveryUnavailableMessage = 'Couldn’t restore the pending post from this device. Publishing is paused to prevent duplicate submissions.';
 const publishConflictMessage = 'This post can’t be retried safely.';
 
 class SupersededPublishOperationError extends Error {}
@@ -636,11 +637,9 @@ export const usePostPublishStore = defineStore('postPublish', () => {
           recoveryErrors.value.delete(viewerID);
         }
         hydratedViewerIDs.add(viewerID);
-      } catch {
-        recoveryErrors.value.set(
-          viewerID,
-          'Couldn’t restore the pending post from this device. Publishing is paused until storage is available.',
-        );
+      } catch (error) {
+        console.error('[postPublish] Recovery failed', error);
+        recoveryErrors.value.set(viewerID, publishRecoveryUnavailableMessage);
         throw new PublishPersistenceError('Could not restore the pending publish operation.');
       }
     })().finally(() => {
@@ -845,10 +844,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       }
       const existing = restorePublishOperation(claim.operation) as PublishOperation;
       if (existing.phase === 'succeeded' && !existing.post) {
-        recoveryErrors.value.set(
-          publisherUserID,
-          'Couldn’t restore the pending post from this device. Publishing is paused until storage is available.',
-        );
+        recoveryErrors.value.set(publisherUserID, publishRecoveryUnavailableMessage);
         return { status: 'rejected', reason: 'persistence_unavailable' };
       }
       if (existing.phase !== 'succeeded' && !operationMatchesCurrentSession(existing)) {

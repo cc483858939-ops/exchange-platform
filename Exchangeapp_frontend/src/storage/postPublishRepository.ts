@@ -205,8 +205,12 @@ const openDatabase = (): Promise<IDBDatabase> => {
 
     request.onupgradeneeded = () => {
       const database = request.result;
-      database.createObjectStore(OBJECT_STORE_NAME, { keyPath: 'publisherUserID' });
-      database.createObjectStore(CHECKPOINT_STORE_NAME, { keyPath: 'publisherUserID' });
+      if (!database.objectStoreNames.contains(OBJECT_STORE_NAME)) {
+        database.createObjectStore(OBJECT_STORE_NAME, { keyPath: 'publisherUserID' });
+      }
+      if (!database.objectStoreNames.contains(CHECKPOINT_STORE_NAME)) {
+        database.createObjectStore(CHECKPOINT_STORE_NAME, { keyPath: 'publisherUserID' });
+      }
     };
     request.onerror = () => reject(request.error || new Error('Could not open publish storage.'));
     request.onblocked = () => reject(new Error('Publish storage is blocked by another tab.'));
