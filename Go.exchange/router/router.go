@@ -173,15 +173,28 @@ func httpTracingMiddleware(tracerProvider trace.TracerProvider) gin.HandlerFunc 
 			),
 		)
 		ctx.Request = ctx.Request.WithContext(spanCtx)
-		defer span.End()
+		defer func() {
+			recovered := recover()
+			statusCode := ctx.Writer.Status()
+			if recovered != nil {
+				statusCode = http.StatusInternalServerError
+				if ctx.Writer.Written() {
+					statusCode = ctx.Writer.Status()
+				}
+				span.SetStatus(codes.Error, "HTTP request panicked")
+			} else if statusCode >= http.StatusInternalServerError || len(ctx.Errors) > 0 {
+				span.SetStatus(codes.Error, "HTTP request failed")
+			}
+
+			span.SetAttributes(attribute.Int("http.response.status_code", statusCode))
+			span.End()
+
+			if recovered != nil {
+				panic(recovered)
+			}
+		}()
 
 		ctx.Next()
-
-		statusCode := ctx.Writer.Status()
-		span.SetAttributes(attribute.Int("http.response.status_code", statusCode))
-		if statusCode >= http.StatusInternalServerError || len(ctx.Errors) > 0 {
-			span.SetStatus(codes.Error, "HTTP request failed")
-		}
 	}
 }
 

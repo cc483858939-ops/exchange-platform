@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func TestSetupRouterIgnoresForwardedHeadersWithoutTrustedProxy(t *testing.T) {
@@ -193,6 +195,214 @@ func TestHTTPTracingRedactsGinErrorsAndRequestDetails(t *testing.T) {
 			t.Errorf("sensitive value %q appeared in exported span", secret)
 		}
 	}
+}
+
+func TestHTTPTracingMarksRecoveredPanicAsError(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter), sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	t.Cleanup(func() {
+		if err := provider.Shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown tracer provider: %v", err)
+		}
+	})
+
+	engine := newHTTPTracingTestEngine(provider, true)
+	engine.GET("/__otel-panic", func(*gin.Context) {
+		panic("private-panic-value")
+	})
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/__otel-panic", nil))
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d, want 500 from Gin Recovery", response.Code)
+	}
+
+	span := singleExportedHTTPSpan(t, exporter)
+	if span.Name != "GET /__otel-panic" {
+		t.Fatalf("span name=%q, want GET /__otel-panic", span.Name)
+	}
+	if span.Status.Code != codes.Error || span.Status.Description != "HTTP request panicked" {
+		t.Fatalf("span status=%#v, want sanitized panic error", span.Status)
+	}
+	if !hasIntAttribute(span.Attributes, "http.response.status_code", http.StatusInternalServerError) {
+		t.Fatalf("missing HTTP 500 attribute: %#v", span.Attributes)
+	}
+	if span.StartTime.IsZero() || span.EndTime.IsZero() || span.EndTime.Before(span.StartTime) {
+		t.Fatalf("invalid span times: start=%v end=%v", span.StartTime, span.EndTime)
+	}
+	if exportedSpanContains(&span, "private-panic-value") {
+		t.Fatal("panic value leaked into exported span")
+	}
+}
+
+func TestHTTPTracingPanicDoesNotLeakSensitiveDetails(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter), sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	t.Cleanup(func() {
+		if err := provider.Shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown tracer provider: %v", err)
+		}
+	})
+
+	engine := newHTTPTracingTestEngine(provider, true)
+	engine.GET("/__otel-panic-private", func(*gin.Context) {
+		panic("jwt=private-token password=private-password api_key=private-key")
+	})
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/__otel-panic-private", nil))
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d, want 500 from Gin Recovery", response.Code)
+	}
+
+	span := singleExportedHTTPSpan(t, exporter)
+	for _, secret := range []string{"jwt=private-token", "password=private-password", "api_key=private-key"} {
+		if exportedSpanContains(&span, secret) {
+			t.Errorf("panic detail %q leaked into exported span", secret)
+		}
+	}
+	if span.Status.Code != codes.Error || span.Status.Description != "HTTP request panicked" {
+		t.Fatalf("span status=%#v, want fixed panic description", span.Status)
+	}
+}
+
+func TestHTTPTracingPanicAfterResponseWritten(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter), sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	t.Cleanup(func() {
+		if err := provider.Shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown tracer provider: %v", err)
+		}
+	})
+
+	engine := newHTTPTracingTestEngine(provider, true)
+	engine.GET("/__otel-partial", func(ctx *gin.Context) {
+		ctx.String(http.StatusOK, "partial")
+		panic("panic after write")
+	})
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/__otel-partial", nil))
+	if response.Code != http.StatusOK || response.Body.String() != "partial" {
+		t.Fatalf("response changed after panic: status=%d body=%q", response.Code, response.Body.String())
+	}
+
+	span := singleExportedHTTPSpan(t, exporter)
+	if span.Status.Code != codes.Error || span.Status.Description != "HTTP request panicked" {
+		t.Fatalf("span status=%#v, want fixed panic error", span.Status)
+	}
+	if !hasIntAttribute(span.Attributes, "http.response.status_code", http.StatusOK) {
+		t.Fatalf("committed HTTP status was not preserved: %#v", span.Attributes)
+	}
+	if exportedSpanContains(&span, "panic after write") {
+		t.Fatal("panic value leaked into exported span")
+	}
+}
+
+func TestHTTPTracingNormalResponseUnchanged(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter), sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	t.Cleanup(func() {
+		if err := provider.Shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown tracer provider: %v", err)
+		}
+	})
+
+	engine := newHTTPTracingTestEngine(provider, true)
+	engine.GET("/__otel-normal", func(ctx *gin.Context) {
+		ctx.JSON(http.StatusOK, gin.H{"message": "ok"})
+	})
+	engine.GET("/__otel-explicit-error", func(ctx *gin.Context) {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal"})
+	})
+	engine.GET("/__otel-gin-error", func(ctx *gin.Context) {
+		_ = ctx.Error(errors.New("private-gin-error"))
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid"})
+	})
+
+	cases := []struct {
+		path       string
+		wantStatus int
+		wantBody   string
+		wantError  bool
+	}{
+		{path: "/__otel-normal", wantStatus: http.StatusOK, wantBody: "{\"message\":\"ok\"}"},
+		{path: "/__otel-explicit-error", wantStatus: http.StatusInternalServerError, wantBody: "{\"error\":\"internal\"}", wantError: true},
+		{path: "/__otel-gin-error", wantStatus: http.StatusBadRequest, wantBody: "{\"error\":\"invalid\"}", wantError: true},
+	}
+	for _, test := range cases {
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.path, nil))
+		if response.Code != test.wantStatus || response.Body.String() != test.wantBody {
+			t.Errorf("GET %s response=(%d, %q), want=(%d, %q)", test.path, response.Code, response.Body.String(), test.wantStatus, test.wantBody)
+		}
+	}
+
+	spans := exporter.GetSpans()
+	if len(spans) != len(cases) {
+		t.Fatalf("exported %d spans, want %d", len(spans), len(cases))
+	}
+	for _, test := range cases {
+		name := "GET " + test.path
+		var found *tracetest.SpanStub
+		for index := range spans {
+			if spans[index].Name == name {
+				found = &spans[index]
+				break
+			}
+		}
+		if found == nil {
+			t.Errorf("missing span %q", name)
+			continue
+		}
+		if !hasIntAttribute(found.Attributes, "http.response.status_code", test.wantStatus) {
+			t.Errorf("span %q has wrong HTTP status attribute: %#v", name, found.Attributes)
+		}
+		if test.wantError && found.Status.Code != codes.Error {
+			t.Errorf("span %q status=%#v, want error", name, found.Status)
+		}
+		if !test.wantError && found.Status.Code != codes.Unset {
+			t.Errorf("span %q status=%#v, want unset", name, found.Status)
+		}
+		if exportedSpanContains(found, "private-gin-error") {
+			t.Errorf("Gin error leaked into span %q", name)
+		}
+	}
+
+	disabledExporter := tracetest.NewInMemoryExporter()
+	disabledProvider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(disabledExporter), sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	t.Cleanup(func() {
+		if err := disabledProvider.Shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown disabled tracer provider: %v", err)
+		}
+	})
+	disabledEngine := newHTTPTracingTestEngine(disabledProvider, false)
+	disabledEngine.GET("/__otel-disabled-json", func(ctx *gin.Context) {
+		ctx.JSON(http.StatusOK, gin.H{"message": "ok"})
+	})
+	disabledResponse := httptest.NewRecorder()
+	disabledEngine.ServeHTTP(disabledResponse, httptest.NewRequest(http.MethodGet, "/__otel-disabled-json", nil))
+	if disabledResponse.Code != http.StatusOK || disabledResponse.Body.String() != "{\"message\":\"ok\"}" {
+		t.Fatalf("disabled tracing changed response: status=%d body=%q", disabledResponse.Code, disabledResponse.Body.String())
+	}
+	if spans := disabledExporter.GetSpans(); len(spans) != 0 {
+		t.Fatalf("disabled tracing emitted spans: %#v", spans)
+	}
+}
+
+func newHTTPTracingTestEngine(provider trace.TracerProvider, tracingEnabled bool) *gin.Engine {
+	engine := gin.New()
+	engine.Use(gin.LoggerWithWriter(io.Discard), gin.RecoveryWithWriter(io.Discard))
+	if tracingEnabled {
+		engine.Use(httpTracingMiddleware(provider))
+	}
+	return engine
+}
+
+func singleExportedHTTPSpan(t *testing.T, exporter *tracetest.InMemoryExporter) tracetest.SpanStub {
+	t.Helper()
+	spans := exporter.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("exported %d spans, want exactly one: %#v", len(spans), spans)
+	}
+	return spans[0]
 }
 
 func TestSetupRouterTracingDisabledOmitsHTTPMiddleware(t *testing.T) {

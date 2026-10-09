@@ -66,6 +66,8 @@ TraceID 是 OpenTelemetry 的链路标识；`recommendation.request_id` 是业�
 
 HTTP 根 Span 使用规范化路由模板命名，并只记录 `http.request.method`、`http.route`、`http.response.status_code` 和可用的 `recommendation.request_id`。健康检查与 `/metrics` 不创建 Span。HTTP 错误状态使用固定描述；Gin `ctx.Errors` 的原始错误不会进入 Span Status 或 Exception Event。请求和响应 Body、Query、Authorization、Cookie、客户端 IP、端口、User-Agent 都不会被记录。业务错误响应仍按现有 Handler 逻辑生成。
 
+如果 Gin Handler panic，HTTP Span 在重新抛给外层 Gin Recovery 前以固定描述 `HTTP request panicked` 标记为 Error。响应尚未写出时记录 HTTP 500；响应已经提交时记录已提交的状态码，Gin 无法改写已提交的响应。Trace 不记录 Panic Value 或 Stack Trace；Gin Recovery 原有的服务端日志行为不属于 Trace 导出内容。
+
 公网入口接受 W3C `traceparent` 用于保留 Trace ID 和父子关联，但把远端 sampled flag 和可由客户端选择的 Trace ID 当作不可信输入：远端父 Span 无论标记 sampled 与否，都由服务端按 `TRACING_SAMPLE_RATIO` 做独立随机采样。服务内的本地父 Span 继续使用 ParentBased 的父采样决定。当前没有单独的可信服务间 HTTP 入口，因此传入 API 的远端上下文一律执行本地比例；客户端不能只靠设置 sampled bit 或挑选 Trace ID 强制完整采集。
 
 ## 用 Metrics 发现慢请求
