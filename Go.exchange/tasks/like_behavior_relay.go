@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -69,10 +70,18 @@ func runLikeBehaviorRelayBatch(ctx context.Context, store *likes.Store, publishe
 	if len(claims) == 0 {
 		return nil
 	}
-	deliveries, err := store.LoadBehaviorDeliveries(ctx, claims)
-	if err != nil {
+	deliveries, invalid, loadErr := store.LoadBehaviorDeliveriesWithIssues(ctx, claims)
+	if loadErr != nil && len(invalid) == 0 {
 		_ = store.RequeueBehaviorClaims(ctx, claims)
-		return fmt.Errorf("load behavior state: %w", err)
+		return fmt.Errorf("load behavior state: %w", loadErr)
+	}
+	var requeueErr error
+	if len(invalid) > 0 {
+		requeueErr = store.RequeueBehaviorClaims(ctx, invalid)
+		log.Printf("[LikeBehaviorRelay] %d invalid Behavior states retained for retry: %v", len(invalid), loadErr)
+	}
+	if len(deliveries) == 0 {
+		return errors.Join(loadErr, requeueErr)
 	}
 	events := make([]eventing.Envelope, 0, len(deliveries))
 	for _, delivery := range deliveries {
@@ -101,7 +110,7 @@ func runLikeBehaviorRelayBatch(ctx context.Context, store *likes.Store, publishe
 	if _, err := store.AckBehaviorDeliveries(ctx, deliveries); err != nil {
 		return fmt.Errorf("ack behavior claims: %w", err)
 	}
-	return nil
+	return errors.Join(loadErr, requeueErr)
 }
 
 func publishEnvelopeBatch(ctx context.Context, publisher eventing.Publisher, events []eventing.Envelope) error {

@@ -22,6 +22,7 @@ const (
 
 type userLikeRelationCleanupState struct {
 	lastUserID      uint
+	cycleStartedAt  time.Time
 	users           []uint
 	userIndex       int
 	userID          uint
@@ -119,6 +120,7 @@ func runUserLikeRelationCleanupPass(ctx context.Context, store *likes.Store, db 
 		limit = userLikeCleanupBatchSize
 	}
 	candidates := state.pending[:limit]
+	batchStarted := time.Now()
 	deletedIDs, err := findDeletedPostIDs(ctx, db, candidates)
 	if err != nil {
 		return err
@@ -153,6 +155,7 @@ func runUserLikeRelationCleanupPass(ctx context.Context, store *likes.Store, db 
 		metrics.RecordUserLikeRelationsRemoved(removed)
 		log.Printf("[UserLikeRelationCleanup] user=%d removed=%d", state.userID, removed)
 	}
+	metrics.ObserveUserLikeCleanupBatch(1, len(candidates), removed, time.Since(batchStarted))
 	if len(state.pending) == 0 && state.scanCursor == 0 {
 		advanceUser(state)
 	}
@@ -164,6 +167,9 @@ func skipUserLikeCleanupUser(err error) bool {
 }
 
 func loadNextUserPage(ctx context.Context, db *gorm.DB, state *userLikeRelationCleanupState) error {
+	if state.cycleStartedAt.IsZero() {
+		state.cycleStartedAt = time.Now()
+	}
 	type userIDRow struct{ ID uint }
 	var rows []userIDRow
 	if err := db.WithContext(ctx).Unscoped().Model(&models.User{}).
@@ -172,6 +178,8 @@ func loadNextUserPage(ctx context.Context, db *gorm.DB, state *userLikeRelationC
 		return err
 	}
 	if len(rows) == 0 {
+		metrics.RecordUserLikeCleanupCycle(time.Since(state.cycleStartedAt))
+		state.cycleStartedAt = time.Time{}
 		state.lastUserID = 0
 		state.users = nil
 		state.userIndex = 0

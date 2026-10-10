@@ -207,15 +207,24 @@ func LikeSnapshotPollInterval() time.Duration {
 	return envDuration("LIKE_SNAPSHOT_POLL_INTERVAL", time.Second)
 }
 
-func LikeSnapshotBatchSize() int    { return envInt("LIKE_SNAPSHOT_BATCH_SIZE", 100) }
+const MaxLikeSnapshotBatchSize = 100
+const MaxLikeBehaviorBatchSize = 500
+
+func LikeSnapshotBatchSize() int {
+	batch := envInt("LIKE_SNAPSHOT_BATCH_SIZE", MaxLikeSnapshotBatchSize)
+	if batch < 1 {
+		return MaxLikeSnapshotBatchSize
+	}
+	return min(batch, MaxLikeSnapshotBatchSize)
+}
 func LikeClaimLease() time.Duration { return envDuration("LIKE_CLAIM_LEASE", 30*time.Second) }
 
 func LikeBehaviorBatchSize() int {
 	batch := envInt("LIKE_BEHAVIOR_BATCH_SIZE", 500)
 	if batch < 1 {
-		return 1
+		return MaxLikeBehaviorBatchSize
 	}
-	return batch
+	return min(batch, MaxLikeBehaviorBatchSize)
 }
 
 func LikeBehaviorClaimLease() time.Duration {

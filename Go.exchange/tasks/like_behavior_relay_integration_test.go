@@ -3,6 +3,7 @@ package tasks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"testing"
@@ -19,6 +20,67 @@ type relayTestPublisher struct {
 	fail       bool
 	batchCalls int
 	events     []eventing.Envelope
+}
+
+func TestLikeBehaviorRelayIsolatesMalformedPairIntegration(t *testing.T) {
+	addr := os.Getenv("REDIS_TEST_ADDR")
+	if addr == "" {
+		t.Skip("set REDIS_TEST_ADDR to run Redis integration test")
+	}
+	db, _ := strconv.Atoi(os.Getenv("REDIS_TEST_DB"))
+	client := redis.NewClient(&redis.Options{Addr: addr, DB: db})
+	t.Cleanup(func() { client.Close() })
+	if err := client.Ping().Err(); err != nil {
+		t.Fatal(err)
+	}
+	base := uint(time.Now().UnixNano() & 0x3fffffff)
+	good := likes.BehaviorPair(base, base+1)
+	bad := likes.BehaviorPair(base, base+2)
+	badPair := fmt.Sprintf("bad-pair-%d", base)
+	t.Cleanup(func() {
+		client.SRem(likes.BehaviorDirtyKey, good, bad, badPair)
+		client.HDel(likes.BehaviorStateKey, good, bad, badPair)
+		client.ZRem(likes.BehaviorProcessingKey, good, bad, badPair)
+		client.HDel(likes.BehaviorClaimsKey, good, bad, badPair)
+	})
+	if err := client.SAdd(likes.BehaviorDirtyKey, good, bad, badPair).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.HSet(likes.BehaviorStateKey, good, "1|3|2026-01-01T00:00:00Z").Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.HSet(likes.BehaviorStateKey, bad, "corrupt").Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.HSet(likes.BehaviorStateKey, badPair, "1|3|2026-01-01T00:00:00Z").Err(); err != nil {
+		t.Fatal(err)
+	}
+	publisher := &relayTestPublisher{}
+	if err := runLikeBehaviorRelayBatch(t.Context(), likes.NewStore(client), publisher); err == nil {
+		t.Fatal("malformed Pair was not reported")
+	}
+	goodEventID := fmt.Sprintf("like-state:%d:%d:3", base, base+1)
+	goodEvents := 0
+	for _, event := range publisher.events {
+		if event.ID == goodEventID {
+			goodEvents++
+		}
+	}
+	if goodEvents != 1 {
+		t.Fatalf("healthy Pair published %d events, want 1", goodEvents)
+	}
+	if dirty, err := client.SIsMember(likes.BehaviorDirtyKey, bad).Result(); err != nil || !dirty {
+		t.Fatalf("bad Pair lost: dirty=%t err=%v", dirty, err)
+	}
+	if dirty, err := client.SIsMember(likes.BehaviorDirtyKey, badPair).Result(); err != nil || !dirty {
+		t.Fatalf("malformed Pair lost: dirty=%t err=%v", dirty, err)
+	}
+	if state, err := client.HGet(likes.BehaviorStateKey, bad).Result(); err != nil || state != "corrupt" {
+		t.Fatalf("bad State changed: %q err=%v", state, err)
+	}
+	if exists, err := client.HExists(likes.BehaviorStateKey, good).Result(); err != nil || exists {
+		t.Fatalf("healthy Pair not ACKed: exists=%t err=%v", exists, err)
+	}
 }
 
 func (p *relayTestPublisher) Publish(_ context.Context, event eventing.Envelope) error {

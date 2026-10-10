@@ -32,8 +32,17 @@ var (
 	notificationProjectionFailures               = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_notification_projection_failures_total", Help: "Notification projection failures by stage."}, []string{"stage"})
 	notificationProjectionLatency                = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_notification_projection_latency_seconds", Help: "Notification projection batch latency in seconds.", Buckets: prometheus.DefBuckets})
 	likePipelineDepth                            = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "go_exchange_like_pipeline_depth", Help: "Current Redis like pipeline depth by stage."}, []string{"stage"})
+	likePipelineDepthLastSuccess                 = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "go_exchange_like_pipeline_depth_last_success_timestamp_seconds", Help: "Last successful bounded Redis queue depth sample by stage; samples run every 10 seconds."}, []string{"stage"})
+	likeClaimDuration                            = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "go_exchange_like_claim_duration_seconds", Help: "Redis Like claim batch duration by queue.", Buckets: prometheus.DefBuckets}, []string{"queue"})
+	likeQueueOperations                          = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_like_queue_operations_total", Help: "Redis Like queue operations by queue, operation and bounded outcome."}, []string{"queue", "operation", "outcome"})
 	likeLifecycleEvents                          = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_like_lifecycle_events_total", Help: "Like lifecycle and User -> Posts repair events by bounded outcome."}, []string{"event"})
 	userLikeRelationsRemoved                     = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_user_like_relations_removed_total", Help: "Deleted Post relations removed from User Like Sets by bounded maintenance."})
+	userLikeCleanupBatchUsers                    = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_user_like_cleanup_batch_users", Help: "Users processed by one bounded User Like cleanup batch.", Buckets: []float64{0, 1, 2, 4, 8, 16, 32, 64}})
+	userLikeCleanupBatchRelations                = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_user_like_cleanup_batch_relations", Help: "Relations examined by one bounded User Like cleanup batch.", Buckets: []float64{0, 1, 4, 16, 32, 64, 128}})
+	userLikeCleanupBatchRemoved                  = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_user_like_cleanup_batch_removed", Help: "Deleted relations removed by one bounded User Like cleanup batch.", Buckets: []float64{0, 1, 4, 16, 32, 64, 128}})
+	userLikeCleanupBatchDuration                 = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_user_like_cleanup_batch_duration_seconds", Help: "Time spent on one bounded User Like cleanup batch.", Buckets: prometheus.DefBuckets})
+	userLikeCleanupCycleDuration                 = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_user_like_cleanup_cycle_duration_seconds", Help: "Duration of a completed SQL-user scan and bounded User Like cleanup cycle.", Buckets: prometheus.DefBuckets})
+	userLikeCleanupLastCycle                     = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_user_like_cleanup_last_cycle_timestamp_seconds", Help: "Unix timestamp of the last completed User Like cleanup cycle."})
 	recommendationTelemetryEvents                = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_telemetry_events_total", Help: "Recommendation telemetry events by ingestion outcome."}, []string{"status", "event_type", "reason"})
 	recommendationTelemetryBatchSize             = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_telemetry_batch_size", Help: "Number of recommendation telemetry events per ingestion request.", Buckets: []float64{1, 5, 10, 20, 50}})
 	recommendationTelemetryIngestDuration        = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_telemetry_ingest_duration_seconds", Help: "Recommendation telemetry ingestion latency in seconds.", Buckets: prometheus.DefBuckets})
@@ -85,7 +94,7 @@ var (
 func init() {
 	registry.MustRegister(
 		httpRequestsTotal, httpRequestDuration, recommendationHTTPDuration, postEmbeddingEvents, postEmbeddingFailures, postEmbeddingPublishFailures, postEmbeddingProcessingDuration, kafkaConsumerRecovery,
-		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxRowsLastSuccess, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, consumerInboxRowsLastSuccess, notificationProjectionFailures, notificationProjectionLatency, likePipelineDepth, likeLifecycleEvents, userLikeRelationsRemoved,
+		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxRowsLastSuccess, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, consumerInboxRowsLastSuccess, notificationProjectionFailures, notificationProjectionLatency, likePipelineDepth, likePipelineDepthLastSuccess, likeClaimDuration, likeQueueOperations, likeLifecycleEvents, userLikeRelationsRemoved, userLikeCleanupBatchUsers, userLikeCleanupBatchRelations, userLikeCleanupBatchRemoved, userLikeCleanupBatchDuration, userLikeCleanupCycleDuration, userLikeCleanupLastCycle,
 		recommendationTelemetryEvents, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests,
 		recommendationRequestLogFailures, recommendationTrackingResults,
@@ -144,6 +153,18 @@ func RecordUserLikeRelationsRemoved(count int64) {
 	if count > 0 {
 		userLikeRelationsRemoved.Add(float64(count))
 	}
+}
+
+func ObserveUserLikeCleanupBatch(users, relations int, removed int64, duration time.Duration) {
+	userLikeCleanupBatchUsers.Observe(float64(users))
+	userLikeCleanupBatchRelations.Observe(float64(relations))
+	userLikeCleanupBatchRemoved.Observe(float64(removed))
+	userLikeCleanupBatchDuration.Observe(duration.Seconds())
+}
+
+func RecordUserLikeCleanupCycle(duration time.Duration) {
+	userLikeCleanupCycleDuration.Observe(duration.Seconds())
+	userLikeCleanupLastCycle.Set(float64(time.Now().Unix()))
 }
 
 func Middleware() gin.HandlerFunc {
@@ -230,6 +251,26 @@ func ObserveNotificationProjectionLatency(duration time.Duration) {
 }
 func SetLikePipelineDepth(stage string, value float64) {
 	likePipelineDepth.WithLabelValues(stage).Set(value)
+	likePipelineDepthLastSuccess.WithLabelValues(stage).Set(float64(time.Now().Unix()))
+}
+
+func ObserveLikeClaimDuration(queue string, duration time.Duration) {
+	if queue == "snapshot" || queue == "behavior" {
+		likeClaimDuration.WithLabelValues(queue).Observe(duration.Seconds())
+	}
+}
+
+func RecordLikeQueueOperation(queue, operation, outcome string) {
+	if queue != "snapshot" && queue != "behavior" {
+		return
+	}
+	if operation != "claim" && operation != "ack" && operation != "requeue" && operation != "reap" {
+		return
+	}
+	if outcome != "success" && outcome != "empty" && outcome != "error" && outcome != "stale" {
+		return
+	}
+	likeQueueOperations.WithLabelValues(queue, operation, outcome).Inc()
 }
 func RecordRecommendationTelemetryEvent(status, eventType, reason string) {
 	recommendationTelemetryEvents.WithLabelValues(status, eventType, reason).Inc()

@@ -6,6 +6,15 @@ var behaviorClaimScript = redis.NewScript(`
 local result = {}
 local deferred = {}
 local limit = tonumber(ARGV[1])
+if not limit or limit ~= math.floor(limit) or limit < 1 or limit > 500 or
+   not tonumber(ARGV[2]) or ARGV[3] == '' then
+  return redis.error_reply('LIKE_BEHAVIOR_BATCH_INVALID')
+end
+if (redis.call('TYPE', KEYS[1]).ok ~= 'none' and redis.call('TYPE', KEYS[1]).ok ~= 'set') or
+   (redis.call('TYPE', KEYS[2]).ok ~= 'none' and redis.call('TYPE', KEYS[2]).ok ~= 'zset') or
+   (redis.call('TYPE', KEYS[3]).ok ~= 'none' and redis.call('TYPE', KEYS[3]).ok ~= 'hash') then
+  return redis.error_reply('LIKE_TYPE_PRECHECK')
+end
 for _ = 1, limit do
   local pair = redis.call('SPOP', KEYS[1])
   if not pair then break end
@@ -26,6 +35,12 @@ return result
 `)
 
 var behaviorAckScript = redis.NewScript(`
+if (redis.call('TYPE', KEYS[1]).ok ~= 'none' and redis.call('TYPE', KEYS[1]).ok ~= 'set') or
+   (redis.call('TYPE', KEYS[2]).ok ~= 'none' and redis.call('TYPE', KEYS[2]).ok ~= 'hash') or
+   (redis.call('TYPE', KEYS[3]).ok ~= 'none' and redis.call('TYPE', KEYS[3]).ok ~= 'zset') or
+   (redis.call('TYPE', KEYS[4]).ok ~= 'none' and redis.call('TYPE', KEYS[4]).ok ~= 'hash') then
+  return redis.error_reply('LIKE_TYPE_PRECHECK')
+end
 if redis.call('HGET', KEYS[4], ARGV[1]) ~= ARGV[2] then return 0 end
 local state = redis.call('HGET', KEYS[2], ARGV[1])
 if state then
@@ -45,6 +60,12 @@ return 1
 `)
 
 var behaviorRequeueScript = redis.NewScript(`
+if (redis.call('TYPE', KEYS[1]).ok ~= 'none' and redis.call('TYPE', KEYS[1]).ok ~= 'set') or
+   (redis.call('TYPE', KEYS[2]).ok ~= 'none' and redis.call('TYPE', KEYS[2]).ok ~= 'hash') or
+   (redis.call('TYPE', KEYS[3]).ok ~= 'none' and redis.call('TYPE', KEYS[3]).ok ~= 'zset') or
+   (redis.call('TYPE', KEYS[4]).ok ~= 'none' and redis.call('TYPE', KEYS[4]).ok ~= 'hash') then
+  return redis.error_reply('LIKE_TYPE_PRECHECK')
+end
 if redis.call('HGET', KEYS[4], ARGV[1]) ~= ARGV[2] then return 0 end
 redis.call('HDEL', KEYS[4], ARGV[1])
 redis.call('ZREM', KEYS[3], ARGV[1])
@@ -55,6 +76,16 @@ return 1
 `)
 
 var behaviorReapExpiredScript = redis.NewScript(`
+local limit = tonumber(ARGV[2])
+if not limit or limit ~= math.floor(limit) or limit < 1 or limit > 500 then
+  return redis.error_reply('LIKE_BEHAVIOR_BATCH_INVALID')
+end
+if (redis.call('TYPE', KEYS[1]).ok ~= 'none' and redis.call('TYPE', KEYS[1]).ok ~= 'set') or
+   (redis.call('TYPE', KEYS[2]).ok ~= 'none' and redis.call('TYPE', KEYS[2]).ok ~= 'hash') or
+   (redis.call('TYPE', KEYS[3]).ok ~= 'none' and redis.call('TYPE', KEYS[3]).ok ~= 'zset') or
+   (redis.call('TYPE', KEYS[4]).ok ~= 'none' and redis.call('TYPE', KEYS[4]).ok ~= 'hash') then
+  return redis.error_reply('LIKE_TYPE_PRECHECK')
+end
 local pairs = redis.call('ZRANGEBYSCORE', KEYS[3], '-inf', ARGV[1], 'LIMIT', 0, ARGV[2])
 local count = 0
 for _, pair in ipairs(pairs) do

@@ -303,16 +303,26 @@ return 1
 `)
 
 var claimScript = redis.NewScript(`
-local ids = redis.call('SMEMBERS', KEYS[1])
 local result = {}
 local limit = tonumber(ARGV[1])
-for _, post_id in ipairs(ids) do
+if not limit or limit ~= math.floor(limit) or limit < 1 or limit > 100 or
+   not tonumber(ARGV[2]) or ARGV[3] == '' then
+  return redis.error_reply('LIKE_CLAIM_ARGUMENT_INVALID')
+end
+if (redis.call('TYPE', KEYS[1]).ok ~= 'none' and redis.call('TYPE', KEYS[1]).ok ~= 'set') or
+   (redis.call('TYPE', KEYS[2]).ok ~= 'none' and redis.call('TYPE', KEYS[2]).ok ~= 'zset') or
+   (redis.call('TYPE', KEYS[3]).ok ~= 'none' and redis.call('TYPE', KEYS[3]).ok ~= 'hash') then
+  return redis.error_reply('LIKE_TYPE_PRECHECK')
+end
+-- Random sampling is bounded. Occupied IDs remain Dirty for a later claim.
+local candidates = redis.call('SRANDMEMBER', KEYS[1], limit * 4)
+for _, post_id in ipairs(candidates) do
   if #result >= limit * 2 then break end
   if redis.call('HEXISTS', KEYS[3], post_id) == 0 then
     local claim_id = ARGV[3] .. ':' .. post_id
-    redis.call('SREM', KEYS[1], post_id)
-    redis.call('HSET', KEYS[3], post_id, claim_id)
     redis.call('ZADD', KEYS[2], ARGV[2], post_id)
+    redis.call('HSET', KEYS[3], post_id, claim_id)
+    redis.call('SREM', KEYS[1], post_id)
     table.insert(result, post_id)
     table.insert(result, claim_id)
   end
@@ -321,6 +331,10 @@ return result
 `)
 
 var ackClaimScript = redis.NewScript(`
+if (redis.call('TYPE', KEYS[1]).ok ~= 'none' and redis.call('TYPE', KEYS[1]).ok ~= 'zset') or
+   (redis.call('TYPE', KEYS[2]).ok ~= 'none' and redis.call('TYPE', KEYS[2]).ok ~= 'hash') then
+  return redis.error_reply('LIKE_TYPE_PRECHECK')
+end
 if redis.call('HGET', KEYS[2], ARGV[1]) ~= ARGV[2] then return 0 end
 redis.call('HDEL', KEYS[2], ARGV[1])
 redis.call('ZREM', KEYS[1], ARGV[1])
@@ -328,6 +342,11 @@ return 1
 `)
 
 var requeueClaimScript = redis.NewScript(`
+if (redis.call('TYPE', KEYS[1]).ok ~= 'none' and redis.call('TYPE', KEYS[1]).ok ~= 'set') or
+   (redis.call('TYPE', KEYS[2]).ok ~= 'none' and redis.call('TYPE', KEYS[2]).ok ~= 'zset') or
+   (redis.call('TYPE', KEYS[3]).ok ~= 'none' and redis.call('TYPE', KEYS[3]).ok ~= 'hash') then
+  return redis.error_reply('LIKE_TYPE_PRECHECK')
+end
 if redis.call('HGET', KEYS[3], ARGV[1]) ~= ARGV[2] then return 0 end
 redis.call('HDEL', KEYS[3], ARGV[1])
 redis.call('ZREM', KEYS[2], ARGV[1])
@@ -336,6 +355,15 @@ return 1
 `)
 
 var reapExpiredScript = redis.NewScript(`
+local limit = tonumber(ARGV[2])
+if not limit or limit ~= math.floor(limit) or limit < 1 or limit > 100 then
+  return redis.error_reply('LIKE_CLAIM_ARGUMENT_INVALID')
+end
+if (redis.call('TYPE', KEYS[1]).ok ~= 'none' and redis.call('TYPE', KEYS[1]).ok ~= 'set') or
+   (redis.call('TYPE', KEYS[2]).ok ~= 'none' and redis.call('TYPE', KEYS[2]).ok ~= 'zset') or
+   (redis.call('TYPE', KEYS[3]).ok ~= 'none' and redis.call('TYPE', KEYS[3]).ok ~= 'hash') then
+  return redis.error_reply('LIKE_TYPE_PRECHECK')
+end
 local ids = redis.call('ZRANGEBYSCORE', KEYS[2], '-inf', ARGV[1], 'LIMIT', 0, ARGV[2])
 local count = 0
 for _, post_id in ipairs(ids) do

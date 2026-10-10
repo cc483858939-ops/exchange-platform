@@ -729,24 +729,75 @@ func (s *Store) SnapshotQueueQuiescent(ctx context.Context, postID uint) (bool, 
 }
 
 func (s *Store) ClaimDirty(ctx context.Context, batch int, lease time.Duration) ([]SnapshotClaim, error) {
+	started := time.Now()
+	defer func() { metrics.ObserveLikeClaimDuration("snapshot", time.Since(started)) }()
+	if s == nil || s.client == nil {
+		metrics.RecordLikeQueueOperation("snapshot", "claim", "error")
+		return nil, errors.New("redis is not initialized")
+	}
+	if ctx == nil {
+		metrics.RecordLikeQueueOperation("snapshot", "claim", "error")
+		return nil, errors.New("claim context is nil")
+	}
 	if batch <= 0 {
-		batch = 100
+		batch = config.MaxLikeSnapshotBatchSize
+	}
+	batch = min(batch, config.MaxLikeSnapshotBatchSize)
+	if lease <= 0 {
+		lease = 30 * time.Second
 	}
 	prefix := uuid.NewString()
 	deadline := time.Now().Add(lease).UnixMilli()
-	value, err := claimScript.Run(s.client, []string{DirtyKey, ProcessingKey, ClaimsKey}, batch, deadline, prefix).Result()
+	value, err := claimScript.Run(s.client.WithContext(ctx), []string{DirtyKey, ProcessingKey, ClaimsKey}, batch, deadline, prefix).Result()
 	if err != nil {
+		metrics.RecordLikeQueueOperation("snapshot", "claim", "error")
+		return nil, mapScriptError(err)
+	}
+	claims, err := parseSnapshotClaimReply(value, batch)
+	if err != nil {
+		metrics.RecordLikeQueueOperation("snapshot", "claim", "error")
 		return nil, err
 	}
+	if len(claims) == 0 {
+		metrics.RecordLikeQueueOperation("snapshot", "claim", "empty")
+	} else {
+		metrics.RecordLikeQueueOperation("snapshot", "claim", "success")
+	}
+	return claims, nil
+}
+
+func parseSnapshotClaimReply(value interface{}, batch int) ([]SnapshotClaim, error) {
 	items, ok := value.([]interface{})
-	if !ok {
+	if !ok || len(items)%2 != 0 || len(items) > batch*2 {
 		return nil, fmt.Errorf("unexpected claim response %T", value)
 	}
 	claims := make([]SnapshotClaim, 0, len(items)/2)
-	for i := 0; i+1 < len(items); i += 2 {
-		claims = append(claims, SnapshotClaim{PostID: uint(asInt64(items[i])), ClaimID: asString(items[i+1])})
+	seen := make(map[uint]struct{}, len(items)/2)
+	for i := 0; i < len(items); i += 2 {
+		postIDText, idOK := redisBulkString(items[i])
+		claimID, claimOK := redisBulkString(items[i+1])
+		postID, err := strconv.ParseUint(postIDText, 10, strconv.IntSize)
+		if !idOK || err != nil || postID == 0 || !claimOK || claimID == "" {
+			return nil, fmt.Errorf("malformed claim response at index %d", i)
+		}
+		if _, duplicate := seen[uint(postID)]; duplicate {
+			return nil, fmt.Errorf("duplicate post ID in claim response: %d", postID)
+		}
+		seen[uint(postID)] = struct{}{}
+		claims = append(claims, SnapshotClaim{PostID: uint(postID), ClaimID: claimID})
 	}
 	return claims, nil
+}
+
+func redisBulkString(value interface{}) (string, bool) {
+	switch value := value.(type) {
+	case string:
+		return value, true
+	case []byte:
+		return string(value), true
+	default:
+		return "", false
+	}
 }
 
 func (s *Store) LoadSnapshot(ctx context.Context, postID uint) (Snapshot, error) {
@@ -758,18 +809,41 @@ func (s *Store) LoadSnapshot(ctx context.Context, postID uint) (Snapshot, error)
 }
 
 func (s *Store) AckClaim(ctx context.Context, claim SnapshotClaim) (bool, error) {
-	v, err := ackClaimScript.Run(s.client, []string{ProcessingKey, ClaimsKey}, claim.PostID, claim.ClaimID).Int64()
-	return v == 1, err
+	v, err := ackClaimScript.Run(s.client.WithContext(ctx), []string{ProcessingKey, ClaimsKey}, claim.PostID, claim.ClaimID).Int64()
+	if err != nil {
+		metrics.RecordLikeQueueOperation("snapshot", "ack", "error")
+	} else if v == 1 {
+		metrics.RecordLikeQueueOperation("snapshot", "ack", "success")
+	} else {
+		metrics.RecordLikeQueueOperation("snapshot", "ack", "stale")
+	}
+	return v == 1, mapScriptError(err)
 }
 func (s *Store) RequeueClaim(ctx context.Context, claim SnapshotClaim) (bool, error) {
-	v, err := requeueClaimScript.Run(s.client, []string{DirtyKey, ProcessingKey, ClaimsKey}, claim.PostID, claim.ClaimID).Int64()
-	return v == 1, err
+	v, err := requeueClaimScript.Run(s.client.WithContext(ctx), []string{DirtyKey, ProcessingKey, ClaimsKey}, claim.PostID, claim.ClaimID).Int64()
+	if err != nil {
+		metrics.RecordLikeQueueOperation("snapshot", "requeue", "error")
+	} else if v == 1 {
+		metrics.RecordLikeQueueOperation("snapshot", "requeue", "success")
+	} else {
+		metrics.RecordLikeQueueOperation("snapshot", "requeue", "stale")
+	}
+	return v == 1, mapScriptError(err)
 }
 func (s *Store) ReapExpired(ctx context.Context, batch int) (int64, error) {
 	if batch <= 0 {
-		batch = 100
+		batch = config.MaxLikeSnapshotBatchSize
 	}
-	return reapExpiredScript.Run(s.client, []string{DirtyKey, ProcessingKey, ClaimsKey}, time.Now().UnixMilli(), batch).Int64()
+	batch = min(batch, config.MaxLikeSnapshotBatchSize)
+	value, err := reapExpiredScript.Run(s.client.WithContext(ctx), []string{DirtyKey, ProcessingKey, ClaimsKey}, time.Now().UnixMilli(), batch).Int64()
+	if err != nil {
+		metrics.RecordLikeQueueOperation("snapshot", "reap", "error")
+	} else if value > 0 {
+		metrics.RecordLikeQueueOperation("snapshot", "reap", "success")
+	} else {
+		metrics.RecordLikeQueueOperation("snapshot", "reap", "empty")
+	}
+	return value, mapScriptError(err)
 }
 
 func asInt64(v interface{}) int64 {

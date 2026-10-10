@@ -2,10 +2,13 @@ package likes
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 	"testing"
 	"time"
+
+	"Go.exchange/config"
 
 	"github.com/go-redis/redis/v7"
 )
@@ -72,14 +75,7 @@ func TestBehaviorClaimsAreOwnedAndVersionAwareIntegration(t *testing.T) {
 		t.Fatalf("state=%q liked=%t version=%d err=%v", state, liked, version, err)
 	}
 
-	firstClaims, err := store.ClaimBehaviorDirty(ctx, 10, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	first, ok := findBehaviorClaim(firstClaims, pair)
-	if !ok {
-		t.Fatalf("first claim missing: %+v", firstClaims)
-	}
+	first := claimOwnedBehaviorPairForIntegration(t, store, pair)
 	firstDeliveries, err := store.LoadBehaviorDeliveries(ctx, []BehaviorClaim{first})
 	if err != nil {
 		t.Fatal(err)
@@ -87,14 +83,7 @@ func TestBehaviorClaimsAreOwnedAndVersionAwareIntegration(t *testing.T) {
 	if err := store.RequeueBehaviorClaims(ctx, []BehaviorClaim{first}); err != nil {
 		t.Fatal(err)
 	}
-	secondClaims, err := store.ClaimBehaviorDirty(ctx, 10, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, ok := findBehaviorClaim(secondClaims, pair)
-	if !ok {
-		t.Fatalf("second claim missing: %+v", secondClaims)
-	}
+	second := claimOwnedBehaviorPairForIntegration(t, store, pair)
 	if acked, err := store.AckBehaviorDeliveries(ctx, firstDeliveries); err != nil || acked != 0 {
 		t.Fatalf("stale claim acked=%d err=%v", acked, err)
 	}
@@ -130,4 +119,61 @@ func findBehaviorClaim(claims []BehaviorClaim, pair string) (BehaviorClaim, bool
 		}
 	}
 	return BehaviorClaim{}, false
+}
+
+func claimOwnedBehaviorPairForIntegration(t *testing.T, store *Store, pair string) BehaviorClaim {
+	t.Helper()
+	for attempt := 0; attempt < 5; attempt++ {
+		claims, err := store.ClaimBehaviorDirty(t.Context(), config.MaxLikeBehaviorBatchSize, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		own, found := findBehaviorClaim(claims, pair)
+		others := make([]BehaviorClaim, 0, len(claims))
+		for _, claim := range claims {
+			if claim.Pair != pair {
+				others = append(others, claim)
+			}
+		}
+		if err := store.RequeueBehaviorClaims(t.Context(), others); err != nil {
+			t.Fatal(err)
+		}
+		if found {
+			return own
+		}
+	}
+	t.Fatalf("own Behavior Pair %q was not claimed after bounded retries", pair)
+	return BehaviorClaim{}
+}
+
+func TestBehaviorMalformedStateDoesNotBlockHealthyPairIntegration(t *testing.T) {
+	client := queueClaimTestClient(t)
+	base := uint(time.Now().UnixNano() & 0x3fffffff)
+	good := BehaviorPair(base, base+1)
+	bad := BehaviorPair(base, base+2)
+	badPair := fmt.Sprintf("bad-pair-%d", base)
+	t.Cleanup(func() {
+		client.HDel(BehaviorStateKey, good, bad, badPair)
+		client.SRem(BehaviorDirtyKey, good, bad, badPair)
+		client.ZRem(BehaviorProcessingKey, good, bad, badPair)
+		client.HDel(BehaviorClaimsKey, good, bad, badPair)
+	})
+	if err := client.HSet(BehaviorStateKey, good, "1|3|2026-01-01T00:00:00Z").Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.HSet(BehaviorStateKey, bad, "corrupt").Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.HSet(BehaviorStateKey, badPair, "1|3|2026-01-01T00:00:00Z").Err(); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(client)
+	claims := []BehaviorClaim{{Pair: good, ClaimID: "good-claim"}, {Pair: bad, ClaimID: "bad-claim"}, {Pair: badPair, ClaimID: "bad-pair-claim"}}
+	deliveries, invalid, err := store.LoadBehaviorDeliveriesWithIssues(t.Context(), claims)
+	if err == nil || len(deliveries) != 1 || deliveries[0].Claim.Pair != good || len(invalid) != 2 || invalid[0].Pair != bad || invalid[1].Pair != badPair {
+		t.Fatalf("deliveries=%v invalid=%v err=%v", deliveries, invalid, err)
+	}
+	if state, err := client.HGet(BehaviorStateKey, bad).Result(); err != nil || state != "corrupt" {
+		t.Fatalf("bad Behavior State changed: %q err=%v", state, err)
+	}
 }

@@ -49,7 +49,11 @@ func startPipelineMetricsSampler(ctx context.Context, wg *sync.WaitGroup, interv
 }
 
 func refreshPipelineMetrics(ctx context.Context) {
-	if ctx == nil || ctx.Err() != nil || global.WorkerDb == nil {
+	if ctx == nil || ctx.Err() != nil {
+		return
+	}
+	refreshLikeQueueDepthMetrics(ctx)
+	if global.WorkerDb == nil {
 		return
 	}
 	db := global.WorkerDb.WithContext(ctx)
@@ -76,6 +80,9 @@ func refreshPipelineMetrics(ctx context.Context) {
 	} else {
 		metrics.SetRecommendationProfileDirtyQueueDepth(float64(dirtyProfiles))
 	}
+}
+
+func refreshLikeQueueDepthMetrics(ctx context.Context) {
 	if global.RedisDB != nil {
 		if dirty, err := global.RedisDB.WithContext(ctx).SCard(likes.DirtyKey).Result(); err == nil {
 			metrics.SetLikePipelineDepth("dirty", float64(dirty))

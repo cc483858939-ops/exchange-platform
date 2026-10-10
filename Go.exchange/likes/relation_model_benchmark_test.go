@@ -82,6 +82,7 @@ type relationBenchmarkQuery struct {
 
 type relationBenchmarkStats struct {
 	opsPerSecond float64
+	p50          time.Duration
 	p95          time.Duration
 	p99          time.Duration
 	operations   int
@@ -144,7 +145,7 @@ func TestRedisLikeRelationModelBenchmark(t *testing.T) {
 		t.Fatalf("clear dedicated benchmark DB: %v", err)
 	}
 	ctx := context.Background()
-	for _, scenario := range []string{"hot-post-many-users", "few-users-many-posts"} {
+	for _, scenario := range []string{"hot-post-many-users", "few-users-many-posts", "hot-user-many-posts", "distributed-user-posts"} {
 		edges := makeRelationBenchmarkEdges(scenario, edgesCount)
 		queries := makeRelationBenchmarkQueries(scenario, edges, batchSize)
 		for _, model := range []string{"post-users", "user-posts"} {
@@ -198,15 +199,15 @@ func TestRedisLikeRelationModelBenchmark(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read %s/%s Redis metrics: %v", scenario, model, err)
 			}
-			t.Logf("redis_relation_benchmark scenario=%s model=%s edges=%d active_users=%d posts=%d batch=%d workers=%d redis_version=%s db_keys=%d used_memory=%d used_memory_delta=%d used_memory_rss=%s used_memory_peak=%s used_memory_dataset=%s mem_fragmentation_ratio=%s cpu_sys_delta_seconds=%.3f cpu_user_delta_seconds=%.3f relation_keys=%d relation_encodings=%v max_key=%q max_key_type=%s max_key_encoding=%s max_key_memory=%d mutation_ops_per_sec=%.1f mutation_p95=%s mutation_p99=%s getmany_ops_per_sec=%.1f getmany_posts_per_sec=%.1f getmany_p95=%s getmany_p99=%s",
+			t.Logf("redis_relation_benchmark scenario=%s model=%s edges=%d active_users=%d posts=%d batch=%d workers=%d redis_version=%s db_keys=%d used_memory=%d used_memory_delta=%d used_memory_rss=%s used_memory_peak=%s used_memory_dataset=%s mem_fragmentation_ratio=%s cpu_sys_delta_seconds=%.3f cpu_user_delta_seconds=%.3f relation_keys=%d relation_encodings=%v max_key=%q max_key_type=%s max_key_encoding=%s max_key_memory=%d mutation_ops_per_sec=%.1f mutation_p50=%s mutation_p95=%s mutation_p99=%s getmany_ops_per_sec=%.1f getmany_posts_per_sec=%.1f getmany_p50=%s getmany_p95=%s getmany_p99=%s",
 				scenario, model, len(edges), countDistinctRelationUsers(edges), countDistinctRelationPosts(edges), batchSize, workers,
 				snapshot.redisVersion, snapshot.dbKeys, snapshot.usedMemory, snapshot.usedMemory-empty.usedMemory,
 				snapshot.usedMemoryRSS, snapshot.usedMemoryPeak, snapshot.usedMemoryDataset, snapshot.fragmentation,
 				snapshot.cpuSys-empty.cpuSys, snapshot.cpuUser-empty.cpuUser, snapshot.relationKeys, snapshot.relationEncodings,
 				snapshot.maxKey, snapshot.maxKeyType, snapshot.maxKeyEncoding, snapshot.maxKeyMemory,
-				mutationStats.opsPerSecond, mutationStats.p95, mutationStats.p99,
+				mutationStats.opsPerSecond, mutationStats.p50, mutationStats.p95, mutationStats.p99,
 				getManyStats.opsPerSecond,
-				float64(getManyStats.items)*getManyStats.opsPerSecond/float64(getManyStats.operations), getManyStats.p95, getManyStats.p99)
+				float64(getManyStats.items)*getManyStats.opsPerSecond/float64(getManyStats.operations), getManyStats.p50, getManyStats.p95, getManyStats.p99)
 		}
 	}
 }
@@ -229,6 +230,21 @@ func makeRelationBenchmarkEdges(scenario string, edgeCount int) []relationBenchm
 	if scenario == "hot-post-many-users" {
 		for index := 0; index < edgeCount; index++ {
 			edges = append(edges, relationBenchmarkEdge{userID: uint(100000 + index), postID: 900001})
+		}
+		return edges
+	}
+	if scenario == "hot-user-many-posts" {
+		for index := 0; index < edgeCount; index++ {
+			edges = append(edges, relationBenchmarkEdge{userID: 300001, postID: uint(1_000_000 + index)})
+		}
+		return edges
+	}
+	if scenario == "distributed-user-posts" {
+		for index := 0; index < edgeCount; index++ {
+			edges = append(edges, relationBenchmarkEdge{
+				userID: uint(400000 + index%128),
+				postID: uint(1_100_000 + (index*73)%1000),
+			})
 		}
 		return edges
 	}
@@ -372,6 +388,7 @@ func runRelationBenchmarkOperations(count, workers int, operation func(int) erro
 	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
 	return relationBenchmarkStats{
 		opsPerSecond: float64(count) / elapsed.Seconds(),
+		p50:          relationBenchmarkPercentile(latencies, .50),
 		p95:          relationBenchmarkPercentile(latencies, .95),
 		p99:          relationBenchmarkPercentile(latencies, .99),
 		operations:   count,
