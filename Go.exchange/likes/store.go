@@ -33,9 +33,18 @@ func NewStore(client *redis.Client) *Store {
 // NewStoreWithUserLikeSettings supports isolated tests with short TTLs and
 // deterministic limits. Production constructors should use NewStore.
 func NewStoreWithUserLikeSettings(client *redis.Client, settings config.UserLikeLifecycleConfig) *Store {
+	return NewStoreWithUserLikeSettingsAndRelationLimit(client, settings, int64(config.DefaultUserLikeRestoreMaxRelations))
+}
+
+// NewStoreWithUserLikeSettingsAndRelationLimit allows integration tests to
+// exercise eviction with a small independent relation cap.
+func NewStoreWithUserLikeSettingsAndRelationLimit(client *redis.Client, settings config.UserLikeLifecycleConfig, maxActiveRelations int64) *Store {
+	if maxActiveRelations <= 0 {
+		maxActiveRelations = int64(config.DefaultUserLikeRestoreMaxRelations)
+	}
 	return &Store{
 		client:             client,
-		maxActiveRelations: int64(config.DefaultUserLikeRestoreMaxRelations),
+		maxActiveRelations: maxActiveRelations,
 		userLikeSettings: func() (config.UserLikeLifecycleConfig, error) {
 			return settings, nil
 		},
@@ -83,7 +92,7 @@ func (s *Store) Mutate(ctx context.Context, userID, postID uint, liked bool) (Mu
 	started := time.Now()
 	value, err := mutateScript.Run(
 		s.client.WithContext(ctx), keys, postID, userID, desired,
-		now.Format(time.RFC3339Nano), now.UnixMilli(), settings.SetTTL.Milliseconds(), boolIntString(settings.ArmingEnabled), s.activeRelationLimit(),
+		now.UnixMilli(), settings.SetTTL.Milliseconds(), boolIntString(settings.ArmingEnabled), s.activeRelationLimit(),
 	).Result()
 	if err != nil {
 		mapped := mapScriptError(err)

@@ -259,9 +259,9 @@ func parseBehaviorState(value string) (bool, int64, time.Time, error) {
 	if err != nil || version <= 0 {
 		return false, 0, time.Time{}, fmt.Errorf("invalid version %q", parts[1])
 	}
-	occurredAt, err := time.Parse(time.RFC3339Nano, parts[2])
-	if err != nil {
-		return false, 0, time.Time{}, fmt.Errorf("invalid occurred_at: %w", err)
+	occurredAtMicros, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil || occurredAtMicros <= 0 {
+		return false, 0, time.Time{}, fmt.Errorf("invalid occurred_at unix micros %q", parts[2])
 	}
-	return parts[0] == "1", version, occurredAt, nil
+	return parts[0] == "1", version, time.UnixMicro(occurredAtMicros).UTC(), nil
 }

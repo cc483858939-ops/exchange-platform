@@ -228,6 +228,8 @@ func assertLikeStateClosureRedisDeleted(t *testing.T, client *redis.Client, post
 }
 
 func TestPostLikeRelaysPreservedAndNonzeroRecoveryFailsClosedIntegration(t *testing.T) {
+	t.Setenv("USER_LIKE_TTL_ARMING_ENABLED", "true")
+	t.Setenv("USER_LIKE_SET_TTL", "72h")
 	env := openLikeStateClosureIntegration(t)
 	env.author = models.User{Username: "like-relay-author-" + uuid.NewString(), Password: "test"}
 	env.actor = models.User{Username: "like-relay-actor-" + uuid.NewString(), Password: "test"}
@@ -294,11 +296,12 @@ func TestPostLikeRelaysPreservedAndNonzeroRecoveryFailsClosedIntegration(t *test
 	if armed, err := env.store.ArmExpiry(ctx, env.post.ID, 1, time.Second); armed || !errors.Is(err, likes.ErrLikeStateExpiryUnsupported) {
 		t.Fatalf("ArmExpiry armed=%t err=%v", armed, err)
 	}
-	for _, key := range []string{likes.ReadyKey(env.post.ID), likes.CountKey(env.post.ID), likes.VersionKey(env.post.ID), likes.UserLikesKey(env.actor.ID)} {
+	for _, key := range []string{likes.ReadyKey(env.post.ID), likes.CountKey(env.post.ID), likes.VersionKey(env.post.ID)} {
 		if ttl, err := env.redis.TTL(key).Result(); err != nil || ttl != -1 {
 			t.Fatalf("key=%q TTL=%s err=%v want persistent", key, ttl, err)
 		}
 	}
+	assertLikeStateClosureUserLikeTTL(t, env.redis, env.actor.ID)
 
 	// Simulated loss of Post aggregates cannot rebuild a nonzero user relation
 	// from the SQL PostReaction projection in SPEC-01.
@@ -313,6 +316,52 @@ func TestPostLikeRelaysPreservedAndNonzeroRecoveryFailsClosedIntegration(t *test
 		t.Fatalf("unsafe recovery partially restored aggregate keys: exists=%d err=%v", exists, err)
 	}
 }
+
+func assertLikeStateClosureUserLikeTTL(t *testing.T, client *redis.Client, userID uint) {
+	t.Helper()
+	result, err := client.Eval(`
+local now = redis.call('TIME')
+local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
+return {
+  tostring(redis.call('PTTL', KEYS[1])),
+  tostring(redis.call('PTTL', KEYS[2])),
+  redis.call('HGET', KEYS[3], ARGV[1]) or '',
+  tostring(now_ms),
+  tostring(redis.call('SCARD', KEYS[1]) - 1),
+  tostring(redis.call('ZCARD', KEYS[2]))
+}
+`, []string{likes.UserLikesKey(userID), likes.UserLikesOrderKey(userID), likes.UserLikesExpiryLedgerKey}, strconv.FormatUint(uint64(userID), 10)).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, ok := result.([]interface{})
+	if !ok || len(items) != 6 {
+		t.Fatalf("unexpected User Like TTL result %T", result)
+	}
+	values := make([]int64, len(items))
+	for index, item := range items {
+		values[index], err = strconv.ParseInt(fmt.Sprint(item), 10, 64)
+		if err != nil {
+			t.Fatalf("invalid User Like TTL result item %d=%v: %v", index, item, err)
+		}
+	}
+	setTTL, orderTTL, expiresAt, nowMS, activeRelations, orderMembers := values[0], values[1], values[2], values[3], values[4], values[5]
+	wantTTL := int64((72 * time.Hour).Milliseconds())
+	if setTTL <= 0 || setTTL > wantTTL || setTTL < wantTTL-int64(time.Minute.Milliseconds()) {
+		t.Fatalf("User Set PTTL=%dms, want active and close to 72h", setTTL)
+	}
+	ttlDelta := setTTL - orderTTL
+	if ttlDelta < 0 {
+		ttlDelta = -ttlDelta
+	}
+	if activeRelations != 1 || orderMembers != activeRelations || orderTTL <= 0 || ttlDelta > 1 {
+		t.Fatalf("User Set/Order state diverged: set_ttl=%d order_ttl=%d active=%d order_members=%d", setTTL, orderTTL, activeRelations, orderMembers)
+	}
+	if delta := nowMS + setTTL - expiresAt; delta < -2 || delta > 2 {
+		t.Fatalf("User Like expiry ledger differs from Redis deadline by %dms", delta)
+	}
+}
+
 func TestPostLikeDeletePurgeFailureReconcilesIntegration(t *testing.T) {
 	env := openLikeStateClosureIntegration(t)
 	env.author = models.User{Username: "like-delete-author-" + uuid.NewString(), Password: "test"}

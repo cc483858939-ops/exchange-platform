@@ -40,7 +40,7 @@ if redis.call('SISMEMBER', KEYS[4], '0') ~= 1 then
   return redis.error_reply('LIKE_USER_NOT_READY')
 end
 local active_relations = redis.call('SCARD', KEYS[4]) - 1
-if active_relations > tonumber(ARGV[8]) then return redis.error_reply('LIKE_USER_OVER_CAP') end
+if active_relations > tonumber(ARGV[7]) then return redis.error_reply('LIKE_USER_OVER_CAP') end
 local order_exists = redis.call('EXISTS', KEYS[12]) == 1
 if active_relations > 0 and not order_exists then return redis.error_reply('LIKE_USER_ORDER_MISSING') end
 if (order_exists and redis.call('ZCARD', KEYS[12]) ~= active_relations) or (active_relations == 0 and order_exists) then
@@ -72,7 +72,7 @@ local candidate_ready = nil
 local candidate_count = nil
 local candidate_version = nil
 local stale_candidate = false
-local will_evict = desired == 1 and current == 0 and active_relations >= tonumber(ARGV[8])
+local will_evict = desired == 1 and current == 0 and active_relations >= tonumber(ARGV[7])
 if will_evict then
   local candidate = redis.call('ZRANGE', KEYS[12], 0, 0)
   if #candidate ~= 1 then return redis.error_reply('LIKE_USER_ORDER_INCONSISTENT') end
@@ -116,6 +116,7 @@ if changed then
 
   local server_time = redis.call('TIME')
   local order_score = tonumber(server_time[1]) * 1000000 + tonumber(server_time[2])
+  local occurred_at_micros = string.format('%.0f', order_score)
 
   if will_evict then
     redis.call('SREM', KEYS[4], candidate_id)
@@ -133,9 +134,9 @@ if changed then
       redis.call('SET', 'post:like:' .. candidate_id .. ':version', next_version)
       redis.call('SADD', KEYS[5], candidate_id)
       local candidate_pair = user_id .. ':' .. candidate_id
-      redis.call('HSET', KEYS[7], candidate_pair, '0|' .. next_version .. '|' .. ARGV[4])
+      redis.call('HSET', KEYS[7], candidate_pair, '0|' .. next_version .. '|' .. occurred_at_micros)
       redis.call('SADD', KEYS[6], candidate_pair)
-      redis.call('ZADD', KEYS[9], ARGV[5], candidate_id)
+      redis.call('ZADD', KEYS[9], ARGV[4], candidate_id)
       candidate_count = next_count
       candidate_version = next_version
     end
@@ -161,17 +162,17 @@ if changed then
   redis.call('SET', KEYS[3], version)
   redis.call('SADD', KEYS[5], post_id)
   local pair = user_id .. ':' .. post_id
-  redis.call('HSET', KEYS[7], pair, ARGV[3] .. '|' .. version .. '|' .. ARGV[4])
+  redis.call('HSET', KEYS[7], pair, ARGV[3] .. '|' .. version .. '|' .. occurred_at_micros)
   redis.call('SADD', KEYS[6], pair)
-  redis.call('ZADD', KEYS[9], ARGV[5], post_id)
+  redis.call('ZADD', KEYS[9], ARGV[4], post_id)
   active_relations = active_relations + (desired == 1 and 1 or -1)
   current = desired
 end
 local ttl_state = 0
-if ARGV[7] == '1' then
+if ARGV[6] == '1' then
   local server_time = redis.call('TIME')
   local now_ms = tonumber(server_time[1]) * 1000 + math.floor(tonumber(server_time[2]) / 1000)
-  local expires_at = now_ms + tonumber(ARGV[6])
+  local expires_at = now_ms + tonumber(ARGV[5])
   redis.call('PEXPIREAT', KEYS[4], expires_at)
   if active_relations > 0 then redis.call('PEXPIREAT', KEYS[12], expires_at) end
   redis.call('HSET', KEYS[11], user_id, tostring(expires_at))

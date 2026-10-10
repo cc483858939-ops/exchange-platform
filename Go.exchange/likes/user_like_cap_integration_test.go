@@ -162,11 +162,10 @@ func TestUserLikeCapLifecycleWithInjectedSmallLimitIntegration(t *testing.T) {
 		_ = client.Close()
 	})
 	cleanupUserLikeCapFixture(client, userID, cleanupUserID, postIDs)
-	store := NewStoreWithUserLikeSettings(client, config.UserLikeLifecycleConfig{
+	store := NewStoreWithUserLikeSettingsAndRelationLimit(client, config.UserLikeLifecycleConfig{
 		ArmingEnabled: true, RestoreEnabled: true, SetTTL: 72 * time.Hour,
 		RestoreMaxRelations: 3,
-	})
-	store.maxActiveRelations = 3
+	}, 3)
 	ctx := context.Background()
 	for _, postID := range postIDs {
 		if _, err := initializeLikeStore(store, ctx, postID, 0, 0, nil); err != nil {

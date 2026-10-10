@@ -56,6 +56,14 @@ func cleanupLikeRelayIntegrationState(client *redis.Client, postIDs, userIDs []u
 			pipe.HDel(likes.BehaviorClaimsKey, pair)
 		}
 	}
+	for _, userID := range userIDs {
+		if userID == 0 {
+			continue
+		}
+		userIDString := strconv.FormatUint(uint64(userID), 10)
+		pipe.Del(likes.UserLikesKey(userID), likes.UserLikesOrderKey(userID), likes.UserLikesRestoreLockKey(userID))
+		pipe.HDel(likes.UserLikesExpiryLedgerKey, userIDString)
+	}
 	_, err := pipe.Exec()
 	return err
 }

@@ -24,24 +24,9 @@ func TestStoreMutationAndClaimOwnershipIntegration(t *testing.T) {
 	}
 	store := NewStore(client)
 	postID := uint(time.Now().UnixNano() & 0x3fffffff)
-	const userID uint = 11
-	pair := BehaviorPair(userID, postID)
+	userID := likeIntegrationUserID(postID, 1)
 	ctx := context.Background()
-	cleanup := func() {
-		client.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
-		client.SRem(UserLikesKey(userID), strconv.FormatUint(uint64(postID), 10))
-		client.ZRem(UserLikesOrderKey(userID), strconv.FormatUint(uint64(postID), 10))
-		client.SRem(DirtyKey, postID)
-		client.ZRem(ProcessingKey, postID)
-		client.HDel(ClaimsKey, strconv.FormatUint(uint64(postID), 10))
-		client.SRem(RegistryKey, postID)
-		client.ZRem(ExpiryCandidatesKey, postID)
-		client.HDel(RecoverableVersionsKey, strconv.FormatUint(uint64(postID), 10))
-		client.SRem(BehaviorDirtyKey, pair)
-		client.HDel(BehaviorStateKey, pair)
-		client.ZRem(BehaviorProcessingKey, pair)
-		client.HDel(BehaviorClaimsKey, pair)
-	}
+	cleanup := func() { cleanupRecoverableStorePost(client, postID, userID) }
 	cleanup()
 	defer cleanup()
 	created, err := initializeLikeStore(store, ctx, postID, 0, 0, nil)
@@ -119,29 +104,17 @@ func TestStoreGetManyIntegration(t *testing.T) {
 	store := NewStore(client)
 	base := uint(time.Now().UnixNano() & 0x3fffffff)
 	postIDs := []uint{base, base + 1, base + 2, base + 3}
+	userID := likeIntegrationUserID(base, 1)
 	ctx := context.Background()
 	cleanup := func() {
 		for _, postID := range postIDs {
-			client.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
-			client.SRem(UserLikesKey(11), strconv.FormatUint(uint64(postID), 10))
-			client.ZRem(UserLikesOrderKey(11), strconv.FormatUint(uint64(postID), 10))
-			client.SRem(DirtyKey, postID)
-			client.ZRem(ProcessingKey, postID)
-			client.HDel(ClaimsKey, strconv.FormatUint(uint64(postID), 10))
-			client.SRem(RegistryKey, postID)
-			client.ZRem(ExpiryCandidatesKey, postID)
-			client.HDel(RecoverableVersionsKey, strconv.FormatUint(uint64(postID), 10))
-			pair := BehaviorPair(11, postID)
-			client.SRem(BehaviorDirtyKey, pair)
-			client.HDel(BehaviorStateKey, pair)
-			client.ZRem(BehaviorProcessingKey, pair)
-			client.HDel(BehaviorClaimsKey, pair)
+			cleanupRecoverableStorePost(client, postID, userID)
 		}
 	}
 	cleanup()
 	defer cleanup()
 
-	if created, err := initializeLikeStore(store, ctx, postIDs[0], 1, 1, []uint{11}); err != nil || !created {
+	if created, err := initializeLikeStore(store, ctx, postIDs[0], 1, 1, []uint{userID}); err != nil || !created {
 		t.Fatalf("article A initialize created=%t err=%v", created, err)
 	}
 	if created, err := initializeLikeStore(store, ctx, postIDs[1], 0, 0, nil); err != nil || !created {
@@ -150,11 +123,11 @@ func TestStoreGetManyIntegration(t *testing.T) {
 	if created, err := initializeLikeStore(store, ctx, postIDs[3], 0, 0, nil); err != nil || !created {
 		t.Fatalf("article D initialize created=%t err=%v", created, err)
 	}
-	if mutation, err := store.Mutate(ctx, 11, postIDs[3], true); err != nil || !mutation.Changed {
+	if mutation, err := store.Mutate(ctx, userID, postIDs[3], true); err != nil || !mutation.Changed {
 		t.Fatalf("article D mutation=%+v err=%v", mutation, err)
 	}
 
-	states, unavailable, err := store.GetMany(ctx, 11, postIDs)
+	states, unavailable, err := store.GetMany(ctx, userID, postIDs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,10 +143,10 @@ func TestStoreGetManyIntegration(t *testing.T) {
 	if !equalUintSlices(unavailable, []uint{postIDs[2]}) {
 		t.Fatalf("unavailable=%v", unavailable)
 	}
-	if mutation, err := store.Mutate(ctx, 11, postIDs[3], false); err != nil || !mutation.Changed || mutation.Count != 0 {
+	if mutation, err := store.Mutate(ctx, userID, postIDs[3], false); err != nil || !mutation.Changed || mutation.Count != 0 {
 		t.Fatalf("article D unlike=%+v err=%v", mutation, err)
 	}
-	if state, err := store.Get(ctx, 11, postIDs[0]); err != nil || !state.Liked || state.Count != 1 {
+	if state, err := store.Get(ctx, userID, postIDs[0]); err != nil || !state.Liked || state.Count != 1 {
 		t.Fatalf("article A changed with article D state=%+v err=%v", state, err)
 	}
 }
@@ -266,28 +239,13 @@ func TestStorePurgePostRemovesOnlyTargetLikeStateIntegration(t *testing.T) {
 	store := NewStore(client)
 	target := uint(time.Now().UnixNano() & 0x3fffffff)
 	unrelated := target + 1
-	userID := uint(23)
+	userID := likeIntegrationUserID(target, 1)
 	targetPair := BehaviorPair(userID, target)
 	unrelatedPair := BehaviorPair(userID, unrelated)
 	ctx := context.Background()
 	cleanup := func() {
-		for _, postID := range []uint{target, unrelated} {
-			client.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
-			client.SRem(UserLikesKey(userID), strconv.FormatUint(uint64(postID), 10))
-			client.ZRem(UserLikesOrderKey(userID), strconv.FormatUint(uint64(postID), 10))
-			client.SRem(DirtyKey, postID)
-			client.ZRem(ProcessingKey, postID)
-			client.HDel(ClaimsKey, strconv.FormatUint(uint64(postID), 10))
-			client.SRem(RegistryKey, postID)
-			client.ZRem(ExpiryCandidatesKey, postID)
-			client.HDel(RecoverableVersionsKey, strconv.FormatUint(uint64(postID), 10))
-		}
-		for _, pair := range []string{targetPair, unrelatedPair} {
-			client.SRem(BehaviorDirtyKey, pair)
-			client.HDel(BehaviorStateKey, pair)
-			client.ZRem(BehaviorProcessingKey, pair)
-			client.HDel(BehaviorClaimsKey, pair)
-		}
+		cleanupRecoverableStorePost(client, target, userID)
+		cleanupRecoverableStorePost(client, unrelated, userID)
 	}
 	cleanup()
 	defer cleanup()

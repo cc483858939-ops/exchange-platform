@@ -152,19 +152,20 @@ func TestBehaviorMalformedStateDoesNotBlockHealthyPairIntegration(t *testing.T) 
 	good := BehaviorPair(base, base+1)
 	bad := BehaviorPair(base, base+2)
 	badPair := fmt.Sprintf("bad-pair-%d", base)
+	validState := fmt.Sprintf("1|3|%d", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro())
 	t.Cleanup(func() {
 		client.HDel(BehaviorStateKey, good, bad, badPair)
 		client.SRem(BehaviorDirtyKey, good, bad, badPair)
 		client.ZRem(BehaviorProcessingKey, good, bad, badPair)
 		client.HDel(BehaviorClaimsKey, good, bad, badPair)
 	})
-	if err := client.HSet(BehaviorStateKey, good, "1|3|2026-01-01T00:00:00Z").Err(); err != nil {
+	if err := client.HSet(BehaviorStateKey, good, validState).Err(); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.HSet(BehaviorStateKey, bad, "corrupt").Err(); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.HSet(BehaviorStateKey, badPair, "1|3|2026-01-01T00:00:00Z").Err(); err != nil {
+	if err := client.HSet(BehaviorStateKey, badPair, validState).Err(); err != nil {
 		t.Fatal(err)
 	}
 	store := NewStore(client)

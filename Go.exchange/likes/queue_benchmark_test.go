@@ -174,13 +174,14 @@ func TestLikeQueueBenchmarkIntegration(t *testing.T) {
 		t.Run(fmt.Sprintf("behavior_%d", size), func(t *testing.T) {
 			prefix := fmt.Sprintf("test:like:behavior-bench:%d", time.Now().UnixNano())
 			keys := []string{prefix + ":dirty", prefix + ":state", prefix + ":processing", prefix + ":claims"}
+			stateValue := fmt.Sprintf("1|1|%d", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro())
 			t.Cleanup(func() { client.Del(keys...) })
 			for start := 1; start <= size; start += 500 {
 				pipe := client.Pipeline()
 				for id := start; id <= min(start+499, size); id++ {
 					pair := fmt.Sprintf("1:%d", id)
 					pipe.SAdd(keys[0], pair)
-					pipe.HSet(keys[1], pair, "1|1|2026-01-01T00:00:00Z")
+					pipe.HSet(keys[1], pair, stateValue)
 				}
 				if _, err := pipe.Exec(); err != nil {
 					t.Fatal(err)
@@ -209,7 +210,7 @@ func TestLikeQueueBenchmarkIntegration(t *testing.T) {
 				pipe := client.Pipeline()
 				for _, claim := range claims {
 					pipe.SAdd(keys[0], claim.Pair)
-					pipe.HSet(keys[1], claim.Pair, "1|1|2026-01-01T00:00:00Z")
+					pipe.HSet(keys[1], claim.Pair, stateValue)
 				}
 				if _, err := pipe.Exec(); err != nil {
 					t.Fatal(err)

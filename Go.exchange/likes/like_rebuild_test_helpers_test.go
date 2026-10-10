@@ -2,6 +2,10 @@ package likes
 
 import "context"
 
+func likeIntegrationUserID(postID, ordinal uint) uint {
+	return postID + uint(0x40000000) + ordinal
+}
+
 // Fixtures use static baselines through the production token protocol.
 func initializeLikeStore(store *Store, ctx context.Context, postID uint, count, version int64, userIDs []uint) (bool, error) {
 	created, err := store.InitializeFrom(ctx, postID, false, func(context.Context) (FullState, error) {

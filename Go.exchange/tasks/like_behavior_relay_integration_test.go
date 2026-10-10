@@ -37,6 +37,7 @@ func TestLikeBehaviorRelayIsolatesMalformedPairIntegration(t *testing.T) {
 	good := likes.BehaviorPair(base, base+1)
 	bad := likes.BehaviorPair(base, base+2)
 	badPair := fmt.Sprintf("bad-pair-%d", base)
+	validState := fmt.Sprintf("1|3|%d", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro())
 	t.Cleanup(func() {
 		client.SRem(likes.BehaviorDirtyKey, good, bad, badPair)
 		client.HDel(likes.BehaviorStateKey, good, bad, badPair)
@@ -46,13 +47,13 @@ func TestLikeBehaviorRelayIsolatesMalformedPairIntegration(t *testing.T) {
 	if err := client.SAdd(likes.BehaviorDirtyKey, good, bad, badPair).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.HSet(likes.BehaviorStateKey, good, "1|3|2026-01-01T00:00:00Z").Err(); err != nil {
+	if err := client.HSet(likes.BehaviorStateKey, good, validState).Err(); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.HSet(likes.BehaviorStateKey, bad, "corrupt").Err(); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.HSet(likes.BehaviorStateKey, badPair, "1|3|2026-01-01T00:00:00Z").Err(); err != nil {
+	if err := client.HSet(likes.BehaviorStateKey, badPair, validState).Err(); err != nil {
 		t.Fatal(err)
 	}
 	publisher := &relayTestPublisher{}
