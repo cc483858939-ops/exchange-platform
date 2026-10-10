@@ -227,7 +227,7 @@ func TestLikeRedisKafkaPostgresE2EIntegration(t *testing.T) {
 	}
 
 	firstPostID := postIDs[0]
-	secondPost := models.Post{AuthorID: author.ID, Content: "SPEC-04 cold restore E2E", Visibility: "private"}
+	secondPost := models.Post{AuthorID: author.ID, Content: "SPEC-04 cold restore E2E", Visibility: "public"}
 	if err := db.Create(&secondPost).Error; err != nil {
 		t.Fatal(err)
 	}

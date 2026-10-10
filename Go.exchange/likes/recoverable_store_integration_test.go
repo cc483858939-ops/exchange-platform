@@ -190,6 +190,9 @@ func TestStoreNonzeroRecoveryIsUnsafeAndMutationRemainsAtomicIntegration(t *test
 	if marker, err := client.HExists(RecoverableVersionsKey, strconv.FormatUint(uint64(postID), 10)).Result(); err != nil || marker {
 		t.Fatalf("unsupported expiry wrote marker=%t err=%v", marker, err)
 	}
+	if err := store.InitializeUserEmpty(ctx, otherUserID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.Mutate(ctx, otherUserID, postID, true); err != nil {
 		t.Fatal(err)
 	}
