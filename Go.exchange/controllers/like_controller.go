@@ -176,6 +176,14 @@ func writePostLikeError(ctx *gin.Context, err error) {
 		ctx.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
 		return
 	}
+	if errors.Is(err, likes.ErrUserLikeRecoveryUnsafe) || errors.Is(err, likes.ErrUserLikeRecoveryBusy) ||
+		errors.Is(err, likes.ErrUserLikeRecoveryTimeout) || errors.Is(err, likes.ErrUserLikeRecoveryTooLarge) ||
+		errors.Is(err, likes.ErrUserLikeRecoveryDisabled) || errors.Is(err, likes.ErrUserLikeRecoveryUnavailable) ||
+		errors.Is(err, likes.ErrUserLikeRecoveryLockLost) || errors.Is(err, likes.ErrUserLikeRecoveryIncomplete) ||
+		errors.Is(err, likes.ErrUserLikeRestoreLockType) || errors.Is(err, likes.ErrLikeRedisType) {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "user like state is temporarily unavailable"})
+		return
+	}
 	if errors.Is(err, likes.ErrNotReady) {
 		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "post like state is not ready"})
 		return

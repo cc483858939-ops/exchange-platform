@@ -356,6 +356,52 @@ func TestUserLikeRelationCleanupSkipsCorruptUserAndRetriesInfrastructureFailureI
 	}
 }
 
+func TestUserLikeRelationCleanupSkipsLegalColdSetAndRetainsLedgerIntegration(t *testing.T) {
+	f := newUserLikeCleanupFixture(t)
+	userID := f.baseID + 1
+	f.addUser(t, userID)
+	uid := strconv.FormatUint(uint64(userID), 10)
+	t.Cleanup(func() { _ = f.client.HDel(likes.UserLikesExpiryLedgerKey, uid).Err() })
+	if err := f.client.Eval(`
+local now = redis.call('TIME')
+local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
+local expiry = now_ms + tonumber(ARGV[2])
+redis.call('PEXPIREAT', KEYS[1], expiry)
+redis.call('HSET', KEYS[2], ARGV[1], tostring(expiry))
+return expiry
+`, []string{likes.UserLikesKey(userID), likes.UserLikesExpiryLedgerKey}, uid, 100).Err(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		exists, err := f.client.Exists(likes.UserLikesKey(userID)).Result()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if exists == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("test User Like Set did not expire")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	state := userLikeRelationCleanupState{}
+	if err := runUserLikeRelationCleanupPass(t.Context(), f.store, f.db, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.userID != 0 {
+		t.Fatalf("cold User was not skipped by cleanup: state=%+v", state)
+	}
+	if exists, err := f.client.Exists(likes.UserLikesKey(userID)).Result(); err != nil || exists != 0 {
+		t.Fatalf("cleanup recreated cold User Set exists=%d err=%v", exists, err)
+	}
+	if ledger, err := f.client.HGet(likes.UserLikesExpiryLedgerKey, uid).Result(); err != nil || ledger == "" {
+		t.Fatalf("cleanup removed cold User ledger=%q err=%v", ledger, err)
+	}
+}
+
 func TestUserLikeRelationCleanupProtectsPostStateIssuesAndHandlesExpiredTombstonesIntegration(t *testing.T) {
 	f := newUserLikeCleanupFixture(t)
 	userID := f.baseID + 1

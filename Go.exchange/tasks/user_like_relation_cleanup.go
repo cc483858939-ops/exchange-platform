@@ -97,9 +97,11 @@ func runUserLikeRelationCleanupPass(ctx context.Context, store *likes.Store, db 
 		}
 		postIDs, next, err := scan(ctx, store, state.userID, state.scanCursor, userLikeCleanupScanCount)
 		if err != nil {
-			if skipUserLikeCleanupUser(err) {
+			if skip, classifyErr := skipUserLikeCleanupState(ctx, store, state.userID, err); classifyErr != nil {
+				return classifyErr
+			} else if skip {
 				metrics.RecordLikeLifecycleEvent("user_relation_cleanup_user_state_error")
-				log.Printf("[UserLikeRelationCleanup] user=%d skipped for permanent Like Set state error: %v", state.userID, err)
+				log.Printf("[UserLikeRelationCleanup] user=%d skipped for Like Set state error: %v", state.userID, err)
 				advanceUser(state)
 				return nil
 			}
@@ -133,9 +135,11 @@ func runUserLikeRelationCleanupPass(ctx context.Context, store *likes.Store, db 
 	}
 	removed, issues, err := remove(ctx, store, state.userID, deletedIDs)
 	if err != nil {
-		if skipUserLikeCleanupUser(err) {
+		if skip, classifyErr := skipUserLikeCleanupState(ctx, store, state.userID, err); classifyErr != nil {
+			return classifyErr
+		} else if skip {
 			metrics.RecordLikeLifecycleEvent("user_relation_cleanup_user_state_error")
-			log.Printf("[UserLikeRelationCleanup] user=%d skipped for permanent Like Set state error: %v", state.userID, err)
+			log.Printf("[UserLikeRelationCleanup] user=%d skipped for Like Set state error: %v", state.userID, err)
 			advanceUser(state)
 			return nil
 		}
@@ -162,8 +166,24 @@ func runUserLikeRelationCleanupPass(ctx context.Context, store *likes.Store, db 
 	return nil
 }
 
-func skipUserLikeCleanupUser(err error) bool {
-	return errors.Is(err, likes.ErrUserLikeNotReady) || errors.Is(err, likes.ErrUserLikeRedisType)
+func skipUserLikeCleanupState(ctx context.Context, store *likes.Store, userID uint, err error) (bool, error) {
+	if errors.Is(err, likes.ErrUserLikeNotReady) {
+		cold, inspectErr := store.IsUserLikeCold(ctx, userID)
+		if inspectErr != nil && !errors.Is(inspectErr, likes.ErrUserLikeRecoveryUnsafe) &&
+			!errors.Is(inspectErr, likes.ErrUserLikeNotReady) && !errors.Is(inspectErr, likes.ErrLikeRedisType) {
+			return false, inspectErr
+		}
+		if cold {
+			metrics.RecordUserLikeTTLEvent("cold_cleanup_skipped")
+			metrics.RecordLikeLifecycleEvent("user_relation_cleanup_cold_skipped")
+			log.Printf("[UserLikeRelationCleanup] user=%d skipped because User Like Set is legally cold", userID)
+		}
+		if errors.Is(inspectErr, likes.ErrUserLikeRecoveryUnsafe) {
+			metrics.RecordUserLikeTTLEvent("unexpected_missing")
+		}
+		return true, nil
+	}
+	return errors.Is(err, likes.ErrUserLikeRedisType), nil
 }
 
 func loadNextUserPage(ctx context.Context, db *gorm.DB, state *userLikeRelationCleanupState) error {

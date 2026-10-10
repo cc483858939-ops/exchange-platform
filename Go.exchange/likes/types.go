@@ -20,6 +20,17 @@ var (
 	ErrLikeRecoveryFenceLost         = errors.New("post like recovery fence changed")
 	ErrLikeRedisType                 = errors.New("unexpected Redis key type")
 	ErrUserLikeRedisType             = errors.New("unexpected User Like Redis key type")
+	ErrUserLikeCold                  = errors.New("User Like state is legally cold")
+	ErrUserLikeRecoveryUnsafe        = errors.New("User Like state cannot be safely recovered")
+	ErrUserLikeRecoveryBusy          = errors.New("User Like recovery is already in progress")
+	ErrUserLikeRecoveryTimeout       = errors.New("User Like recovery timed out")
+	ErrUserLikeRecoveryUnavailable   = errors.New("User Like state is temporarily unavailable")
+	ErrUserLikeRecoveryTooLarge      = errors.New("User Like recovery exceeds configured relation limit")
+	ErrUserLikeRecoveryDisabled      = errors.New("User Like recovery is disabled")
+	ErrUserLikeRecoveryLockLost      = errors.New("User Like recovery lock ownership changed")
+	ErrUserLikeRecoveryIncomplete    = errors.New("User Like recovery temporary state is incomplete")
+	ErrUserLikeLedgerType            = errors.New("unexpected User Like expiry ledger Redis key type")
+	ErrUserLikeRestoreLockType       = errors.New("unexpected User Like restore lock Redis key type")
 	ErrPostLikeRedisType             = errors.New("unexpected Post Like Redis key type")
 	ErrLikeRelationLifecycleMismatch = errors.New("deleted Post has active Redis Like state")
 	ErrLikeCountInconsistent         = errors.New("post like count is inconsistent with user relation")
@@ -35,6 +46,8 @@ func (e likeRedisTypeError) Is(target error) bool {
 }
 
 func userLikeRedisTypeError() error { return likeRedisTypeError{kind: ErrUserLikeRedisType} }
+
+func userLikeLedgerTypeError() error { return likeRedisTypeError{kind: ErrUserLikeLedgerType} }
 
 func postLikeRedisTypeError() error { return likeRedisTypeError{kind: ErrPostLikeRedisType} }
 

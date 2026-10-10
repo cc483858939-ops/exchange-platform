@@ -29,12 +29,14 @@ func TestRequestLikeLoadersDoNotBootstrapMissingStateFromSQL(t *testing.T) {
 	oldGetMany := loadPostLikeStatesFromRedis
 	oldLoadOne := loadPostLikeBaselineFromDB
 	oldLoadMany := loadPostLikeBaselinesFromDB
+	oldRecoverUser := recoverColdUserLikeState
 	t.Cleanup(func() {
 		setPostLikedStateWithRedis = oldSet
 		loadPostLikeStateFromRedis = oldGet
 		loadPostLikeStatesFromRedis = oldGetMany
 		loadPostLikeBaselineFromDB = oldLoadOne
 		loadPostLikeBaselinesFromDB = oldLoadMany
+		recoverColdUserLikeState = oldRecoverUser
 	})
 	baselineReads := 0
 	loadPostLikeBaselineFromDB = func(context.Context, uint) (postLikeBaseline, error) {
@@ -44,6 +46,11 @@ func TestRequestLikeLoadersDoNotBootstrapMissingStateFromSQL(t *testing.T) {
 	loadPostLikeBaselinesFromDB = func(context.Context, []uint) (map[uint]postLikeBaseline, error) {
 		baselineReads++
 		return map[uint]postLikeBaseline{}, nil
+	}
+	recoveryCalls := 0
+	recoverColdUserLikeState = func(context.Context, uint) error {
+		recoveryCalls++
+		return likes.ErrUserLikeNotReady
 	}
 	setPostLikedStateWithRedis = func(context.Context, uint, uint, bool) (postLikeMutationResult, error) {
 		return postLikeMutationResult{}, likes.ErrUserLikeNotReady
@@ -62,6 +69,9 @@ func TestRequestLikeLoadersDoNotBootstrapMissingStateFromSQL(t *testing.T) {
 	}
 	if result, err := loadPostLikeStatesWithRecovery(t.Context(), 7, []uint{11}); err != nil || len(result.Unavailable) != 1 {
 		t.Fatalf("batch result=%+v err=%v", result, err)
+	}
+	if recoveryCalls != 1 {
+		t.Fatalf("request recovery called %d times, want one attempt for User NotReady only", recoveryCalls)
 	}
 	if baselineReads != 0 {
 		t.Fatalf("request loader performed %d SQL recovery baseline reads", baselineReads)

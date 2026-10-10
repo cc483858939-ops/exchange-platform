@@ -38,6 +38,12 @@ var (
 
 var postLikeRecoveryGroup postLikeRecoveryFlights
 
+var recoverColdUserLikeState = func(ctx context.Context, userID uint) error {
+	store := likes.NewStore(global.RedisDB)
+	lifecycle := likes.NewUserLikeLifecycle(store, global.APIDb)
+	return lifecycle.RecoverIfCold(ctx, userID)
+}
+
 func loadActivePostLikeBaselineFromDB(db *gorm.DB, postID uint) (postLikeBaseline, error) {
 	if db == nil {
 		return postLikeBaseline{}, errors.New("database is not initialized")
@@ -169,18 +175,39 @@ func isPostLikeBatchUnavailableError(err error) bool {
 
 func setPostLikedStateWithRecovery(ctx context.Context, userID, postID uint, liked bool) (postLikeMutationResult, error) {
 	result, err := setPostLikedStateWithRedis(ctx, userID, postID, liked)
+	if errors.Is(err, likes.ErrUserLikeNotReady) && userID > 0 {
+		if restoreErr := recoverColdUserLikeState(ctx, userID); restoreErr != nil {
+			err = restoreErr
+		} else {
+			result, err = setPostLikedStateWithRedis(ctx, userID, postID, liked)
+		}
+	}
 	recordLikeReadinessEvent(userID, postID, err)
 	return result, err
 }
 
 func loadPostLikeStateWithRecovery(ctx context.Context, userID, postID uint) (postLikeStateResult, error) {
 	result, err := loadPostLikeStateFromRedis(ctx, userID, postID)
+	if errors.Is(err, likes.ErrUserLikeNotReady) && userID > 0 {
+		if restoreErr := recoverColdUserLikeState(ctx, userID); restoreErr != nil {
+			err = restoreErr
+		} else {
+			result, err = loadPostLikeStateFromRedis(ctx, userID, postID)
+		}
+	}
 	recordLikeReadinessEvent(userID, postID, err)
 	return result, err
 }
 
 func loadPostLikeStatesWithRecovery(ctx context.Context, userID uint, postIDs []uint) (postLikeStatesLoadResult, error) {
 	result, err := loadPostLikeStatesFromRedis(ctx, userID, postIDs)
+	if errors.Is(err, likes.ErrUserLikeNotReady) && userID > 0 {
+		if restoreErr := recoverColdUserLikeState(ctx, userID); restoreErr != nil {
+			err = restoreErr
+		} else {
+			result, err = loadPostLikeStatesFromRedis(ctx, userID, postIDs)
+		}
+	}
 	if err != nil {
 		postID := uint(0)
 		if len(postIDs) > 0 {

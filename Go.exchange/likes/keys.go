@@ -10,10 +10,11 @@ const (
 	ExpiryCandidatesKey    = "post:likes:expiry:candidates"
 	RecoverableVersionsKey = "post:likes:recoverable:versions"
 
-	BehaviorDirtyKey      = "post:likes:behavior:dirty"
-	BehaviorStateKey      = "post:likes:behavior:state"
-	BehaviorProcessingKey = "post:likes:behavior:processing"
-	BehaviorClaimsKey     = "post:likes:behavior:claims"
+	BehaviorDirtyKey         = "post:likes:behavior:dirty"
+	BehaviorStateKey         = "post:likes:behavior:state"
+	BehaviorProcessingKey    = "post:likes:behavior:processing"
+	BehaviorClaimsKey        = "post:likes:behavior:claims"
+	UserLikesExpiryLedgerKey = "user:likes:expiry:ledger"
 
 	UserLikesInitSentinel = "0"
 )
@@ -23,8 +24,14 @@ func CountKey(postID uint) string { return fmt.Sprintf("post:like:%d:count", pos
 
 // UsersKey names the removed legacy Post -> Users key. Production Like paths
 // must not read or write it; it remains available for cleanup and assertions.
-func UsersKey(postID uint) string             { return fmt.Sprintf("post:like:%d:users", postID) }
-func VersionKey(postID uint) string           { return fmt.Sprintf("post:like:%d:version", postID) }
-func RebuildTokenKey(postID uint) string      { return fmt.Sprintf("post:like:%d:rebuild-token", postID) }
-func UserLikesKey(userID uint) string         { return fmt.Sprintf("user:likes:%d", userID) }
+func UsersKey(postID uint) string        { return fmt.Sprintf("post:like:%d:users", postID) }
+func VersionKey(postID uint) string      { return fmt.Sprintf("post:like:%d:version", postID) }
+func RebuildTokenKey(postID uint) string { return fmt.Sprintf("post:like:%d:rebuild-token", postID) }
+func UserLikesKey(userID uint) string    { return fmt.Sprintf("user:likes:%d", userID) }
+func UserLikesRestoreLockKey(userID uint) string {
+	return fmt.Sprintf("user:likes:restore:lock:%d", userID)
+}
+func UserLikesRestoreTempKey(userID uint, token string) string {
+	return fmt.Sprintf("user:likes:restore:tmp:%d:%s", userID, token)
+}
 func BehaviorPair(userID, postID uint) string { return fmt.Sprintf("%d:%d", userID, postID) }

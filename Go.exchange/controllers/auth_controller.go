@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"Go.exchange/auth"
 	"Go.exchange/metrics"
@@ -61,6 +62,10 @@ type AuthController struct {
 	}
 }
 
+type userLikeInitCompensator interface {
+	CleanupUncommittedUserLikeInitialization(context.Context, uint) error
+}
+
 var errRegistrationUserLikeInit = errors.New("initialize registration user like state")
 
 const authRequestMaxBodyBytes int64 = 16 << 10
@@ -110,10 +115,12 @@ func (c *AuthController) Register(ctx *gin.Context) {
 		return
 	}
 	requestCtx := ctx.Request.Context()
+	userLikeInitAttempted := false
 	err = c.db.WithContext(requestCtx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&user).Error; err != nil {
 			return err
 		}
+		userLikeInitAttempted = true
 		if err := c.userLikeInit.InitializeUserEmpty(requestCtx, user.ID); err != nil {
 			metrics.RecordLikeLifecycleEvent("user_init_failure")
 			log.Printf("[AuthRegister] initialize User Like state user=%d: %v", user.ID, err)
@@ -122,6 +129,9 @@ func (c *AuthController) Register(ctx *gin.Context) {
 		return nil
 	})
 	if err != nil {
+		if userLikeInitAttempted {
+			c.cleanupRolledBackUserLikeInitialization(requestCtx, user.ID)
+		}
 		if errors.Is(err, errRegistrationUserLikeInit) {
 			writeAuthError(ctx, http.StatusServiceUnavailable, "AUTH_LIKE_STATE_UNAVAILABLE", "Registration is temporarily unavailable")
 			return
@@ -139,6 +149,32 @@ func (c *AuthController) Register(ctx *gin.Context) {
 		return
 	}
 	writeAuthResponse(ctx, pair, user)
+}
+
+func (c *AuthController) cleanupRolledBackUserLikeInitialization(ctx context.Context, userID uint) {
+	if c == nil || c.db == nil || userID == 0 {
+		return
+	}
+	checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+	defer cancel()
+	var existing models.User
+	err := c.db.WithContext(checkCtx).Unscoped().Select("id").Where("id = ?", userID).Take(&existing).Error
+	if err == nil {
+		return
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		log.Printf("[AuthRegister] preserve User Like initialization user=%d because rollback status is unknown: %v", userID, err)
+		return
+	}
+	compensator, ok := c.userLikeInit.(userLikeInitCompensator)
+	if !ok {
+		return
+	}
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+	defer cleanupCancel()
+	if err := compensator.CleanupUncommittedUserLikeInitialization(cleanupCtx, userID); err != nil {
+		log.Printf("[AuthRegister] cleanup rolled-back User Like initialization user=%d: %v", userID, err)
+	}
 }
 
 func (c *AuthController) Login(ctx *gin.Context) {

@@ -23,7 +23,8 @@ if not type_matches(KEYS[2], 'string') or
    not type_matches(KEYS[7], 'hash') or
    not type_matches(KEYS[8], 'set') or
    not type_matches(KEYS[9], 'zset') or
-   not type_matches(KEYS[10], 'hash') then
+   not type_matches(KEYS[10], 'hash') or
+   not type_matches(KEYS[11], 'hash') then
   return redis.error_reply('LIKE_TYPE_PRECHECK')
 end
 
@@ -84,7 +85,19 @@ if changed then
   redis.call('ZADD', KEYS[9], ARGV[5], post_id)
   current = desired
 end
-return {count, current, changed, version}
+local ttl_state = 0
+if ARGV[7] == '1' then
+  local server_time = redis.call('TIME')
+  local now_ms = tonumber(server_time[1]) * 1000 + math.floor(tonumber(server_time[2]) / 1000)
+  local expires_at = now_ms + tonumber(ARGV[6])
+  redis.call('PEXPIREAT', KEYS[4], expires_at)
+  redis.call('HSET', KEYS[11], user_id, tostring(expires_at))
+  ttl_state = 1
+else
+  redis.call('PERSIST', KEYS[4])
+  redis.call('HDEL', KEYS[11], user_id)
+end
+return {count, current, changed, version, ttl_state}
 `)
 
 var scanUserLikesScript = redis.NewScript(`
@@ -102,14 +115,29 @@ return values
 var initializeUserEmptyScript = redis.NewScript(`
 local actual = redis.call('TYPE', KEYS[1]).ok
 if actual ~= 'none' and actual ~= 'set' then
-  return redis.error_reply('LIKE_TYPE_PRECHECK')
+  return redis.error_reply('LIKE_USER_TYPE')
 end
+local ledger_type = redis.call('TYPE', KEYS[2]).ok
+if ledger_type ~= 'none' and ledger_type ~= 'hash' then return redis.error_reply('LIKE_USER_LEDGER_TYPE') end
+local user_id = ARGV[1]
 if actual == 'set' then
-  if redis.call('SISMEMBER', KEYS[1], '0') == 1 then return 0 end
-  if redis.call('SCARD', KEYS[1]) > 0 then return redis.error_reply('LIKE_USER_NOT_READY') end
+  if redis.call('SISMEMBER', KEYS[1], '0') ~= 1 then return redis.error_reply('LIKE_USER_NOT_READY') end
+else
+  if redis.call('HEXISTS', KEYS[2], user_id) == 1 then return redis.error_reply('LIKE_USER_NOT_READY') end
+  redis.call('SADD', KEYS[1], '0')
 end
-redis.call('SADD', KEYS[1], '0')
-return 1
+if ARGV[2] == '1' then
+  local server_time = redis.call('TIME')
+  local now_ms = tonumber(server_time[1]) * 1000 + math.floor(tonumber(server_time[2]) / 1000)
+  local expires_at = now_ms + tonumber(ARGV[3])
+  redis.call('PEXPIREAT', KEYS[1], expires_at)
+  redis.call('HSET', KEYS[2], user_id, tostring(expires_at))
+else
+  redis.call('PERSIST', KEYS[1])
+  redis.call('HDEL', KEYS[2], user_id)
+end
+if actual == 'none' then return 1 end
+return 0
 `)
 
 var removeDeletedUserPostRelationsScript = redis.NewScript(`

@@ -417,6 +417,9 @@ func loadConfigFrom(path string) (*Config, error) {
 	}
 	cfg.RecommendationPresence = recommendationSettingPresence(reader)
 	applySensitiveEnvironmentOverrides(cfg)
+	if _, err := UserLikeLifecycleSettings(); err != nil {
+		return nil, fmt.Errorf("validate User Like lifecycle settings: %w", err)
+	}
 	cfg.Translation = cfg.Translation.Normalized()
 	AppConfig = cfg
 	return cfg, nil

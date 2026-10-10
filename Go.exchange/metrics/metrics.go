@@ -43,6 +43,11 @@ var (
 	userLikeCleanupBatchDuration                 = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_user_like_cleanup_batch_duration_seconds", Help: "Time spent on one bounded User Like cleanup batch.", Buckets: prometheus.DefBuckets})
 	userLikeCleanupCycleDuration                 = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_user_like_cleanup_cycle_duration_seconds", Help: "Duration of a completed SQL-user scan and bounded User Like cleanup cycle.", Buckets: prometheus.DefBuckets})
 	userLikeCleanupLastCycle                     = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_user_like_cleanup_last_cycle_timestamp_seconds", Help: "Unix timestamp of the last completed User Like cleanup cycle."})
+	userLikeTTLEvents                            = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_user_like_ttl_events_total", Help: "User Like Set TTL lifecycle events by bounded outcome."}, []string{"event"})
+	userLikeRestoreResults                       = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_user_like_restore_total", Help: "User Like Set restore outcomes by bounded result."}, []string{"result"})
+	userLikeRestoreDuration                      = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_user_like_restore_duration_seconds", Help: "User Like Set restore duration.", Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30}})
+	userLikeRestoreRelations                     = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_user_like_restore_relations", Help: "Post relations loaded by one User Like Set restore.", Buckets: []float64{0, 1, 10, 100, 500, 1000, 5000, 10000, 100000}})
+	userLikeRestoreInflight                      = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_user_like_restore_inflight", Help: "Current bounded number of active User Like Set restores."})
 	recommendationTelemetryEvents                = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_telemetry_events_total", Help: "Recommendation telemetry events by ingestion outcome."}, []string{"status", "event_type", "reason"})
 	recommendationTelemetryBatchSize             = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_telemetry_batch_size", Help: "Number of recommendation telemetry events per ingestion request.", Buckets: []float64{1, 5, 10, 20, 50}})
 	recommendationTelemetryIngestDuration        = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_telemetry_ingest_duration_seconds", Help: "Recommendation telemetry ingestion latency in seconds.", Buckets: prometheus.DefBuckets})
@@ -94,7 +99,7 @@ var (
 func init() {
 	registry.MustRegister(
 		httpRequestsTotal, httpRequestDuration, recommendationHTTPDuration, postEmbeddingEvents, postEmbeddingFailures, postEmbeddingPublishFailures, postEmbeddingProcessingDuration, kafkaConsumerRecovery,
-		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxRowsLastSuccess, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, consumerInboxRowsLastSuccess, notificationProjectionFailures, notificationProjectionLatency, likePipelineDepth, likePipelineDepthLastSuccess, likeClaimDuration, likeQueueOperations, likeLifecycleEvents, userLikeRelationsRemoved, userLikeCleanupBatchUsers, userLikeCleanupBatchRelations, userLikeCleanupBatchRemoved, userLikeCleanupBatchDuration, userLikeCleanupCycleDuration, userLikeCleanupLastCycle,
+		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxRowsLastSuccess, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, consumerInboxRowsLastSuccess, notificationProjectionFailures, notificationProjectionLatency, likePipelineDepth, likePipelineDepthLastSuccess, likeClaimDuration, likeQueueOperations, likeLifecycleEvents, userLikeRelationsRemoved, userLikeCleanupBatchUsers, userLikeCleanupBatchRelations, userLikeCleanupBatchRemoved, userLikeCleanupBatchDuration, userLikeCleanupCycleDuration, userLikeCleanupLastCycle, userLikeTTLEvents, userLikeRestoreResults, userLikeRestoreDuration, userLikeRestoreRelations, userLikeRestoreInflight,
 		recommendationTelemetryEvents, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests,
 		recommendationRequestLogFailures, recommendationTrackingResults,
@@ -141,12 +146,35 @@ func RecordLikeLifecycleEvent(event string) {
 	switch event {
 	case "user_not_ready", "post_not_ready", "redis_type_error", "count_inconsistent", "user_init_failure", "post_init_failure", "post_recovery_refused",
 		"stale_relation_removed", "user_relation_cleanup_error", "user_relation_cleanup_retry", "user_relation_cleanup_user_state_error",
-		"user_relation_cleanup_post_state_error", "user_relation_cleanup_lifecycle_mismatch", "post_init_retry", "post_reactivation_refused",
+		"user_relation_cleanup_post_state_error", "user_relation_cleanup_lifecycle_mismatch", "user_relation_cleanup_cold_skipped", "post_init_retry", "post_reactivation_refused",
 		"post_delete_fence_success", "post_delete_cleanup_failure", "post_delete_cleanup_retry":
 		likeLifecycleEvents.WithLabelValues(event).Inc()
 	default:
 		likeLifecycleEvents.WithLabelValues("unknown").Inc()
 	}
+}
+
+func RecordUserLikeTTLEvent(event string) {
+	switch event {
+	case "ttl_armed", "ttl_refreshed", "ttl_arming_disabled", "cold_detected", "cold_cleanup_skipped", "unexpected_missing", "restore_succeeded":
+		userLikeTTLEvents.WithLabelValues(event).Inc()
+	}
+}
+
+func RecordUserLikeRestoreResult(result string) {
+	switch result {
+	case "started", "succeeded", "lock_busy", "timeout", "failed_pg", "failed_redis", "unsafe", "too_large", "disabled":
+		userLikeRestoreResults.WithLabelValues(result).Inc()
+	}
+}
+
+func ObserveUserLikeRestore(duration time.Duration, relations int) {
+	userLikeRestoreDuration.Observe(duration.Seconds())
+	userLikeRestoreRelations.Observe(float64(relations))
+}
+
+func AddUserLikeRestoreInflight(delta int) {
+	userLikeRestoreInflight.Add(float64(delta))
 }
 
 func RecordUserLikeRelationsRemoved(count int64) {

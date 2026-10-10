@@ -16,9 +16,29 @@ import (
 	"github.com/google/uuid"
 )
 
-type Store struct{ client *redis.Client }
+type Store struct {
+	client           *redis.Client
+	userLikeSettings func() (config.UserLikeLifecycleConfig, error)
+}
 
-func NewStore(client *redis.Client) *Store { return &Store{client: client} }
+func NewStore(client *redis.Client) *Store {
+	return &Store{client: client, userLikeSettings: config.UserLikeLifecycleSettings}
+}
+
+// NewStoreWithUserLikeSettings supports isolated tests with short TTLs and
+// deterministic limits. Production constructors should use NewStore.
+func NewStoreWithUserLikeSettings(client *redis.Client, settings config.UserLikeLifecycleConfig) *Store {
+	return &Store{client: client, userLikeSettings: func() (config.UserLikeLifecycleConfig, error) {
+		return settings, nil
+	}}
+}
+
+func (s *Store) lifecycleSettings() (config.UserLikeLifecycleConfig, error) {
+	if s == nil || s.userLikeSettings == nil {
+		return config.UserLikeLifecycleSettings()
+	}
+	return s.userLikeSettings()
+}
 
 func (s *Store) Mutate(ctx context.Context, userID, postID uint, liked bool) (MutationResult, error) {
 	if s == nil || s.client == nil {
@@ -30,6 +50,10 @@ func (s *Store) Mutate(ctx context.Context, userID, postID uint, liked bool) (Mu
 		}
 		return MutationResult{}, postNotReadyError()
 	}
+	settings, err := s.lifecycleSettings()
+	if err != nil {
+		return MutationResult{}, err
+	}
 	desired := "0"
 	if liked {
 		desired = "1"
@@ -37,19 +61,24 @@ func (s *Store) Mutate(ctx context.Context, userID, postID uint, liked bool) (Mu
 	keys := []string{
 		ReadyKey(postID), CountKey(postID), VersionKey(postID), UserLikesKey(userID),
 		DirtyKey, BehaviorDirtyKey, BehaviorStateKey, RegistryKey,
-		ExpiryCandidatesKey, RecoverableVersionsKey,
+		ExpiryCandidatesKey, RecoverableVersionsKey, UserLikesExpiryLedgerKey,
 	}
 	now := time.Now().UTC()
 	value, err := mutateScript.Run(
 		s.client.WithContext(ctx), keys, postID, userID, desired,
-		now.Format(time.RFC3339Nano), now.UnixMilli(),
+		now.Format(time.RFC3339Nano), now.UnixMilli(), settings.SetTTL.Milliseconds(), boolIntString(settings.ArmingEnabled),
 	).Result()
 	if err != nil {
 		return MutationResult{}, mapScriptError(err)
 	}
 	items, ok := value.([]interface{})
-	if !ok || len(items) != 4 {
+	if !ok || len(items) != 5 {
 		return MutationResult{}, fmt.Errorf("unexpected mutation response %T", value)
+	}
+	if settings.ArmingEnabled {
+		metrics.RecordUserLikeTTLEvent("ttl_refreshed")
+	} else {
+		metrics.RecordUserLikeTTLEvent("ttl_arming_disabled")
 	}
 	return MutationResult{Count: asInt64(items[0]), Liked: asInt64(items[1]) == 1, Changed: asInt64(items[2]) == 1, Version: asInt64(items[3])}, nil
 }
@@ -80,27 +109,12 @@ func (s *Store) get(ctx context.Context, userID, postID uint) (State, error) {
 	ready := pipe.Get(ReadyKey(postID))
 	count := pipe.Get(CountKey(postID))
 	version := pipe.Get(VersionKey(postID))
-	var initialized *redis.BoolCmd
-	var member *redis.BoolCmd
-	if userID > 0 {
-		userKey := UserLikesKey(userID)
-		initialized = pipe.SIsMember(userKey, UserLikesInitSentinel)
-		member = pipe.SIsMember(userKey, strconv.FormatUint(uint64(postID), 10))
-	}
 	_, execErr := pipe.ExecContext(ctx)
 	if ready.Err() == nil && ready.Val() == "deleted" {
 		return State{}, ErrPostLikeUnavailable
 	}
 	if execErr != nil && execErr != redis.Nil {
 		return State{}, mapScriptError(execErr)
-	}
-	if initialized != nil {
-		if err := userCommandErrorOrNotReady(initialized.Err()); err != nil {
-			return State{}, err
-		}
-		if !initialized.Val() {
-			return State{}, userNotReadyError()
-		}
 	}
 	if err := requireReadyCommand(ready); err != nil {
 		return State{}, err
@@ -111,11 +125,6 @@ func (s *Store) get(ctx context.Context, userID, postID uint) (State, error) {
 	if err := postCommandErrorOrNotReady(version.Err()); err != nil {
 		return State{}, err
 	}
-	if member != nil {
-		if err := userCommandErrorOrNotReady(member.Err()); err != nil {
-			return State{}, err
-		}
-	}
 	countValue, ok := parseNonNegativeInt64(count.Val())
 	if !ok || count.Err() == redis.Nil {
 		return State{}, postNotReadyError()
@@ -125,8 +134,12 @@ func (s *Store) get(ctx context.Context, userID, postID uint) (State, error) {
 		return State{}, postNotReadyError()
 	}
 	state := State{Count: countValue, Version: versionValue}
-	if member != nil {
-		state.Liked = member.Val()
+	if userID > 0 {
+		members, err := s.readUserLikeMembers(ctx, userID, []uint{postID})
+		if err != nil {
+			return State{}, err
+		}
+		state.Liked = members[postID]
 	}
 	return state, nil
 }
@@ -165,45 +178,24 @@ func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint) (map[u
 		ready   *redis.StringCmd
 		count   *redis.StringCmd
 		version *redis.StringCmd
-		member  *redis.BoolCmd
 	}
 	pipe := s.client.WithContext(ctx).Pipeline()
 	batch := make([]commands, 0, len(postIDs))
-	var initialized *redis.BoolCmd
-	userKey := ""
-	if userID > 0 {
-		userKey = UserLikesKey(userID)
-		initialized = pipe.SIsMember(userKey, UserLikesInitSentinel)
-	}
 	for _, postID := range postIDs {
 		if postID == 0 {
 			unavailable = append(unavailable, postID)
 			continue
 		}
-		command := commands{
+		batch = append(batch, commands{
 			postID:  postID,
 			ready:   pipe.Get(ReadyKey(postID)),
 			count:   pipe.Get(CountKey(postID)),
 			version: pipe.Get(VersionKey(postID)),
-		}
-		if userID > 0 {
-			command.member = pipe.SIsMember(userKey, strconv.FormatUint(uint64(postID), 10))
-		}
-		batch = append(batch, command)
+		})
 	}
 	_, execErr := pipe.ExecContext(ctx)
 	ignoredExecErr := false
-	if initialized != nil {
-		if err := userCommandErrorOrNotReady(initialized.Err()); err != nil {
-			recordStoreLifecycleFailure(err, userID, 0)
-			return nil, nil, err
-		}
-		if !initialized.Val() {
-			err := userNotReadyError()
-			recordStoreLifecycleFailure(err, userID, 0)
-			return nil, nil, err
-		}
-	}
+	activeIDs := make([]uint, 0, len(batch))
 	for _, command := range batch {
 		if command.ready.Err() == nil && command.ready.Val() == "deleted" {
 			for _, commandErr := range []error{command.count.Err(), command.version.Err()} {
@@ -218,12 +210,6 @@ func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint) (map[u
 					}
 				}
 			}
-			if command.member != nil {
-				if err := userCommandErrorOrNotReady(command.member.Err()); err != nil {
-					recordStoreLifecycleFailure(err, userID, command.postID)
-					return nil, nil, err
-				}
-			}
 			unavailable = append(unavailable, command.postID)
 			continue
 		}
@@ -232,12 +218,6 @@ func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint) (map[u
 				mapped := mapScriptError(commandErr)
 				recordStoreLifecycleFailure(mapped, userID, command.postID)
 				return nil, nil, mapped
-			}
-		}
-		if command.member != nil {
-			if err := userCommandErrorOrNotReady(command.member.Err()); err != nil {
-				recordStoreLifecycleFailure(err, userID, command.postID)
-				return nil, nil, err
 			}
 		}
 		count, countOK := parseNonNegativeInt64(command.count.Val())
@@ -250,16 +230,25 @@ func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint) (map[u
 			recordStoreLifecycleFailure(err, userID, command.postID)
 			continue
 		}
-		states[command.postID] = State{
-			Count:   count,
-			Version: version,
-			Liked:   command.member != nil && command.member.Val(),
-		}
+		states[command.postID] = State{Count: count, Version: version}
+		activeIDs = append(activeIDs, command.postID)
 	}
 	if execErr != nil && execErr != redis.Nil && !ignoredExecErr {
 		mapped := mapScriptError(execErr)
 		recordStoreLifecycleFailure(mapped, userID, 0)
 		return nil, nil, mapped
+	}
+	if userID > 0 && len(activeIDs) > 0 {
+		members, err := s.readUserLikeMembers(ctx, userID, activeIDs)
+		if err != nil {
+			recordStoreLifecycleFailure(err, userID, 0)
+			return nil, nil, err
+		}
+		for postID, liked := range members {
+			state := states[postID]
+			state.Liked = liked
+			states[postID] = state
+		}
 	}
 	return states, unavailable, nil
 }
@@ -281,11 +270,25 @@ func (s *Store) InitializeUserEmptyWithResult(ctx context.Context, userID uint) 
 	if userID == 0 {
 		return false, errors.New("invalid user id")
 	}
+	settings, err := s.lifecycleSettings()
+	if err != nil {
+		return false, err
+	}
 	value, err := initializeUserEmptyScript.Run(
-		s.client.WithContext(ctx), []string{UserLikesKey(userID)},
+		s.client.WithContext(ctx), []string{UserLikesKey(userID), UserLikesExpiryLedgerKey},
+		userID, boolIntString(settings.ArmingEnabled), settings.SetTTL.Milliseconds(),
 	).Int64()
 	if err != nil {
 		return false, mapScriptError(err)
+	}
+	if settings.ArmingEnabled {
+		if value == 1 {
+			metrics.RecordUserLikeTTLEvent("ttl_armed")
+		} else {
+			metrics.RecordUserLikeTTLEvent("ttl_refreshed")
+		}
+	} else {
+		metrics.RecordUserLikeTTLEvent("ttl_arming_disabled")
 	}
 	return value == 1, nil
 }
@@ -991,6 +994,22 @@ func mapScriptError(err error) error {
 	switch {
 	case strings.Contains(message, "LIKE_USER_TYPE"):
 		return userLikeRedisTypeError()
+	case strings.Contains(message, "LIKE_USER_LEDGER_TYPE"):
+		return userLikeLedgerTypeError()
+	case strings.Contains(message, "LIKE_USER_RESTORE_LOCK_TYPE"):
+		return ErrUserLikeRestoreLockType
+	case strings.Contains(message, "LIKE_USER_RECOVERY_TOO_LARGE"):
+		return ErrUserLikeRecoveryTooLarge
+	case strings.Contains(message, "LIKE_USER_RECOVERY_LOCK_LOST"):
+		return ErrUserLikeRecoveryLockLost
+	case strings.Contains(message, "LIKE_USER_RESTORE_INCOMPLETE"):
+		return ErrUserLikeRecoveryIncomplete
+	case strings.Contains(message, "LIKE_USER_RECOVERY_DISABLED"):
+		return ErrUserLikeRecoveryDisabled
+	case strings.Contains(message, "LIKE_USER_RECOVERY_UNSAFE"), strings.Contains(message, "LIKE_USER_RECOVERY_POST_DELETED"),
+		strings.Contains(message, "LIKE_USER_RESTORE_TARGET_EXISTS"), strings.Contains(message, "LIKE_USER_RESTORE_TEMP_EXISTS"),
+		strings.Contains(message, "LIKE_USER_RESTORE_POST_STATE"), strings.Contains(message, "LIKE_USER_ORPHAN_SET_PRESENT"):
+		return ErrUserLikeRecoveryUnsafe
 	case strings.Contains(message, "LIKE_POST_TYPE"):
 		return postLikeRedisTypeError()
 	case strings.Contains(message, "LIKE_POST_DELETED"):
