@@ -6,6 +6,39 @@ import (
 	"time"
 )
 
+func TestFindSlowlogScriptDurationMatchesExactEvalSHA(t *testing.T) {
+	entries := []interface{}{
+		[]interface{}{int64(3), int64(10), int64(900), []interface{}{"PING"}},
+		[]interface{}{int64(2), int64(10), int64(321), []interface{}{"EVALSHA", "other-sha", "1"}},
+		[]interface{}{int64(1), int64(10), int64(4567), []interface{}{[]byte("EVALSHA"), []byte("wanted-sha"), []byte("6")}},
+	}
+	duration, err := findSlowlogScriptDuration(entries, "wanted-sha", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duration != 4567*time.Microsecond {
+		t.Fatalf("duration=%s want=%s", duration, 4567*time.Microsecond)
+	}
+}
+
+func TestFindSlowlogScriptDurationRequiresMatchingEntry(t *testing.T) {
+	entries := []interface{}{
+		[]interface{}{int64(1), int64(10), int64(4567), []interface{}{"EVALSHA", "different-sha", "6"}},
+	}
+	if _, err := findSlowlogScriptDuration(entries, "wanted-sha", 0); err == nil || !strings.Contains(err.Error(), "no new EVALSHA entry") {
+		t.Fatalf("findSlowlogScriptDuration error=%v, want missing exact script entry", err)
+	}
+}
+
+func TestFindSlowlogScriptDurationIgnoresEntriesBeforeBaseline(t *testing.T) {
+	entries := []interface{}{
+		[]interface{}{int64(9), int64(10), int64(4567), []interface{}{"EVALSHA", "wanted-sha", "6"}},
+	}
+	if _, err := findSlowlogScriptDuration(entries, "wanted-sha", 9); err == nil {
+		t.Fatal("findSlowlogScriptDuration matched an entry at the baseline ID")
+	}
+}
+
 func TestBenchmarkOptionsAreSafeByDefaultAndBounded(t *testing.T) {
 	options, err := parseOptions(nil)
 	if err != nil {
@@ -34,7 +67,7 @@ func TestBenchmarkDatasetCoversRequiredUserSizes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(groups) != 4 || len(posts) != 44440 {
+	if len(groups) != 4 || len(posts) != 84396 {
 		t.Fatalf("dataset groups=%d posts=%d", len(groups), len(posts))
 	}
 	for groupIndex, group := range groups {

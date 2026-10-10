@@ -38,7 +38,7 @@ func TestLikeRedisKafkaPostgresE2EIntegration(t *testing.T) {
 	t.Setenv("USER_LIKE_SET_TTL", "72h")
 	t.Setenv("USER_LIKE_RESTORE_LOCK_TTL", "5s")
 	t.Setenv("USER_LIKE_RESTORE_BATCH_SIZE", "500")
-	t.Setenv("USER_LIKE_RESTORE_MAX_RELATIONS", "100000")
+	t.Setenv("USER_LIKE_RESTORE_MAX_RELATIONS", "10000")
 	t.Setenv("USER_LIKE_RESTORE_REQUEST_TIMEOUT", "2s")
 	t.Setenv("USER_LIKE_RESTORE_CONCURRENCY", "8")
 	dsn, redisAddr, broker := os.Getenv("POSTGRES_TEST_DSN"), os.Getenv("REDIS_TEST_ADDR"), os.Getenv("KAFKA_BROKERS")
@@ -108,7 +108,7 @@ func TestLikeRedisKafkaPostgresE2EIntegration(t *testing.T) {
 	postIDs := []uint{post.ID}
 	t.Cleanup(func() {
 		_ = cleanupLikeRelayIntegrationState(client, postIDs, []uint{actor.ID})
-		client.Del(likes.UserLikesKey(actor.ID), likes.UserLikesRestoreLockKey(actor.ID))
+		client.Del(likes.UserLikesKey(actor.ID), likes.UserLikesOrderKey(actor.ID), likes.UserLikesRestoreLockKey(actor.ID))
 		client.HDel(likes.UserLikesExpiryLedgerKey, strconv.FormatUint(uint64(actor.ID), 10))
 		db.Unscoped().Where("post_id IN ? AND user_id = ?", postIDs, actor.ID).Delete(&models.PostReaction{})
 		db.Unscoped().Where("post_id IN ? AND user_id = ?", postIDs, actor.ID).Delete(&models.PostBehavior{})
@@ -225,14 +225,15 @@ local now = redis.call('TIME')
 local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
 local expires_at = now_ms + tonumber(ARGV[2])
 redis.call('PEXPIREAT', KEYS[1], expires_at)
+redis.call('PEXPIREAT', KEYS[3], expires_at)
 redis.call('HSET', KEYS[2], ARGV[1], tostring(expires_at))
 return expires_at
-`, []string{likes.UserLikesKey(actor.ID), likes.UserLikesExpiryLedgerKey}, strconv.FormatUint(uint64(actor.ID), 10), 300).Result(); err != nil {
+`, []string{likes.UserLikesKey(actor.ID), likes.UserLikesExpiryLedgerKey, likes.UserLikesOrderKey(actor.ID)}, strconv.FormatUint(uint64(actor.ID), 10), 300).Result(); err != nil {
 		t.Fatalf("arm short test-only User Set expiry: %v", err)
 	}
 	expiryDeadline := time.Now().Add(5 * time.Second)
 	for {
-		exists, err := client.Exists(likes.UserLikesKey(actor.ID)).Result()
+		exists, err := client.Exists(likes.UserLikesKey(actor.ID), likes.UserLikesOrderKey(actor.ID)).Result()
 		if err != nil {
 			t.Fatal(err)
 		}

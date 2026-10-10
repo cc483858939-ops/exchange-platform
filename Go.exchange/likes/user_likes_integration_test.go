@@ -19,7 +19,8 @@ func TestInitializeUserEmptySentinelAndFailClosedIntegration(t *testing.T) {
 	badSetUserID := userID + 1
 	wrongTypeUserID := userID + 2
 	t.Cleanup(func() {
-		client.Del(UserLikesKey(userID), UserLikesKey(badSetUserID), UserLikesKey(wrongTypeUserID))
+		client.Del(UserLikesKey(userID), UserLikesKey(badSetUserID), UserLikesKey(wrongTypeUserID), UserLikesOrderKey(userID), UserLikesOrderKey(badSetUserID), UserLikesOrderKey(wrongTypeUserID))
+		client.HDel(UserLikesExpiryLedgerKey, strconv.FormatUint(uint64(userID), 10), strconv.FormatUint(uint64(badSetUserID), 10), strconv.FormatUint(uint64(wrongTypeUserID), 10))
 	})
 
 	if err := store.InitializeUserEmpty(context.Background(), 0); err == nil {
@@ -32,14 +33,20 @@ func TestInitializeUserEmptySentinelAndFailClosedIntegration(t *testing.T) {
 	if initialized, err := client.SIsMember(UserLikesKey(userID), UserLikesInitSentinel).Result(); err != nil || !initialized {
 		t.Fatalf("initialized sentinel=%t err=%v", initialized, err)
 	}
-	if ttl, err := client.TTL(UserLikesKey(userID)).Result(); err != nil || ttl != -1 {
-		t.Fatalf("User set TTL=%s err=%v want persistent", ttl, err)
+	if err := assertUserLikeTTLAndLedgerMatch(t, client, userID); err != nil {
+		t.Fatalf("new empty User Set TTL/Ledger mismatch: %v", err)
 	}
 	created, err = store.InitializeUserEmptyWithResult(context.Background(), userID)
 	if err != nil || created {
 		t.Fatalf("idempotent initialization result=%t err=%v", created, err)
 	}
+	if err := assertUserLikeTTLAndLedgerMatch(t, client, userID); err != nil {
+		t.Fatalf("idempotent initialization TTL/Ledger mismatch: %v", err)
+	}
 	if err := client.SAdd(UserLikesKey(userID), strconv.FormatUint(uint64(postID), 10)).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ZAdd(UserLikesOrderKey(userID), &redis.Z{Score: float64(time.Now().UnixMicro()), Member: strconv.FormatUint(uint64(postID), 10)}).Err(); err != nil {
 		t.Fatal(err)
 	}
 	created, err = store.InitializeUserEmptyWithResult(context.Background(), userID)
@@ -76,12 +83,15 @@ func TestScanUserLikesReturnsTypedUserReadinessAndTypeErrorsIntegration(t *testi
 	noSentinelUserID := userID + 1
 	wrongTypeUserID := userID + 2
 	t.Cleanup(func() {
-		client.Del(UserLikesKey(userID), UserLikesKey(noSentinelUserID), UserLikesKey(wrongTypeUserID))
+		client.Del(UserLikesKey(userID), UserLikesKey(noSentinelUserID), UserLikesKey(wrongTypeUserID), UserLikesOrderKey(userID), UserLikesOrderKey(noSentinelUserID), UserLikesOrderKey(wrongTypeUserID))
 	})
 	if err := store.InitializeUserEmpty(t.Context(), userID); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.SAdd(UserLikesKey(userID), strconv.FormatUint(uint64(postID+1), 10)).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ZAdd(UserLikesOrderKey(userID), &redis.Z{Score: float64(time.Now().UnixMicro()), Member: strconv.FormatUint(uint64(postID+1), 10)}).Err(); err != nil {
 		t.Fatal(err)
 	}
 	var scanned []uint
@@ -123,7 +133,7 @@ func TestMutationRequiresInitializedUserAndUnderflowFailsBeforeWritesIntegration
 	userIDs := []uint{postID + 101, postID + 102, postID + 103}
 	t.Cleanup(func() {
 		for _, userID := range userIDs {
-			client.Del(UserLikesKey(userID))
+			client.Del(UserLikesKey(userID), UserLikesOrderKey(userID))
 		}
 	})
 
@@ -153,7 +163,7 @@ func TestMutationRequiresInitializedUserAndUnderflowFailsBeforeWritesIntegration
 		t.Fatalf("wrong User type changed version=%q err=%v", version, err)
 	}
 
-	if err := client.Del(UserLikesKey(userIDs[0])).Err(); err != nil {
+	if err := client.Del(UserLikesKey(userIDs[0]), UserLikesOrderKey(userIDs[0])).Err(); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.SAdd(UserLikesKey(userIDs[1]), strconv.FormatUint(uint64(postID), 10)).Err(); err != nil {
@@ -170,6 +180,9 @@ func TestMutationRequiresInitializedUserAndUnderflowFailsBeforeWritesIntegration
 		t.Fatal(err)
 	}
 	if err := client.SAdd(UserLikesKey(userIDs[2]), strconv.FormatUint(uint64(postID), 10)).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ZAdd(UserLikesOrderKey(userIDs[2]), &redis.Z{Score: float64(time.Now().UnixMicro()), Member: strconv.FormatUint(uint64(postID), 10)}).Err(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Mutate(ctx, userIDs[2], postID, false); !errors.Is(err, ErrLikeCountInconsistent) {
@@ -190,7 +203,7 @@ func TestConcurrentUserInitializationAndMutationPreserveRelationIntegration(t *t
 		t.Fatalf("initialize Post created=%t err=%v", created, err)
 	}
 	userID := postID + 101
-	t.Cleanup(func() { client.Del(UserLikesKey(userID)) })
+	t.Cleanup(func() { client.Del(UserLikesKey(userID), UserLikesOrderKey(userID)) })
 	start := make(chan struct{})
 	var wait sync.WaitGroup
 	var initErr, mutateErr error
@@ -222,8 +235,8 @@ func TestConcurrentUserInitializationAndMutationPreserveRelationIntegration(t *t
 	if err != nil || !state.Liked || state.Count != 1 || state.Version != 1 {
 		t.Fatalf("concurrent init/mutation state=%+v err=%v", state, err)
 	}
-	if ttl, err := client.TTL(UserLikesKey(userID)).Result(); err != nil || ttl != -1 {
-		t.Fatalf("concurrent User set TTL=%s err=%v want persistent", ttl, err)
+	if err := assertUserLikeTTLAndLedgerMatch(t, client, userID); err != nil {
+		t.Fatalf("concurrent User Set TTL/Ledger mismatch: %v", err)
 	}
 }
 
@@ -247,7 +260,7 @@ func TestConcurrentSameAndDifferentUsersCountChangesOnceIntegration(t *testing.T
 	t.Cleanup(func() {
 		client.Del(ReadyKey(postID), CountKey(postID), VersionKey(postID))
 		for _, userID := range userIDs {
-			client.Del(UserLikesKey(userID))
+			client.Del(UserLikesKey(userID), UserLikesOrderKey(userID))
 			cleanupRecoverableStoreBehaviorPair(client, userID, postID)
 		}
 		client.SRem(DirtyKey, postID)
@@ -321,7 +334,7 @@ func TestMutationInvalidCountAndVersionFailClosedIntegration(t *testing.T) {
 		t.Fatalf("initialize Post created=%t err=%v", created, err)
 	}
 	userID := postID + 101
-	t.Cleanup(func() { client.Del(UserLikesKey(userID)) })
+	t.Cleanup(func() { client.Del(UserLikesKey(userID), UserLikesOrderKey(userID)) })
 	if err := store.InitializeUserEmpty(ctx, userID); err != nil {
 		t.Fatal(err)
 	}

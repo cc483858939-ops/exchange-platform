@@ -30,6 +30,7 @@ func TestStoreMutationAndClaimOwnershipIntegration(t *testing.T) {
 	cleanup := func() {
 		client.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
 		client.SRem(UserLikesKey(userID), strconv.FormatUint(uint64(postID), 10))
+		client.ZRem(UserLikesOrderKey(userID), strconv.FormatUint(uint64(postID), 10))
 		client.SRem(DirtyKey, postID)
 		client.ZRem(ProcessingKey, postID)
 		client.HDel(ClaimsKey, strconv.FormatUint(uint64(postID), 10))
@@ -123,6 +124,7 @@ func TestStoreGetManyIntegration(t *testing.T) {
 		for _, postID := range postIDs {
 			client.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
 			client.SRem(UserLikesKey(11), strconv.FormatUint(uint64(postID), 10))
+			client.ZRem(UserLikesOrderKey(11), strconv.FormatUint(uint64(postID), 10))
 			client.SRem(DirtyKey, postID)
 			client.ZRem(ProcessingKey, postID)
 			client.HDel(ClaimsKey, strconv.FormatUint(uint64(postID), 10))
@@ -198,7 +200,7 @@ func TestStoreGetManyDeletedCountWrongTypeIntegration(t *testing.T) {
 			client.ZRem(ExpiryCandidatesKey, id)
 			client.HDel(RecoverableVersionsKey, strconv.FormatUint(uint64(id), 10))
 		}
-		client.Del(UserLikesKey(userID))
+		client.Del(UserLikesKey(userID), UserLikesOrderKey(userID))
 	})
 	ctx := t.Context()
 	if created, err := initializeLikeStore(store, ctx, liveID, 0, 0, nil); err != nil || !created {
@@ -272,6 +274,7 @@ func TestStorePurgePostRemovesOnlyTargetLikeStateIntegration(t *testing.T) {
 		for _, postID := range []uint{target, unrelated} {
 			client.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
 			client.SRem(UserLikesKey(userID), strconv.FormatUint(uint64(postID), 10))
+			client.ZRem(UserLikesOrderKey(userID), strconv.FormatUint(uint64(postID), 10))
 			client.SRem(DirtyKey, postID)
 			client.ZRem(ProcessingKey, postID)
 			client.HDel(ClaimsKey, strconv.FormatUint(uint64(postID), 10))

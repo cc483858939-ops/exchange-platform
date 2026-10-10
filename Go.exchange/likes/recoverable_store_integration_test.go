@@ -37,7 +37,9 @@ func cleanupRecoverableStorePost(client *redis.Client, postID uint) {
 	postIDString := strconv.FormatUint(uint64(postID), 10)
 	client.Del(ReadyKey(postID), CountKey(postID), UsersKey(postID), VersionKey(postID))
 	client.SRem(UserLikesKey(11), postIDString)
+	client.ZRem(UserLikesOrderKey(11), postIDString)
 	client.SRem(UserLikesKey(12), postIDString)
+	client.ZRem(UserLikesOrderKey(12), postIDString)
 	client.SRem(RegistryKey, postIDString)
 	client.ZRem(ExpiryCandidatesKey, postIDString)
 	client.HDel(RecoverableVersionsKey, postIDString)
@@ -127,9 +129,14 @@ func TestStoreInitializeCreatesManagedPersistentStateIntegration(t *testing.T) {
 	if exists, err := client.HExists(RecoverableVersionsKey, strconv.FormatUint(uint64(postID), 10)).Result(); err != nil || exists {
 		t.Fatalf("recoverable marker exists=%t err=%v", exists, err)
 	}
-	for _, key := range []string{ReadyKey(postID), CountKey(postID), VersionKey(postID), UserLikesKey(11), UserLikesKey(12)} {
+	for _, key := range []string{ReadyKey(postID), CountKey(postID), VersionKey(postID)} {
 		if ttl, err := client.TTL(key).Result(); err != nil || ttl != -1 {
 			t.Fatalf("key=%q ttl=%s err=%v want persistent", key, ttl, err)
+		}
+	}
+	for _, userID := range []uint{11, 12} {
+		if err := assertUserLikeTTLAndLedgerMatch(t, client, userID); err != nil {
+			t.Fatalf("User %d TTL/Ledger mismatch: %v", userID, err)
 		}
 	}
 }
@@ -156,7 +163,9 @@ func TestStoreNonzeroRecoveryIsUnsafeAndMutationRemainsAtomicIntegration(t *test
 		cleanupRecoverableStoreBehaviorPair(client, 11, postID)
 		cleanupRecoverableStoreBehaviorPair(client, 12, postID)
 		client.SRem(UserLikesKey(11), strconv.FormatUint(uint64(postID), 10))
+		client.ZRem(UserLikesOrderKey(11), strconv.FormatUint(uint64(postID), 10))
 		client.SRem(UserLikesKey(12), strconv.FormatUint(uint64(postID), 10))
+		client.ZRem(UserLikesOrderKey(12), strconv.FormatUint(uint64(postID), 10))
 	})
 	ctx := context.Background()
 	if created, err := initializeLikeStore(store, ctx, postID, 1, 10, []uint{11}); err != nil || !created {
@@ -208,10 +217,13 @@ func TestStoreExpiryApisFailClosedIntegration(t *testing.T) {
 	if _, _, err := store.GetManyForServing(ctx, 11, []uint{postID}, time.Hour, time.Minute); !errors.Is(err, ErrLikeStateExpiryUnsupported) {
 		t.Fatalf("GetManyForServing error=%v want explicit unsupported", err)
 	}
-	for _, key := range []string{ReadyKey(postID), CountKey(postID), VersionKey(postID), UserLikesKey(11)} {
+	for _, key := range []string{ReadyKey(postID), CountKey(postID), VersionKey(postID)} {
 		if ttl, err := client.TTL(key).Result(); err != nil || ttl != -1 {
 			t.Fatalf("key=%q TTL=%s err=%v want persistent", key, ttl, err)
 		}
+	}
+	if err := assertUserLikeTTLAndLedgerMatch(t, client, 11); err != nil {
+		t.Fatalf("User 11 TTL/Ledger mismatch: %v", err)
 	}
 	if marker, err := client.HExists(RecoverableVersionsKey, strconv.FormatUint(uint64(postID), 10)).Result(); err != nil || marker {
 		t.Fatalf("unsupported expiry wrote recovery marker=%t err=%v", marker, err)

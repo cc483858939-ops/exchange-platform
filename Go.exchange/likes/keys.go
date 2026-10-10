@@ -28,10 +28,16 @@ func UsersKey(postID uint) string        { return fmt.Sprintf("post:like:%d:user
 func VersionKey(postID uint) string      { return fmt.Sprintf("post:like:%d:version", postID) }
 func RebuildTokenKey(postID uint) string { return fmt.Sprintf("post:like:%d:rebuild-token", postID) }
 func UserLikesKey(userID uint) string    { return fmt.Sprintf("user:likes:%d", userID) }
+func UserLikesOrderKey(userID uint) string {
+	return fmt.Sprintf("user:likes:order:%d", userID)
+}
 func UserLikesRestoreLockKey(userID uint) string {
 	return fmt.Sprintf("user:likes:restore:lock:%d", userID)
 }
 func UserLikesRestoreTempKey(userID uint, token string) string {
 	return fmt.Sprintf("user:likes:restore:tmp:%d:%s", userID, token)
+}
+func UserLikesRestoreOrderTempKey(userID uint, token string) string {
+	return fmt.Sprintf("user:likes:restore:order:tmp:%d:%s", userID, token)
 }
 func BehaviorPair(userID, postID uint) string { return fmt.Sprintf("%d:%d", userID, postID) }

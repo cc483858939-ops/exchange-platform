@@ -178,14 +178,14 @@ func TestUserLikeColdClassificationFailsClosedIntegration(t *testing.T) {
 	tempSetKey := fmt.Sprintf("it:user-like-set:%d", userID)
 	noSentinelKey := fmt.Sprintf("it:user-like-no-sentinel:%d", userID)
 	t.Cleanup(func() { _ = client.Del(ledgerKey, lockKey, tempSetKey, noSentinelKey).Err() })
-	missingResult, err := inspectUserLikeStateScript.Run(client, []string{tempSetKey, ledgerKey, lockKey}, missingID).Result()
+	missingResult, err := inspectUserLikeStateScript.Run(client, []string{tempSetKey, ledgerKey, lockKey, tempSetKey + ":order"}, missingID).Result()
 	if err != nil || asString(missingResult.([]interface{})[0]) != "unexpected_missing" {
 		t.Fatalf("script missing result=%v err=%v", missingResult, err)
 	}
 	if err := client.Set(ledgerKey, "wrong-type", 0).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := inspectUserLikeStateScript.Run(client, []string{tempSetKey, ledgerKey, lockKey}, userID).Result(); err == nil || !strings.Contains(err.Error(), "LIKE_USER_LEDGER_TYPE") {
+	if _, err := inspectUserLikeStateScript.Run(client, []string{tempSetKey, ledgerKey, lockKey, tempSetKey + ":order"}, userID).Result(); err == nil || !strings.Contains(err.Error(), "LIKE_USER_LEDGER_TYPE") {
 		t.Fatalf("wrong Ledger type error=%v", err)
 	}
 	if err := client.Del(ledgerKey).Err(); err != nil {
@@ -194,7 +194,7 @@ func TestUserLikeColdClassificationFailsClosedIntegration(t *testing.T) {
 	if err := client.SAdd(noSentinelKey, "123").Err(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := inspectUserLikeStateScript.Run(client, []string{noSentinelKey, ledgerKey, lockKey}, userID).Result(); err == nil || !strings.Contains(err.Error(), "LIKE_USER_NOT_READY") {
+	if _, err := inspectUserLikeStateScript.Run(client, []string{noSentinelKey, ledgerKey, lockKey, noSentinelKey + ":order"}, userID).Result(); err == nil || !strings.Contains(err.Error(), "LIKE_USER_NOT_READY") {
 		t.Fatalf("missing sentinel was accepted error=%v", err)
 	}
 }
@@ -219,7 +219,7 @@ func TestUserLikeRestoreInstallRequiresCompleteSetAndFencesLateOwnerIntegration(
 	if status, _, err := store.beginUserLikeRestore(ctx, userID, "owner-b", time.Minute); err != nil || status != "busy" {
 		t.Fatalf("second lock status=%q err=%v want busy", status, err)
 	}
-	if err := store.addUserLikeRestoreTempMembers(ctx, tempA, []uint{postID}); err != nil {
+	if err := store.addUserLikeRestoreTempMembers(ctx, tempA, UserLikesRestoreOrderTempKey(userID, "owner-a"), []userLikeRestoreRelation{{PostID: postID, StateChangedAt: time.Now().UTC()}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.finishUserLikeRestore(ctx, userID, "wrong-token", expectedExpiry, tempA, 1, settings); !errors.Is(err, ErrUserLikeRecoveryLockLost) {
@@ -236,6 +236,12 @@ func TestUserLikeRestoreInstallRequiresCompleteSetAndFencesLateOwnerIntegration(
 	}
 	if count, err := client.SCard(UserLikesKey(userID)).Result(); err != nil || count != 2 {
 		t.Fatalf("installed Set size=%d err=%v want sentinel + relation", count, err)
+	}
+	if count, err := client.ZCard(UserLikesOrderKey(userID)).Result(); err != nil || count != 1 {
+		t.Fatalf("installed Order ZSET size=%d err=%v want one relation", count, err)
+	}
+	if score, err := client.ZScore(UserLikesOrderKey(userID), strconv.FormatUint(uint64(postID), 10)).Result(); err != nil || score <= 0 {
+		t.Fatalf("installed Order score=%v err=%v", score, err)
 	}
 	if err := assertUserLikeTTLAndLedgerMatch(t, client, userID); err != nil {
 		t.Fatal(err)
@@ -264,7 +270,7 @@ func TestUserLikeRestoreInstallRequiresCompleteSetAndFencesLateOwnerIntegration(
 		t.Fatal(err)
 	}
 	winnerPostID := postID + 1
-	if err := store.addUserLikeRestoreTempMembers(ctx, lateTempB, []uint{winnerPostID}); err != nil {
+	if err := store.addUserLikeRestoreTempMembers(ctx, lateTempB, UserLikesRestoreOrderTempKey(lateUserID, "late-b"), []userLikeRestoreRelation{{PostID: winnerPostID, StateChangedAt: time.Now().UTC()}}); err != nil {
 		t.Fatal(err)
 	}
 	noArming := settings
@@ -293,7 +299,7 @@ func TestUserLikeRestoreInstallRequiresCompleteSetAndFencesLateOwnerIntegration(
 		t.Fatal(err)
 	}
 	defer store.releaseUserLikeRestore(ctx, deletedUserID, "deleted-post-owner", deletedTemp)
-	if err := store.addUserLikeRestoreTempMembers(ctx, deletedTemp, []uint{postID}); err != nil {
+	if err := store.addUserLikeRestoreTempMembers(ctx, deletedTemp, UserLikesRestoreOrderTempKey(deletedUserID, "deleted-post-owner"), []userLikeRestoreRelation{{PostID: postID, StateChangedAt: time.Now().UTC()}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.Set(ReadyKey(postID), "deleted", 0).Err(); err != nil {
@@ -321,7 +327,13 @@ func TestUserLikeGetAndGetManyNeverReturnFalseAcrossSetExpiryIntegration(t *test
 	if err := client.SAdd(UserLikesKey(userID), strconv.FormatUint(uint64(postID), 10)).Err(); err != nil {
 		t.Fatal(err)
 	}
+	if err := client.ZAdd(UserLikesOrderKey(userID), &redis.Z{Score: float64(time.Now().UnixMicro()), Member: strconv.FormatUint(uint64(postID), 10)}).Err(); err != nil {
+		t.Fatal(err)
+	}
 	if err := client.PExpire(UserLikesKey(userID), 30*time.Millisecond).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.PExpire(UserLikesOrderKey(userID), 30*time.Millisecond).Err(); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(20 * time.Millisecond)
@@ -385,8 +397,8 @@ func cleanupUserLikeLifecycleRedisState(client *redis.Client, userID, postID uin
 	pair := BehaviorPair(userID, postID)
 	lateUserID := userID + 3
 	deletedUserID := userID + 4
-	_ = client.Del(UserLikesKey(userID), UserLikesKey(lateUserID), UserLikesKey(deletedUserID), UserLikesRestoreLockKey(userID), UserLikesRestoreLockKey(lateUserID), UserLikesRestoreLockKey(deletedUserID),
-		UserLikesRestoreTempKey(userID, "owner-a"), UserLikesRestoreTempKey(lateUserID, "late-a"), UserLikesRestoreTempKey(lateUserID, "late-b"), UserLikesRestoreTempKey(deletedUserID, "deleted-post-owner")).Err()
+	_ = client.Del(UserLikesKey(userID), UserLikesKey(lateUserID), UserLikesKey(deletedUserID), UserLikesOrderKey(userID), UserLikesOrderKey(lateUserID), UserLikesOrderKey(deletedUserID), UserLikesRestoreLockKey(userID), UserLikesRestoreLockKey(lateUserID), UserLikesRestoreLockKey(deletedUserID),
+		UserLikesRestoreTempKey(userID, "owner-a"), UserLikesRestoreOrderTempKey(userID, "owner-a"), UserLikesRestoreTempKey(lateUserID, "late-a"), UserLikesRestoreOrderTempKey(lateUserID, "late-a"), UserLikesRestoreTempKey(lateUserID, "late-b"), UserLikesRestoreOrderTempKey(lateUserID, "late-b"), UserLikesRestoreTempKey(deletedUserID, "deleted-post-owner"), UserLikesRestoreOrderTempKey(deletedUserID, "deleted-post-owner")).Err()
 	_ = client.HDel(UserLikesExpiryLedgerKey, uid, strconv.FormatUint(uint64(userID+1), 10), strconv.FormatUint(uint64(userID+2), 10), strconv.FormatUint(uint64(lateUserID), 10), strconv.FormatUint(uint64(deletedUserID), 10)).Err()
 	_ = client.Del(ReadyKey(postID), CountKey(postID), VersionKey(postID), RebuildTokenKey(postID)).Err()
 	_ = client.SRem(DirtyKey, post).Err()
@@ -404,19 +416,25 @@ func assertUserLikeTTLAndLedgerMatch(t *testing.T, client *redis.Client, userID 
 	result, err := client.Eval(`
 local now = redis.call('TIME')
 local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
-return {redis.call('PTTL', KEYS[1]), redis.call('HGET', KEYS[2], ARGV[1]), now_ms}
-`, []string{UserLikesKey(userID), UserLikesExpiryLedgerKey}, strconv.FormatUint(uint64(userID), 10)).Result()
+local order_ttl = redis.call('PTTL', KEYS[3])
+return {redis.call('PTTL', KEYS[1]), redis.call('HGET', KEYS[2], ARGV[1]), now_ms, order_ttl, redis.call('SCARD', KEYS[1]) - 1, redis.call('ZCARD', KEYS[3])}
+`, []string{UserLikesKey(userID), UserLikesExpiryLedgerKey, UserLikesOrderKey(userID)}, strconv.FormatUint(uint64(userID), 10)).Result()
 	if err != nil {
 		return err
 	}
 	items, ok := result.([]interface{})
-	if !ok || len(items) != 3 {
+	if !ok || len(items) != 6 {
 		return fmt.Errorf("unexpected TTL and Ledger check result %T", result)
 	}
 	pttl, _ := strconv.ParseInt(asString(items[0]), 10, 64)
 	expiresAt, parseErr := strconv.ParseInt(asString(items[1]), 10, 64)
 	nowMS, _ := strconv.ParseInt(asString(items[2]), 10, 64)
-	if pttl <= 0 || parseErr != nil || expiresAt <= 0 || absInt64((nowMS+pttl)-expiresAt) > 2 {
+	orderTTL, _ := strconv.ParseInt(asString(items[3]), 10, 64)
+	active, _ := strconv.ParseInt(asString(items[4]), 10, 64)
+	orderCard, _ := strconv.ParseInt(asString(items[5]), 10, 64)
+	if pttl <= 0 || parseErr != nil || expiresAt <= 0 || absInt64((nowMS+pttl)-expiresAt) > 2 ||
+		(active > 0 && (orderTTL <= 0 || orderCard != active || absInt64(pttl-orderTTL) > 1)) ||
+		(active == 0 && (orderTTL != -2 || orderCard != 0)) {
 		return fmt.Errorf("User Set and Ledger expiry diverged: pttl_ms=%d expiry=%d redis_now_ms=%d", pttl, expiresAt, nowMS)
 	}
 	return nil

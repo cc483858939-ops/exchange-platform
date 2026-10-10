@@ -48,6 +48,7 @@ func cleanupLikeRelayIntegrationState(client *redis.Client, postIDs, userIDs []u
 				continue
 			}
 			pipe.SRem(likes.UserLikesKey(userID), postIDString)
+			pipe.ZRem(likes.UserLikesOrderKey(userID), postIDString)
 			pair := likes.BehaviorPair(userID, postID)
 			pipe.SRem(likes.BehaviorDirtyKey, pair)
 			pipe.HDel(likes.BehaviorStateKey, pair)

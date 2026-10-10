@@ -24,7 +24,8 @@ if not type_matches(KEYS[2], 'string') or
    not type_matches(KEYS[8], 'set') or
    not type_matches(KEYS[9], 'zset') or
    not type_matches(KEYS[10], 'hash') or
-   not type_matches(KEYS[11], 'hash') then
+   not type_matches(KEYS[11], 'hash') or
+   not type_matches(KEYS[12], 'zset') then
   return redis.error_reply('LIKE_TYPE_PRECHECK')
 end
 
@@ -37,6 +38,13 @@ end
 
 if redis.call('SISMEMBER', KEYS[4], '0') ~= 1 then
   return redis.error_reply('LIKE_USER_NOT_READY')
+end
+local active_relations = redis.call('SCARD', KEYS[4]) - 1
+if active_relations > tonumber(ARGV[8]) then return redis.error_reply('LIKE_USER_OVER_CAP') end
+local order_exists = redis.call('EXISTS', KEYS[12]) == 1
+if active_relations > 0 and not order_exists then return redis.error_reply('LIKE_USER_ORDER_MISSING') end
+if (order_exists and redis.call('ZCARD', KEYS[12]) ~= active_relations) or (active_relations == 0 and order_exists) then
+  return redis.error_reply('LIKE_USER_ORDER_INCONSISTENT')
 end
 if ready ~= '1' then
   return redis.error_reply('LIKE_POST_NOT_READY')
@@ -55,11 +63,82 @@ if not count or count < 0 or not version or version < 0 then
   return redis.error_reply('LIKE_POST_NOT_READY')
 end
 local current = redis.call('SISMEMBER', KEYS[4], post_id)
+local ordered_current = redis.call('ZSCORE', KEYS[12], post_id)
+if (current == 1) ~= (ordered_current ~= false) then return redis.error_reply('LIKE_USER_ORDER_INCONSISTENT') end
 local desired = ARGV[3] == '1' and 1 or 0
 local changed = (desired == 1 and current == 0) or (desired == 0 and current == 1)
+local candidate_id = ''
+local candidate_ready = nil
+local candidate_count = nil
+local candidate_version = nil
+local stale_candidate = false
+local will_evict = desired == 1 and current == 0 and active_relations >= tonumber(ARGV[8])
+if will_evict then
+  local candidate = redis.call('ZRANGE', KEYS[12], 0, 0)
+  if #candidate ~= 1 then return redis.error_reply('LIKE_USER_ORDER_INCONSISTENT') end
+  candidate_id = candidate[1]
+  if not string.match(candidate_id, '^%d+$') or candidate_id == '0' then return redis.error_reply('LIKE_USER_ORDER_INCONSISTENT') end
+  if redis.call('SISMEMBER', KEYS[4], candidate_id) ~= 1 then return redis.error_reply('LIKE_USER_ORDER_INCONSISTENT') end
+  local candidate_ready_key = 'post:like:' .. candidate_id .. ':ready'
+  local candidate_ready_type = redis.call('TYPE', candidate_ready_key).ok
+  if candidate_ready_type ~= 'none' and candidate_ready_type ~= 'string' then return redis.error_reply('LIKE_USER_EVICTION_POST_TYPE') end
+  candidate_ready = redis.call('GET', candidate_ready_key)
+  if candidate_ready == 'deleted' then
+    stale_candidate = true
+  elseif candidate_ready ~= '1' then
+    return redis.error_reply('LIKE_USER_EVICTION_POST_NOT_READY')
+  else
+    local candidate_count_key = 'post:like:' .. candidate_id .. ':count'
+    local candidate_version_key = 'post:like:' .. candidate_id .. ':version'
+    local candidate_count_type = redis.call('TYPE', candidate_count_key).ok
+    local candidate_version_type = redis.call('TYPE', candidate_version_key).ok
+    if (candidate_count_type ~= 'none' and candidate_count_type ~= 'string') or
+       (candidate_version_type ~= 'none' and candidate_version_type ~= 'string') then
+      return redis.error_reply('LIKE_USER_EVICTION_POST_TYPE')
+    end
+    candidate_count = redis.call('GET', candidate_count_key)
+    candidate_version = redis.call('GET', candidate_version_key)
+    if not candidate_count or not candidate_version or not string.match(candidate_count, '^%d+$') or not string.match(candidate_version, '^%d+$') then
+      return redis.error_reply('LIKE_USER_EVICTION_POST_NOT_READY')
+    end
+    candidate_count = tonumber(candidate_count)
+    candidate_version = tonumber(candidate_version)
+    if not candidate_count or candidate_count <= 0 or not candidate_version or candidate_version < 0 then
+      return redis.error_reply('LIKE_USER_EVICTION_COUNT_INCONSISTENT')
+    end
+  end
+end
 if changed then
   if desired == 0 and count == 0 then
     return redis.error_reply('LIKE_COUNT_INCONSISTENT')
+  end
+  if desired == 0 and current == 1 and not ordered_current then return redis.error_reply('LIKE_USER_ORDER_INCONSISTENT') end
+
+  local server_time = redis.call('TIME')
+  local order_score = tonumber(server_time[1]) * 1000000 + tonumber(server_time[2])
+
+  if will_evict then
+    redis.call('SREM', KEYS[4], candidate_id)
+    redis.call('ZREM', KEYS[12], candidate_id)
+    active_relations = active_relations - 1
+    if not stale_candidate then
+      local next_count = candidate_count - 1
+      local next_version = candidate_version + 1
+      redis.call('PERSIST', 'post:like:' .. candidate_id .. ':ready')
+      redis.call('PERSIST', 'post:like:' .. candidate_id .. ':count')
+      redis.call('PERSIST', 'post:like:' .. candidate_id .. ':version')
+      redis.call('HDEL', KEYS[10], candidate_id)
+      redis.call('SADD', KEYS[8], candidate_id)
+      redis.call('SET', 'post:like:' .. candidate_id .. ':count', next_count)
+      redis.call('SET', 'post:like:' .. candidate_id .. ':version', next_version)
+      redis.call('SADD', KEYS[5], candidate_id)
+      local candidate_pair = user_id .. ':' .. candidate_id
+      redis.call('HSET', KEYS[7], candidate_pair, '0|' .. next_version .. '|' .. ARGV[4])
+      redis.call('SADD', KEYS[6], candidate_pair)
+      redis.call('ZADD', KEYS[9], ARGV[5], candidate_id)
+      candidate_count = next_count
+      candidate_version = next_version
+    end
   end
 
   redis.call('PERSIST', KEYS[1])
@@ -70,9 +149,11 @@ if changed then
 
   if desired == 1 then
     redis.call('SADD', KEYS[4], post_id)
+    redis.call('ZADD', KEYS[12], order_score, post_id)
     count = count + 1
   else
     redis.call('SREM', KEYS[4], post_id)
+    redis.call('ZREM', KEYS[12], post_id)
     count = count - 1
   end
   version = version + 1
@@ -83,6 +164,7 @@ if changed then
   redis.call('HSET', KEYS[7], pair, ARGV[3] .. '|' .. version .. '|' .. ARGV[4])
   redis.call('SADD', KEYS[6], pair)
   redis.call('ZADD', KEYS[9], ARGV[5], post_id)
+  active_relations = active_relations + (desired == 1 and 1 or -1)
   current = desired
 end
 local ttl_state = 0
@@ -91,13 +173,15 @@ if ARGV[7] == '1' then
   local now_ms = tonumber(server_time[1]) * 1000 + math.floor(tonumber(server_time[2]) / 1000)
   local expires_at = now_ms + tonumber(ARGV[6])
   redis.call('PEXPIREAT', KEYS[4], expires_at)
+  if active_relations > 0 then redis.call('PEXPIREAT', KEYS[12], expires_at) end
   redis.call('HSET', KEYS[11], user_id, tostring(expires_at))
   ttl_state = 1
 else
   redis.call('PERSIST', KEYS[4])
+  redis.call('PERSIST', KEYS[12])
   redis.call('HDEL', KEYS[11], user_id)
 end
-return {count, current, changed, version, ttl_state}
+return {count, current, changed, version, ttl_state, candidate_id, active_relations, will_evict and 1 or 0, stale_candidate and 1 or 0}
 `)
 
 var scanUserLikesScript = redis.NewScript(`
@@ -106,9 +190,17 @@ if actual ~= 'none' and actual ~= 'set' then return redis.error_reply('LIKE_USER
 if actual == 'none' or redis.call('SISMEMBER', KEYS[1], '0') ~= 1 then
   return redis.error_reply('LIKE_USER_NOT_READY')
 end
+local order_type = redis.call('TYPE', KEYS[2]).ok
+if order_type ~= 'none' and order_type ~= 'zset' then return redis.error_reply('LIKE_USER_ORDER_TYPE') end
+local active = redis.call('SCARD', KEYS[1]) - 1
+if (active > 0 and order_type == 'none') then return redis.error_reply('LIKE_USER_ORDER_MISSING') end
+if (order_type == 'zset' and redis.call('ZCARD', KEYS[2]) ~= active) or (active == 0 and order_type == 'zset') then return redis.error_reply('LIKE_USER_ORDER_INCONSISTENT') end
 local result = redis.call('SSCAN', KEYS[1], ARGV[1], 'COUNT', ARGV[2])
 local values = {result[1]}
-for _, member in ipairs(result[2]) do table.insert(values, member) end
+for _, member in ipairs(result[2]) do
+  if member ~= '0' and redis.call('ZSCORE', KEYS[2], member) == false then return redis.error_reply('LIKE_USER_ORDER_INCONSISTENT') end
+  table.insert(values, member)
+end
 return values
 `)
 
@@ -119,11 +211,18 @@ if actual ~= 'none' and actual ~= 'set' then
 end
 local ledger_type = redis.call('TYPE', KEYS[2]).ok
 if ledger_type ~= 'none' and ledger_type ~= 'hash' then return redis.error_reply('LIKE_USER_LEDGER_TYPE') end
+local order_type = redis.call('TYPE', KEYS[3]).ok
+if order_type ~= 'none' and order_type ~= 'zset' then return redis.error_reply('LIKE_USER_ORDER_TYPE') end
 local user_id = ARGV[1]
 if actual == 'set' then
   if redis.call('SISMEMBER', KEYS[1], '0') ~= 1 then return redis.error_reply('LIKE_USER_NOT_READY') end
+  local active = redis.call('SCARD', KEYS[1]) - 1
+  if (active > 0 and order_type == 'none') then return redis.error_reply('LIKE_USER_ORDER_MISSING') end
+  if (order_type == 'zset' and redis.call('ZCARD', KEYS[3]) ~= active) or (active == 0 and order_type == 'zset') then
+    return redis.error_reply('LIKE_USER_ORDER_INCONSISTENT')
+  end
 else
-  if redis.call('HEXISTS', KEYS[2], user_id) == 1 then return redis.error_reply('LIKE_USER_NOT_READY') end
+  if order_type ~= 'none' or redis.call('HEXISTS', KEYS[2], user_id) == 1 then return redis.error_reply('LIKE_USER_NOT_READY') end
   redis.call('SADD', KEYS[1], '0')
 end
 if ARGV[2] == '1' then
@@ -131,9 +230,11 @@ if ARGV[2] == '1' then
   local now_ms = tonumber(server_time[1]) * 1000 + math.floor(tonumber(server_time[2]) / 1000)
   local expires_at = now_ms + tonumber(ARGV[3])
   redis.call('PEXPIREAT', KEYS[1], expires_at)
+  if order_type == 'zset' then redis.call('PEXPIREAT', KEYS[3], expires_at) end
   redis.call('HSET', KEYS[2], user_id, tostring(expires_at))
 else
   redis.call('PERSIST', KEYS[1])
+  redis.call('PERSIST', KEYS[3])
   redis.call('HDEL', KEYS[2], user_id)
 end
 if actual == 'none' then return 1 end
@@ -145,19 +246,28 @@ local user_type = redis.call('TYPE', KEYS[1]).ok
 if user_type ~= 'none' and user_type ~= 'set' then return redis.error_reply('LIKE_USER_TYPE') end
 if user_type == 'none' then return redis.error_reply('LIKE_USER_NOT_READY') end
 if redis.call('SISMEMBER', KEYS[1], '0') ~= 1 then return redis.error_reply('LIKE_USER_NOT_READY') end
+local order_type = redis.call('TYPE', KEYS[2]).ok
+if order_type ~= 'none' and order_type ~= 'zset' then return redis.error_reply('LIKE_USER_ORDER_TYPE') end
+local active = redis.call('SCARD', KEYS[1]) - 1
+if active > 0 and order_type == 'none' then return redis.error_reply('LIKE_USER_ORDER_MISSING') end
+if (order_type == 'zset' and redis.call('ZCARD', KEYS[2]) ~= active) or (active == 0 and order_type == 'zset') then return redis.error_reply('LIKE_USER_ORDER_INCONSISTENT') end
 local removed = 0
 local result = {0}
+local removals = {}
 for i = 1, #ARGV do
   local post_id = ARGV[i]
   if post_id ~= '0' then
-    local ready_type = redis.call('TYPE', KEYS[i + 1]).ok
+    local in_set = redis.call('SISMEMBER', KEYS[1], post_id) == 1
+    local in_order = redis.call('ZSCORE', KEYS[2], post_id) ~= false
+    if in_set ~= in_order then return redis.error_reply('LIKE_USER_ORDER_INCONSISTENT') end
+    local ready_type = redis.call('TYPE', KEYS[i + 2]).ok
     if ready_type ~= 'none' and ready_type ~= 'string' then
       table.insert(result, post_id)
       table.insert(result, 'post_ready_type_error')
     else
-      local ready = redis.call('GET', KEYS[i + 1])
+      local ready = redis.call('GET', KEYS[i + 2])
       if not ready or ready == 'deleted' then
-      removed = removed + redis.call('SREM', KEYS[1], post_id)
+        if in_set then table.insert(removals, post_id) end
       elseif ready == '1' then
         table.insert(result, post_id)
         table.insert(result, 'post_lifecycle_mismatch')
@@ -167,6 +277,10 @@ for i = 1, #ARGV do
       end
     end
   end
+end
+for _, post_id in ipairs(removals) do
+  removed = removed + redis.call('SREM', KEYS[1], post_id)
+  redis.call('ZREM', KEYS[2], post_id)
 end
 result[1] = removed
 return result

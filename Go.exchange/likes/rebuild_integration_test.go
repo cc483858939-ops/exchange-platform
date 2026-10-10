@@ -160,7 +160,7 @@ func TestExplicitReactivationFailsClosedUntilUserLifecycleIsImplementedIntegrati
 func TestNewPostInitializationNeverOverwritesChangedAggregateIntegration(t *testing.T) {
 	client, store, postID := openRecoverableStoreIntegration(t)
 	userID := postID + 301
-	t.Cleanup(func() { client.Del(UserLikesKey(userID)) })
+	t.Cleanup(func() { client.Del(UserLikesKey(userID), UserLikesOrderKey(userID)) })
 	if err := store.InitializeUserEmpty(t.Context(), userID); err != nil {
 		t.Fatal(err)
 	}

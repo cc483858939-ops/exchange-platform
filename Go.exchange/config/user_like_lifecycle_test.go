@@ -13,20 +13,20 @@ func TestUserLikeLifecycleSettingsDefaultsAndIndependentSwitches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.ArmingEnabled || !settings.RestoreEnabled || settings.SetTTL != 72*time.Hour ||
+	if !settings.ArmingEnabled || !settings.RestoreEnabled || settings.SetTTL != 72*time.Hour ||
 		settings.RestoreLockTTL != 30*time.Second || settings.RestoreBatchSize != 500 ||
-		settings.RestoreMaxRelations != 100000 || settings.RestoreRequestTimeout != 2*time.Second ||
+		settings.RestoreMaxRelations != 10000 || settings.RestoreRequestTimeout != 2*time.Second ||
 		settings.RestoreConcurrency != 8 {
 		t.Fatalf("unexpected defaults: %+v", settings)
 	}
 
-	t.Setenv("USER_LIKE_TTL_ARMING_ENABLED", "true")
+	t.Setenv("USER_LIKE_TTL_ARMING_ENABLED", "false")
 	t.Setenv("USER_LIKE_TTL_RESTORE_ENABLED", "false")
 	settings, err = UserLikeLifecycleSettings()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !settings.ArmingEnabled || settings.RestoreEnabled {
+	if settings.ArmingEnabled || settings.RestoreEnabled {
 		t.Fatalf("arming and restore switches were not independent: %+v", settings)
 	}
 }
@@ -43,6 +43,7 @@ func TestUserLikeLifecycleSettingsRejectUnsafeValues(t *testing.T) {
 		{name: "invalid arming bool", key: "USER_LIKE_TTL_ARMING_ENABLED", value: "sometimes", want: "must be a boolean"},
 		{name: "unbounded batch", key: "USER_LIKE_RESTORE_BATCH_SIZE", value: "5000000", want: "must be between"},
 		{name: "unbounded relation count", key: "USER_LIKE_RESTORE_MAX_RELATIONS", value: "0", want: "must be between"},
+		{name: "relation count above hard cap", key: "USER_LIKE_RESTORE_MAX_RELATIONS", value: "10001", want: "must be between"},
 		{name: "lock shorter than request", key: "USER_LIKE_RESTORE_LOCK_TTL", value: "2s", want: "must exceed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

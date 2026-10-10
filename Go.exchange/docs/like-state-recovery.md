@@ -1,6 +1,8 @@
 # Like state lifecycle and recovery runbook
 
-This runbook describes the SPEC-02 Redis `User -> Posts` relation lifecycle.
+This runbook describes the Redis `User -> Posts` relation lifecycle. Active
+relations are stored in both `user:likes:{uid}` and the ordered
+`user:likes:order:{uid}` ZSET.
 The request path stays Redis-first. PostgreSQL Like Count, Version, and
 `post_reaction` are asynchronous projections and are not a safe automatic
 bootstrap source while Kafka may still be behind.
@@ -17,16 +19,19 @@ bootstrap source while Kafka may still be behind.
 | Wrong Redis key type or inconsistent Count | Return an explicit unavailable error and emit a bounded lifecycle metric. Do not repair automatically. |
 | DevData same-ID Post reactivation | Reject before SQL clears `deleted_at` or updates the mirror mapping. |
 
-The public Like response contract and Kafka event schema are unchanged. Successful
-mutations still update Redis relation, Count, Version, Snapshot Dirty, and
-Behavior Dirty in the existing Lua script. Existing snapshot/behavior relays,
-version checks, and consumer deduplication remain responsible for PostgreSQL
-projection.
+The public Like response contract and Kafka event schema are unchanged.
+Successful mutations update both relation indexes, Count, Version, Snapshot
+Dirty, and Behavior Dirty in one Lua script. At 10,000 active relations, a new
+Like atomically removes the oldest active relation and updates its Unlike
+aggregate/event state before adding the new relation. Existing snapshot/behavior
+relays, version checks, and consumer deduplication remain responsible for
+PostgreSQL projection.
 
 ## User Like Set TTL and cold restore
 
-User-to-Post Sets can use an independent sliding TTL. The default is 72 hours,
-controlled by `USER_LIKE_SET_TTL`; only `user:likes:{uid}` expires. The Post
+User-to-Post relation indexes can use an independent sliding TTL. The default
+is 72 hours, controlled by `USER_LIKE_SET_TTL`; the Set and nonempty Order ZSET
+share one Redis-server expiry deadline. The Post
 `ready`, `count`, and `version` keys remain persistent. Post deletion tombstone
 expiry continues to use its existing lifecycle.
 
@@ -34,22 +39,31 @@ The switches are independent:
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `USER_LIKE_TTL_ARMING_ENABLED` | `false` | Arm or refresh User Set TTLs on initialization and Like/Unlike mutations. |
+| `USER_LIKE_TTL_ARMING_ENABLED` | `true` | Arm or refresh User Set TTLs on initialization and Like/Unlike mutations. |
 | `USER_LIKE_TTL_RESTORE_ENABLED` | `true` | Permit restore of a verified cold User Set. |
 | `USER_LIKE_SET_TTL` | `72h` | Active User Set lifetime; accepted production configuration is 1 hour through 365 days. |
 | `USER_LIKE_RESTORE_LOCK_TTL` | `30s` | Redis restore ownership duration. It must exceed the request timeout by at least one second. |
-| `USER_LIKE_RESTORE_BATCH_SIZE` | `500` | Keyset page and Redis SADD batch size, bounded to 5000. |
-| `USER_LIKE_RESTORE_MAX_RELATIONS` | `100000` | Per-user recovery cap, bounded to 1,000,000. |
+| `USER_LIKE_RESTORE_BATCH_SIZE` | `500` | Keyset page and paired Set/ZSET batch size, bounded to 5000. |
+| `USER_LIKE_RESTORE_MAX_RELATIONS` | `10000` | Per-user recovery bound; values above the hard cap are rejected. |
 | `USER_LIKE_RESTORE_REQUEST_TIMEOUT` | `2s` | Total SQL/Redis restore budget, bounded to 30 seconds. |
 | `USER_LIKE_RESTORE_CONCURRENCY` | `8` | Per-process restore limit, bounded to 64; Redis lock also coordinates API instances. |
 
-When arming is enabled, initialization and every successful Like or Unlike,
-including idempotent requests, update the Set expiration and
-`user:likes:expiry:ledger` field in the same Lua invocation. Redis server
+Like PUT and DELETE share the authenticated `like_mutation` fixed-window quota;
+GET Like reads are not charged to it. Defaults are 100/10s, 600/minute, and
+20,000/24h. `LIKE_MUTATION_RATE_10S`, `LIKE_MUTATION_RATE_1M`, and
+`LIKE_MUTATION_RATE_24H` override those limits at API startup and must each be
+between 1 and 1,000,000. Invalid configuration prevents startup. A missing
+limiter or Redis failure returns 503; an exceeded quota returns 429.
+
+With arming enabled by default, initialization and every successful Like or Unlike,
+including idempotent requests, update the Set and nonempty Order ZSET
+expiration and `user:likes:expiry:ledger` field in the same Lua invocation. Redis server
 `TIME` supplies the deadline. The ledger is a persistent shared HASH keyed by
 decimal UserID; it is not a relation snapshot. Read requests do not renew the
-TTL. With arming disabled, a successful mutation persists the active Set and
-removes its ledger field. Post aggregate keys are never passed as TTL targets.
+TTL. Equal-score Order ZSET members are ordered by Redis member byte order,
+which is deterministic for a given pair of Post IDs. With arming explicitly
+disabled, a successful mutation persists the active Set and removes its ledger
+field. Post aggregate keys are never passed as TTL targets.
 
 A missing User Set is cold only when its ledger field contains a valid deadline
 and Redis server time has reached that deadline. Missing/invalid ledger data,
@@ -62,15 +76,16 @@ The worker reads an active SQL User and then `post_reaction` in a
 It includes `liked=true` rows for the Like reaction and joins active Posts only
 to exclude deleted or physically missing Posts. It deliberately does not filter
 visibility, so a private but non-deleted Post retains its relation. Each page
-is added to a token-specific temporary Set containing `0`; the temporary key
-and its TTL are created atomically. A final Lua script checks the ledger, lock
-token, missing formal key, temporary sentinel, exact relation cardinality, and
-configured cap before checking each recovered Post's Redis deletion fence and
-atomically renaming the complete Set into place. This bounded final check closes
+reads `post_id` and `state_changed_at` and populates a token-specific temporary
+Set containing `0` plus an Order ZSET scored by the SQL timestamp in Unix
+microseconds. A final Lua script checks the ledger, lock token, missing formal
+keys, temporary sentinel, exact paired-index membership, relation cardinality,
+and configured cap before checking each recovered Post's Redis deletion fence
+and atomically renaming the complete Set and ZSET into place. This bounded final check closes
 the race where a Post was deleted after the repeatable-read SQL snapshot. A
 stale lock owner cannot replace a newer result. Failure removes only that
-owner's temporary key and lock; the formal Set remains absent. Restoring a
-relation Set never changes a Post Count/Version and does not emit Like events.
+owner's temporary keys and lock; the formal indexes remain absent. Restoring a
+relation never changes a Post Count/Version and does not emit Like events.
 The next original request is retried once after restore.
 
 The 72-hour interval is an operating assumption that normal Kafka projection
@@ -82,26 +97,30 @@ existing Kafka recovery and data repair procedures before relying on cold-user
 recovery. This feature adds no per-user Kafka offset barrier or second relation
 snapshot table.
 
-### Enable and migrate existing Sets
+### Existing-data compatibility boundary
 
-The migration command reads SQL UserIDs in ascending keyset pages and changes
-one Redis User Set at a time. It defaults to dry-run, reports a resume UserID,
-and never scans every Redis key or flushes a database. Its Lua migration keeps
-the later existing deadline when a Like mutation races the migration. A cold
-User Set is preserved; unexpected missing/malformed state is reported as an
-anomaly for review.
+This format assumes fresh Like relation data. A pre-existing User Set without
+its matching Order ZSET, mismatched membership, or more than 10,000 active
+relations fails closed. The service does not backfill timestamps, trim old
+relations, dual-read old keys, or reset Redis/PostgreSQL data. If old Like data
+is present, pause rollout and obtain separate authorization for a data reset.
+Do not run TTL arming against old-format Sets; the command validates paired
+indexes and refuses inconsistent state.
 
-1. Deploy the code with arming off and restore on. Confirm the Redis server is
-   the configured Redis 7 production image and that `post_reaction` projection
-   health is acceptable.
-2. Run the dry-run and inspect anomalies and counts:
+The existing `cmd/migrate-user-like-ttl` utility remains for TTL arming or
+rollback on already paired-format data. It changes deadlines only; it is not a
+relationship-format migration and cannot create the Order ZSET.
+
+1. Confirm the Redis database contains paired-format User relations and that
+   `post_reaction` projection health is acceptable.
+2. Run a dry-run and inspect anomalies and counts:
 
    ```powershell
    go run ./cmd/migrate-user-like-ttl --mode=arm --page-size=200
    ```
 
 3. Set `USER_LIKE_TTL_ARMING_ENABLED=true` consistently on every API instance.
-   Apply the keyset migration with the explicit confirmation:
+   Apply the deadline migration with the explicit confirmation:
 
    ```powershell
    go run ./cmd/migrate-user-like-ttl `
@@ -141,10 +160,10 @@ go run ./cmd/migrate-user-like-ttl `
   --confirm-all-api-instances-arming-disabled
 ```
 
-The rollback applies `PERSIST` only to an existing valid Set and removes that
-User's ledger field. A verified cold User remains cold with its ledger. If that
-User is restored while arming is off, the complete restored Set is persistent
-and its ledger field is removed. Keep restore enabled until all cold Users have
+The rollback applies `PERSIST` to an existing valid Set and its paired Order
+ZSET, then removes that User's ledger field. A verified cold User remains cold
+with its ledger. If that User is restored while arming is off, the complete
+restored relation indexes are persistent and its ledger field is removed. Keep restore enabled until all cold Users have
 recovered or have been separately handled. Do not restart any old arming
 processes during or after rollback.
 
@@ -159,14 +178,21 @@ keys/rows. The real Kafka end-to-end test additionally requires
 The opt-in memory/latency benchmark uses a separate `REDIS_BENCH_ADDR` and
 `POSTGRES_BENCH_DSN`. It defaults to dry-run, requires a nonzero empty Redis DB
 and a PostgreSQL database name containing `bench`, `test`, `integration`, or
-`disposable`, and never runs `FLUSHDB`. It creates the required 0/10/100/1000/
-10000 relation cohorts for persistent baseline, active Ledger, expired cold,
-and restored states, then removes only its generated Redis keys and drops only
-its uniquely named PostgreSQL schema. It reports Redis total `used_memory` and
-the change attributable to each newly populated scenario, User Set
-`MEMORY USAGE`, ledger growth, net cold memory change, hot Like/Unlike p95/p99,
-restore latency, projected row count, and the measured plan for the keyset
-query. The installed Set object footprint is the post-rename snapshot of the
+`disposable`, and never runs `FLUSHDB`. It creates the required
+0/100/1000/9999/10000 relation cohorts for persistent baseline, active Ledger, expired cold,
+and restored states, then removes only keys from the initially empty benchmark
+Redis DB with bounded `SCAN`/`UNLINK` passes, verifies that DB is empty again,
+and drops only its uniquely named PostgreSQL schema. It reports Redis total `used_memory` and
+the change attributable to each newly populated scenario, per-cohort User Set
+and Order ZSET `MEMORY USAGE`, ledger growth, net cold memory change, Like/Unlike
+p95/p99 at each cohort size, cap-eviction p95/p99 and their observed difference
+from a normal Like at 9,999 relations,
+restore elapsed time and final install Lua time (Redis SLOWLOG duration for
+the exact EVALSHA) for each cohort, Redis PING latency p50/p95/p99/max sampled
+every 10 ms during restore, projected row
+count, and the measured plan for the keyset query. Each restore cohort is one
+sample, so its elapsed time is a point measurement rather than a restore P95.
+The installed Set object footprint is the post-rename snapshot of the
 temporary Set; the concurrent `used_memory` sampling is the Redis-wide peak
 sample and can miss a brief allocator high-water mark. The benchmark uses a
 short injected expiry to avoid waiting 72 hours, so those cold-memory results
@@ -182,21 +208,25 @@ go run ./cmd/benchmark-user-like-ttl `
 ```
 
 The production Compose file pins Redis 7, whose Lua script replication mode
-supports the `TIME`-based atomic expiry/ledger update used here. Confirm any
-non-Compose Redis deployment is Redis 5 or newer, where effect-based script
-replication is the default.
+supports the `TIME`-based atomic expiry/ledger update used here. The isolated
+restore benchmark filters SLOWLOG by entry ID and exact EVALSHA hash, without
+resetting existing entries. It temporarily captures Redis SLOWLOG entries and
+restores the server's prior `slowlog-log-slower-than` and `slowlog-max-len`
+settings. Confirm any non-Compose Redis deployment is Redis 5 or newer, where
+effect-based script replication is the default.
 
 ## Deleted relation cleanup
 
 The worker scans SQL Users by ascending keyset pages of 64, then uses one
-`SSCAN COUNT 128` per pass for the current User Set. COUNT is a Redis hint;
+`SSCAN COUNT 128` per pass for the current User Set and validates matching
+Order ZSET members. COUNT is a Redis hint;
 over-returned members remain pending for later passes, while each SQL check and
 Lua deletion batch is capped at 128 IDs. Completing the last SQL page resets the
 cursor for the next sweep. A SQL error is returned as a retryable pass failure
 and does not reset the cursor. The SQL query treats soft-deleted and physically
-missing Posts as deleted. Lua removes a relation only while its Ready key is
-absent or `deleted`, preserves Ready `1`, and never removes sentinel `0` or
-updates any Post aggregate/event key.
+missing Posts as deleted. Lua removes a relation from both indexes only while
+its Ready key is absent or `deleted`, preserves Ready `1`, and never removes
+sentinel `0` or updates any Post aggregate/event key.
 
 A User key type error or missing sentinel is logged and skipped for the current
 sweep, so later Users are processed; a later sweep retries that User. A

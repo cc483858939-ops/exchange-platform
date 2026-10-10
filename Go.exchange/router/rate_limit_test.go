@@ -60,6 +60,8 @@ func TestSetupRouterWiresInitialRateLimitActions(t *testing.T) {
 		{http.MethodPost, "/api/posts/1/translation", `{"target_language":"zh-CN"}`},
 		{http.MethodPost, "/api/posts", `{"content":"new post"}`},
 		{http.MethodGet, "/api/posts/search?q=posts", ""},
+		{http.MethodPut, "/api/posts/1/like", ""},
+		{http.MethodDelete, "/api/posts/1/like", ""},
 	}
 	wantActions := []ratelimit.Action{
 		ratelimit.ActionRecommendations,
@@ -69,6 +71,8 @@ func TestSetupRouterWiresInitialRateLimitActions(t *testing.T) {
 		ratelimit.ActionTranslation,
 		ratelimit.ActionPostCreate,
 		ratelimit.ActionPostSearch,
+		ratelimit.ActionLikeMutation,
+		ratelimit.ActionLikeMutation,
 	}
 	for index, route := range requests {
 		request := httptest.NewRequest(route.method, route.path, strings.NewReader(route.body))
@@ -99,6 +103,54 @@ func TestSetupRouterExplicitlyDisablesApplicationRateLimit(t *testing.T) {
 	engine.ServeHTTP(response, request)
 	if response.Code == http.StatusServiceUnavailable && strings.Contains(response.Body.String(), `"code":"RATE_LIMIT_UNAVAILABLE"`) {
 		t.Fatalf("legacy router unexpectedly applied application rate limiting: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestLikeMutationFailsClosedWhenLimiterIsUnavailable(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	engine, err := SetupRouter(nil, rateLimitRouteVerifier{}, nil, nil, nil, newRouterRecommendationHandler(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{http.MethodPut, http.MethodDelete} {
+		request := httptest.NewRequest(method, "/api/posts/7/like", nil)
+		request.Header.Set("Authorization", "Bearer test-token")
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, request)
+		if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), `"code":"RATE_LIMIT_UNAVAILABLE"`) {
+			t.Fatalf("%s Like without limiter status=%d body=%s, want fail-closed 503", method, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestLikeMutationRequiresAuthenticationBeforeRateLimit(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	limiter := &rateLimitRouteLimiter{}
+	engine, err := SetupRouter(nil, rateLimitRouteVerifier{}, nil, nil, limiter, newRouterRecommendationHandler(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPut, "/api/posts/7/like", nil)
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || len(limiter.actions) != 0 {
+		t.Fatalf("unauthenticated Like status=%d actions=%#v body=%s", response.Code, limiter.actions, response.Body.String())
+	}
+}
+
+func TestLikeReadDoesNotUseMutationRateLimit(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	limiter := &rateLimitRouteLimiter{}
+	engine, err := SetupRouter(nil, rateLimitRouteVerifier{}, nil, nil, limiter, newRouterRecommendationHandler(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/posts/7/like", nil)
+	request.Header.Set("Authorization", "Bearer test-token")
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+	if response.Code == http.StatusTooManyRequests || response.Code == http.StatusServiceUnavailable || len(limiter.actions) != 0 {
+		t.Fatalf("GET Like unexpectedly used mutation limiter status=%d actions=%#v body=%s", response.Code, limiter.actions, response.Body.String())
 	}
 }
 

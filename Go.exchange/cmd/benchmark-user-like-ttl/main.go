@@ -28,7 +28,7 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 )
 
-var benchmarkRelationSizes = []int{0, 10, 100, 1000, 10000}
+var benchmarkRelationSizes = []int{0, 100, 1000, 9999, 10000}
 var benchmarkGroups = []string{"baseline", "ledger_active", "cold", "concurrent_restore"}
 
 type options struct {
@@ -161,9 +161,17 @@ func run(args []string, stdout io.Writer) error {
 	}
 	redisStoreSettings := lifecycleSettings(true, config.DefaultUserLikeSetTTL)
 	redisStore := likes.NewStoreWithUserLikeSettings(client, redisStoreSettings)
-	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cleanupCancel()
-	defer cleanupBenchmarkRedis(cleanupCtx, client, users, posts)
+	cleanupCompleted := false
+	defer func() {
+		if cleanupCompleted {
+			return
+		}
+		fallbackCtx, fallbackCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer fallbackCancel()
+		if err := cleanupBenchmarkRedis(fallbackCtx, client); err != nil {
+			log.Printf("ERROR: clean benchmark-owned Redis keys: %v", err)
+		}
+	}()
 	if err := seedBenchmarkPostKeys(ctx, client, posts); err != nil {
 		return err
 	}
@@ -174,6 +182,8 @@ func run(args []string, stdout io.Writer) error {
 	}
 	_, _ = fmt.Fprintf(stdout, "Redis version validated; DB=%d keys_before=%d used_memory_before=%d bytes\n", options.RedisDB, databaseSize, baseMemory)
 	userSets := make(map[string][]int64, len(benchmarkGroups))
+	userOrders := make(map[string][]int64, len(benchmarkGroups))
+	userRelations := make(map[string][]int64, len(benchmarkGroups))
 	for groupIndex, groupName := range benchmarkGroups[:3] {
 		arming := groupName != "baseline"
 		store := redisStore
@@ -190,11 +200,13 @@ func run(args []string, stdout io.Writer) error {
 				return fmt.Errorf("populate %s UserID=%d: %w", groupName, user.ID, err)
 			}
 		}
-		setBytes, err := benchmarkGroupSetBytes(ctx, client, groupUsers)
+		setBytes, orderBytes, relationBytes, err := benchmarkGroupRelationBytes(ctx, client, groupUsers)
 		if err != nil {
 			return err
 		}
 		userSets[groupName] = setBytes
+		userOrders[groupName] = orderBytes
+		userRelations[groupName] = relationBytes
 		memory, err := usedMemory(ctx, client)
 		if err != nil {
 			return err
@@ -203,11 +215,17 @@ func run(args []string, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintf(stdout, "Scenario=%s used_memory_total=%d scenario_used_memory_change=%d user_set_bytes_total=%d user_set_bytes_avg=%d ledger_hash_bytes=%d\n",
-			groupName, memory, memory-memoryBeforeScenario, sum(setBytes), average(setBytes), ledgerBytes)
+		_, _ = fmt.Fprintf(stdout, "Scenario=%s used_memory_total=%d scenario_used_memory_change=%d user_set_bytes_total=%d user_order_zset_bytes_total=%d paired_relation_bytes_total=%d paired_relation_bytes_avg=%d ledger_hash_bytes=%d\n",
+			groupName, memory, memory-memoryBeforeScenario, sum(setBytes), sum(orderBytes), sum(relationBytes), average(relationBytes), ledgerBytes)
+		for index, user := range groupUsers {
+			_, _ = fmt.Fprintf(stdout, "MemoryCohort scenario=%s relations=%d user_set_bytes=%d order_zset_bytes=%d paired_relation_bytes=%d\n",
+				groupName, user.Size, setBytes[index], orderBytes[index], relationBytes[index])
+		}
 		if groupName == "ledger_active" {
 			ledgerPerUser := float64(ledgerBytes) / float64(len(benchmarkRelationSizes))
-			_, _ = fmt.Fprintf(stdout, "Scenario=ledger_active ledger_increment_bytes_per_user=%.2f baseline_user_set_avg_bytes=%d\n", ledgerPerUser, average(userSets["baseline"]))
+			pairedBytes := sum(setBytes) + sum(orderBytes)
+			_, _ = fmt.Fprintf(stdout, "Scenario=ledger_active paired_plus_ledger_bytes_total=%d ledger_increment_bytes_per_user=%.2f baseline_paired_relation_bytes_avg=%d\n",
+				pairedBytes+ledgerBytes, ledgerPerUser, average(userRelations["baseline"]))
 		}
 	}
 
@@ -239,9 +257,27 @@ func run(args []string, stdout io.Writer) error {
 
 	restoreStore := likes.NewStoreWithUserLikeSettings(client, lifecycleSettings(true, config.DefaultUserLikeSetTTL))
 	lifecycle := likes.NewUserLikeLifecycle(restoreStore, db)
-	restoreTimes := make([]time.Duration, 0, len(coldUsers))
+	restoreScriptSHA, err := restoreStore.PrimeUserLikeRestoreFinalizeScript(ctx)
+	if err != nil {
+		return fmt.Errorf("prime restore finalization script for SLOWLOG measurement: %w", err)
+	}
+	restoreSlowlogConfig, err := beginRestoreSlowlogCapture(ctx, client)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := restoreSlowlogConfig(); err != nil {
+			log.Printf("ERROR: restore Redis SLOWLOG settings: %v", err)
+		}
+	}()
+	restoreDurationsBySize := make(map[int]time.Duration, len(coldUsers))
+	restoreFinalizeLuaBySize := make(map[int]time.Duration, len(coldUsers))
+	redisProbeTimes := make([]time.Duration, 0, 1024)
+	var probeMu sync.Mutex
+	var probeErr error
 	var restoreRows int64
 	var installedSetBytes int64
+	var installedOrderBytes int64
 	var peakMemory atomic.Int64
 	peakMemory.Store(coldAfterExpiry)
 	monitorCtx, stopMonitor := context.WithCancel(ctx)
@@ -254,6 +290,16 @@ func run(args []string, stdout io.Writer) error {
 			case <-monitorCtx.Done():
 				return
 			case <-time.After(10 * time.Millisecond):
+				probeStarted := time.Now()
+				pingErr := client.WithContext(monitorCtx).Ping().Err()
+				probeDuration := time.Since(probeStarted)
+				probeMu.Lock()
+				if pingErr != nil && probeErr == nil {
+					probeErr = pingErr
+				} else if pingErr == nil {
+					redisProbeTimes = append(redisProbeTimes, probeDuration)
+				}
+				probeMu.Unlock()
 				memory, err := usedMemory(monitorCtx, client)
 				if err == nil {
 					for current := peakMemory.Load(); memory > current && !peakMemory.CompareAndSwap(current, memory); current = peakMemory.Load() {
@@ -264,13 +310,31 @@ func run(args []string, stdout io.Writer) error {
 	}()
 	for _, user := range coldUsers {
 		counter.reset()
+		latestSlowlogID, err := latestRedisSlowlogID(ctx, client)
+		if err != nil {
+			stopMonitor()
+			monitor.Wait()
+			return fmt.Errorf("read Redis SLOWLOG baseline before restore cohort %d: %w", user.Size, err)
+		}
 		started := time.Now()
 		if err := lifecycle.RecoverIfCold(ctx, user.ID); err != nil {
 			stopMonitor()
 			monitor.Wait()
 			return fmt.Errorf("restore benchmark UserID=%d: %w", user.ID, err)
 		}
-		restoreTimes = append(restoreTimes, time.Since(started))
+		restoreDurationsBySize[user.Size] = time.Since(started)
+		slowlogEntries, err := client.WithContext(ctx).Do("SLOWLOG", "GET", 4096).Result()
+		if err != nil {
+			stopMonitor()
+			monitor.Wait()
+			return fmt.Errorf("read Redis SLOWLOG after restore cohort %d: %w", user.Size, err)
+		}
+		restoreFinalizeLuaBySize[user.Size], err = findSlowlogScriptDuration(slowlogEntries, restoreScriptSHA, latestSlowlogID)
+		if err != nil {
+			stopMonitor()
+			monitor.Wait()
+			return fmt.Errorf("measure restore finalization for cohort %d: %w", user.Size, err)
+		}
 		restoreRows += counter.rows.Load()
 		bytes, err := keyMemoryUsage(ctx, client, likes.UserLikesKey(user.ID))
 		if err != nil {
@@ -279,6 +343,13 @@ func run(args []string, stdout io.Writer) error {
 			return err
 		}
 		installedSetBytes += bytes
+		orderBytes, err := keyMemoryUsage(ctx, client, likes.UserLikesOrderKey(user.ID))
+		if err != nil {
+			stopMonitor()
+			monitor.Wait()
+			return err
+		}
+		installedOrderBytes += orderBytes
 		cardinality, err := client.WithContext(ctx).SCard(likes.UserLikesKey(user.ID)).Result()
 		if err != nil || cardinality != int64(user.Size+1) {
 			stopMonitor()
@@ -288,15 +359,32 @@ func run(args []string, stdout io.Writer) error {
 	}
 	stopMonitor()
 	monitor.Wait()
+	if err := restoreSlowlogConfig(); err != nil {
+		return fmt.Errorf("restore Redis SLOWLOG settings: %w", err)
+	}
+	probeMu.Lock()
+	latencyProbeErr := probeErr
+	probeMu.Unlock()
+	if latencyProbeErr != nil {
+		return fmt.Errorf("Redis latency probe during restore: %w", latencyProbeErr)
+	}
+	if len(redisProbeTimes) == 0 {
+		return errors.New("Redis latency probe collected no samples during restore")
+	}
 	restoredMemory, err := usedMemory(ctx, client)
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(stdout, "Scenario=restored used_memory=%d restored_user_set_bytes_total=%d restored_user_set_bytes_avg=%d pg_rows_returned=%d restore_duration_samples=%d restore_p50=%s restore_p95=%s restore_p99=%s redis_used_memory_peak_during_restore=%d\n",
-		restoredMemory, installedSetBytes, installedSetBytes/int64(len(coldUsers)), restoreRows, len(restoreTimes),
-		quantileDuration(restoreTimes, .50), quantileDuration(restoreTimes, .95), quantileDuration(restoreTimes, .99), peakMemory.Load())
-	_, _ = fmt.Fprintf(stdout, "MemoryComparison baseline_set_bytes_avg=%d ledger_active_set_bytes_avg=%d cold_net_memory_saved_bytes=%d restored_total_memory_change_from_cold=%d installed_set_bytes_are_the_restored_temporary_set_object_snapshot=true\n",
-		average(userSets["baseline"]), average(userSets["ledger_active"]), coldBeforeExpiry-coldAfterExpiry, restoredMemory-coldAfterExpiry)
+	_, _ = fmt.Fprintf(stdout, "Scenario=restored used_memory=%d restored_user_set_bytes_total=%d restored_order_zset_bytes_total=%d restored_paired_relation_bytes_total=%d pg_rows_returned=%d redis_used_memory_peak_during_restore=%d\n",
+		restoredMemory, installedSetBytes, installedOrderBytes, installedSetBytes+installedOrderBytes, restoreRows, peakMemory.Load())
+	for _, relationCount := range benchmarkRelationSizes {
+		_, _ = fmt.Fprintf(stdout, "RestoreCohort relations=%d total_duration=%s finalize_lua_duration=%s\n",
+			relationCount, restoreDurationsBySize[relationCount], restoreFinalizeLuaBySize[relationCount])
+	}
+	_, _ = fmt.Fprintf(stdout, "RedisProbeDuringRestore samples=%d p50=%s p95=%s p99=%s max=%s probe_interval=10ms\n",
+		len(redisProbeTimes), quantileDuration(redisProbeTimes, .50), quantileDuration(redisProbeTimes, .95), quantileDuration(redisProbeTimes, .99), quantileDuration(redisProbeTimes, 1))
+	_, _ = fmt.Fprintf(stdout, "MemoryComparison baseline_paired_relation_bytes_avg=%d ledger_active_paired_relation_bytes_avg=%d cold_net_memory_saved_bytes=%d restored_total_memory_change_from_cold=%d restored_set_bytes=%d restored_order_zset_bytes=%d\n",
+		average(userRelations["baseline"]), average(userRelations["ledger_active"]), coldBeforeExpiry-coldAfterExpiry, restoredMemory-coldAfterExpiry, average(userSets["cold"]), average(userOrders["cold"]))
 
 	if err := reportPostgresPlan(ctx, stdout, db, users); err != nil {
 		return err
@@ -304,11 +392,169 @@ func run(args []string, stdout io.Writer) error {
 	if err := benchmarkHotMutationLatency(ctx, stdout, client, users, options.HotOperationSamples); err != nil {
 		return err
 	}
+	if err := benchmarkCapEvictionLatency(ctx, stdout, client, users, posts, options.HotOperationSamples); err != nil {
+		return err
+	}
 	if err := benchmarkConcurrentRestoreQueryCount(ctx, stdout, client, db, counter, restoreStore, users, options.ExpireAfter); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(stdout, "Cleanup: only benchmark-owned User/Post/queue keys are deleted; no Redis database flush was issued. PostgreSQL benchmark schema is dropped on exit.")
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	cleanupErr := cleanupBenchmarkRedis(cleanupCtx, client)
+	cleanupCancel()
+	if cleanupErr != nil {
+		return fmt.Errorf("clean benchmark-owned Redis keys: %w", cleanupErr)
+	}
+	cleanupCompleted = true
+	_, err = fmt.Fprintln(stdout, "Cleanup: cleared the keys created in the initially empty dedicated benchmark Redis DB with SCAN/UNLINK; no Redis database flush was issued. PostgreSQL benchmark schema is dropped on exit.")
 	return err
+}
+
+func beginRestoreSlowlogCapture(ctx context.Context, client *redis.Client) (func() error, error) {
+	threshold, err := redisConfigValue(ctx, client, "slowlog-log-slower-than")
+	if err != nil {
+		return nil, fmt.Errorf("read Redis slowlog-log-slower-than: %w", err)
+	}
+	maxLen, err := redisConfigValue(ctx, client, "slowlog-max-len")
+	if err != nil {
+		return nil, fmt.Errorf("read Redis slowlog-max-len: %w", err)
+	}
+	configuredMaxLen, err := strconv.Atoi(maxLen)
+	if err != nil || configuredMaxLen < 0 {
+		return nil, fmt.Errorf("Redis slowlog-max-len has invalid value %q", maxLen)
+	}
+	if err := client.WithContext(ctx).ConfigSet("slowlog-log-slower-than", "0").Err(); err != nil {
+		return nil, fmt.Errorf("enable Redis SLOWLOG capture on the confirmed disposable benchmark server: %w", err)
+	}
+	if configuredMaxLen < 4096 {
+		if err := client.WithContext(ctx).ConfigSet("slowlog-max-len", "4096").Err(); err != nil {
+			restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			restoreErr := client.WithContext(restoreCtx).ConfigSet("slowlog-log-slower-than", threshold).Err()
+			cancel()
+			if restoreErr != nil {
+				return nil, fmt.Errorf("set Redis SLOWLOG capacity: %v; failed to restore slowlog-log-slower-than: %w", err, restoreErr)
+			}
+			return nil, fmt.Errorf("set Redis SLOWLOG capacity: %w", err)
+		}
+	}
+	var restored bool
+	return func() error {
+		if restored {
+			return nil
+		}
+		restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		var failures []string
+		if err := client.WithContext(restoreCtx).ConfigSet("slowlog-log-slower-than", threshold).Err(); err != nil {
+			failures = append(failures, "slowlog-log-slower-than: "+err.Error())
+		}
+		if err := client.WithContext(restoreCtx).ConfigSet("slowlog-max-len", maxLen).Err(); err != nil {
+			failures = append(failures, "slowlog-max-len: "+err.Error())
+		}
+		if len(failures) != 0 {
+			return fmt.Errorf("failed to restore Redis configuration (%s)", strings.Join(failures, "; "))
+		}
+		restored = true
+		return nil
+	}, nil
+}
+
+func redisConfigValue(ctx context.Context, client *redis.Client, name string) (string, error) {
+	values, err := client.WithContext(ctx).ConfigGet(name).Result()
+	if err != nil {
+		return "", err
+	}
+	if len(values) != 2 {
+		return "", fmt.Errorf("CONFIG GET %q returned %d values", name, len(values))
+	}
+	key, keyOK := redisReplyString(values[0])
+	value, valueOK := redisReplyString(values[1])
+	if !keyOK || key != name || !valueOK || value == "" {
+		return "", fmt.Errorf("CONFIG GET %q returned an invalid response", name)
+	}
+	return value, nil
+}
+
+func latestRedisSlowlogID(ctx context.Context, client *redis.Client) (int64, error) {
+	response, err := client.WithContext(ctx).Do("SLOWLOG", "GET", 1).Result()
+	if err != nil {
+		return 0, err
+	}
+	entries, ok := response.([]interface{})
+	if !ok {
+		return 0, fmt.Errorf("unexpected SLOWLOG GET response %T", response)
+	}
+	if len(entries) == 0 {
+		return 0, nil
+	}
+	entry, ok := entries[0].([]interface{})
+	if !ok || len(entry) < 1 {
+		return 0, errors.New("malformed latest Redis SLOWLOG entry")
+	}
+	entryID, ok := redisReplyInt64(entry[0])
+	if !ok || entryID < 0 {
+		return 0, errors.New("invalid latest Redis SLOWLOG entry ID")
+	}
+	return entryID, nil
+}
+
+func findSlowlogScriptDuration(response interface{}, scriptSHA string, afterID int64) (time.Duration, error) {
+	entries, ok := response.([]interface{})
+	if !ok {
+		return 0, fmt.Errorf("unexpected SLOWLOG GET response %T", response)
+	}
+	for _, rawEntry := range entries {
+		entry, ok := rawEntry.([]interface{})
+		if !ok || len(entry) < 4 {
+			continue
+		}
+		entryID, idOK := redisReplyInt64(entry[0])
+		if !idOK || entryID <= afterID {
+			continue
+		}
+		args, ok := entry[3].([]interface{})
+		if !ok || len(args) < 2 {
+			continue
+		}
+		command, commandOK := redisReplyString(args[0])
+		sha, shaOK := redisReplyString(args[1])
+		if !commandOK || !shaOK || !strings.EqualFold(command, "EVALSHA") || sha != scriptSHA {
+			continue
+		}
+		micros, ok := redisReplyInt64(entry[2])
+		if !ok || micros < 0 {
+			return 0, fmt.Errorf("invalid SLOWLOG duration for restore script: %v", entry[2])
+		}
+		return time.Duration(micros) * time.Microsecond, nil
+	}
+	return 0, fmt.Errorf("SLOWLOG contains no new EVALSHA entry for restore script %s", scriptSHA)
+}
+
+func redisReplyString(value interface{}) (string, bool) {
+	switch value := value.(type) {
+	case string:
+		return value, true
+	case []byte:
+		return string(value), true
+	default:
+		return "", false
+	}
+}
+
+func redisReplyInt64(value interface{}) (int64, bool) {
+	switch value := value.(type) {
+	case int64:
+		return value, true
+	case int:
+		return int64(value), true
+	case string:
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		return parsed, err == nil
+	case []byte:
+		parsed, err := strconv.ParseInt(string(value), 10, 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
 }
 
 func parseOptions(args []string) (options, error) {
@@ -481,7 +727,7 @@ func lifecycleSettings(arming bool, ttl time.Duration) config.UserLikeLifecycleC
 	return config.UserLikeLifecycleConfig{
 		ArmingEnabled: arming, RestoreEnabled: true, SetTTL: ttl,
 		RestoreLockTTL: 32 * time.Second, RestoreBatchSize: 500,
-		RestoreMaxRelations: 100000, RestoreRequestTimeout: 30 * time.Second,
+		RestoreMaxRelations: config.DefaultUserLikeRestoreMaxRelations, RestoreRequestTimeout: 30 * time.Second,
 		RestoreConcurrency: 8,
 	}
 }
@@ -491,19 +737,24 @@ func armBenchmarkShortTTL(ctx context.Context, client *redis.Client, userID uint
 local user_type = redis.call('TYPE', KEYS[1]).ok
 local ledger_type = redis.call('TYPE', KEYS[2]).ok
 if user_type ~= 'set' or ledger_type ~= 'hash' or redis.call('SISMEMBER', KEYS[1], '0') ~= 1 then return redis.error_reply('BENCH_USER_STATE_INVALID') end
+local order_type = redis.call('TYPE', KEYS[3]).ok
+if order_type ~= 'none' and order_type ~= 'zset' then return redis.error_reply('BENCH_USER_STATE_INVALID') end
+local active = redis.call('SCARD', KEYS[1]) - 1
+if active > 0 and (order_type ~= 'zset' or redis.call('ZCARD', KEYS[3]) ~= active) then return redis.error_reply('BENCH_USER_STATE_INVALID') end
 local now = redis.call('TIME')
 local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
 local expiry = now_ms + tonumber(ARGV[2])
 redis.call('PEXPIREAT', KEYS[1], expiry)
+if active > 0 then redis.call('PEXPIREAT', KEYS[3], expiry) end
 redis.call('HSET', KEYS[2], ARGV[1], tostring(expiry))
 return expiry
-`, []string{likes.UserLikesKey(userID), likes.UserLikesExpiryLedgerKey}, strconv.FormatUint(uint64(userID), 10), ttl.Milliseconds()).Err()
+`, []string{likes.UserLikesKey(userID), likes.UserLikesExpiryLedgerKey, likes.UserLikesOrderKey(userID)}, strconv.FormatUint(uint64(userID), 10), ttl.Milliseconds()).Err()
 }
 
 func waitForUserSetExpiry(ctx context.Context, client *redis.Client, userID uint, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		exists, err := client.WithContext(ctx).Exists(likes.UserLikesKey(userID)).Result()
+		exists, err := client.WithContext(ctx).Exists(likes.UserLikesKey(userID), likes.UserLikesOrderKey(userID)).Result()
 		if err != nil {
 			return err
 		}
@@ -511,7 +762,7 @@ func waitForUserSetExpiry(ctx context.Context, client *redis.Client, userID uint
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("timed out waiting for benchmark UserID %d Set expiry", userID)
+			return fmt.Errorf("timed out waiting for benchmark UserID %d paired relation expiry", userID)
 		}
 		select {
 		case <-ctx.Done():
@@ -521,16 +772,24 @@ func waitForUserSetExpiry(ctx context.Context, client *redis.Client, userID uint
 	}
 }
 
-func benchmarkGroupSetBytes(ctx context.Context, client *redis.Client, users []*benchmarkUser) ([]int64, error) {
-	result := make([]int64, 0, len(users))
+func benchmarkGroupRelationBytes(ctx context.Context, client *redis.Client, users []*benchmarkUser) ([]int64, []int64, []int64, error) {
+	setBytes := make([]int64, 0, len(users))
+	orderBytes := make([]int64, 0, len(users))
+	relationBytes := make([]int64, 0, len(users))
 	for _, user := range users {
-		bytes, err := keyMemoryUsage(ctx, client, likes.UserLikesKey(user.ID))
+		setUsage, err := keyMemoryUsage(ctx, client, likes.UserLikesKey(user.ID))
 		if err != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
-		result = append(result, bytes)
+		orderUsage, err := keyMemoryUsage(ctx, client, likes.UserLikesOrderKey(user.ID))
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		setBytes = append(setBytes, setUsage)
+		orderBytes = append(orderBytes, orderUsage)
+		relationBytes = append(relationBytes, setUsage+orderUsage)
 	}
-	return result, nil
+	return setBytes, orderBytes, relationBytes, nil
 }
 
 func keyMemoryUsage(ctx context.Context, client *redis.Client, key string) (int64, error) {
@@ -558,33 +817,111 @@ func usedMemory(ctx context.Context, client *redis.Client) (int64, error) {
 }
 
 func benchmarkHotMutationLatency(ctx context.Context, stdout io.Writer, client *redis.Client, groups [][]*benchmarkUser, sampleCount int) error {
-	var target *benchmarkUser
-	for _, user := range groups[1] {
-		if user.Size == 10 {
-			target = user
+	store := likes.NewStoreWithUserLikeSettings(client, lifecycleSettings(true, config.DefaultUserLikeSetTTL))
+	for _, relationCount := range []int{100, 1000, 9999, 10000} {
+		var target *benchmarkUser
+		for _, user := range groups[1] {
+			if user.Size == relationCount {
+				target = user
+				break
+			}
+		}
+		if target == nil || len(target.PostIDs) == 0 {
+			return fmt.Errorf("normal mutation benchmark User with %d relations was not found", relationCount)
+		}
+		likeTimes := make([]time.Duration, 0, sampleCount)
+		unlikeTimes := make([]time.Duration, 0, sampleCount)
+		for range sampleCount {
+			started := time.Now()
+			if _, err := store.Mutate(ctx, target.ID, target.PostIDs[0], false); err != nil {
+				return fmt.Errorf("benchmark normal Unlike at %d relations: %w", relationCount, err)
+			}
+			unlikeTimes = append(unlikeTimes, time.Since(started))
+			started = time.Now()
+			if _, err := store.Mutate(ctx, target.ID, target.PostIDs[0], true); err != nil {
+				return fmt.Errorf("benchmark normal Like at %d relations: %w", relationCount, err)
+			}
+			likeTimes = append(likeTimes, time.Since(started))
+		}
+		if _, err := fmt.Fprintf(stdout, "NormalMutation relation_count=%d samples_per_operation=%d like_p95=%s like_p99=%s unlike_p95=%s unlike_p99=%s\n",
+			relationCount, sampleCount, quantileDuration(likeTimes, .95), quantileDuration(likeTimes, .99), quantileDuration(unlikeTimes, .95), quantileDuration(unlikeTimes, .99)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func benchmarkCapEvictionLatency(ctx context.Context, stdout io.Writer, client *redis.Client, groups [][]*benchmarkUser, posts []benchmarkPostRow, sampleCount int) error {
+	var targetUser *benchmarkUser
+	for _, user := range groups[2] {
+		if user.Size == config.DefaultUserLikeRestoreMaxRelations {
+			targetUser = user
 			break
 		}
 	}
-	if target == nil || len(target.PostIDs) == 0 {
-		return errors.New("hot Like benchmark User fixture was not found")
+	if targetUser == nil || len(posts) == 0 {
+		return errors.New("10,000-relation cap eviction benchmark fixture was not found")
+	}
+	if len(targetUser.PostIDs) == 0 {
+		return errors.New("10,000-relation normal Like comparison fixture is empty")
+	}
+	targetPostID := posts[len(posts)-1].ID + 1
+	cleanup := func() {
+		post := strconv.FormatUint(uint64(targetPostID), 10)
+		pair := likes.BehaviorPair(targetUser.ID, targetPostID)
+		_ = client.Del(likes.ReadyKey(targetPostID), likes.CountKey(targetPostID), likes.VersionKey(targetPostID)).Err()
+		_ = client.SRem(likes.DirtyKey, post).Err()
+		_ = client.SRem(likes.RegistryKey, post).Err()
+		_ = client.ZRem(likes.ExpiryCandidatesKey, post).Err()
+		_ = client.HDel(likes.RecoverableVersionsKey, post).Err()
+		_ = client.SRem(likes.BehaviorDirtyKey, pair).Err()
+		_ = client.HDel(likes.BehaviorStateKey, pair).Err()
+	}
+	cleanup()
+	defer cleanup()
+	if err := client.WithContext(ctx).Set(likes.ReadyKey(targetPostID), "1", 0).Err(); err != nil {
+		return err
+	}
+	if err := client.WithContext(ctx).Set(likes.CountKey(targetPostID), "0", 0).Err(); err != nil {
+		return err
+	}
+	if err := client.WithContext(ctx).Set(likes.VersionKey(targetPostID), "0", 0).Err(); err != nil {
+		return err
 	}
 	store := likes.NewStoreWithUserLikeSettings(client, lifecycleSettings(true, config.DefaultUserLikeSetTTL))
-	likeTimes := make([]time.Duration, 0, sampleCount)
-	unlikeTimes := make([]time.Duration, 0, sampleCount)
+	evictionTimes := make([]time.Duration, 0, sampleCount)
+	normalLikeTimes := make([]time.Duration, 0, sampleCount)
+	normalPostID := targetUser.PostIDs[0]
 	for range sampleCount {
 		started := time.Now()
-		if _, err := store.Mutate(ctx, target.ID, target.PostIDs[0], false); err != nil {
-			return fmt.Errorf("benchmark hot Unlike: %w", err)
+		result, err := store.Mutate(ctx, targetUser.ID, targetPostID, true)
+		evictionTimes = append(evictionTimes, time.Since(started))
+		if err != nil {
+			return fmt.Errorf("benchmark cap eviction mutation: %w", err)
 		}
-		unlikeTimes = append(unlikeTimes, time.Since(started))
+		if !result.Changed || result.EvictedPostID == 0 || result.ActiveRelations != int64(config.DefaultUserLikeRestoreMaxRelations) {
+			return fmt.Errorf("cap eviction result=%+v, expected oldest relation replaced at 10,000", result)
+		}
+		if _, err := store.Mutate(ctx, targetUser.ID, targetPostID, false); err != nil {
+			return fmt.Errorf("restore cap headroom after benchmark eviction: %w", err)
+		}
+		if _, err := store.Mutate(ctx, targetUser.ID, result.EvictedPostID, true); err != nil {
+			return fmt.Errorf("restore evicted relation after benchmark sample: %w", err)
+		}
+		if normalUnlike, err := store.Mutate(ctx, targetUser.ID, normalPostID, false); err != nil || !normalUnlike.Changed {
+			return fmt.Errorf("create normal 9999-relation Like comparison headroom: result=%+v err=%v", normalUnlike, err)
+		}
 		started = time.Now()
-		if _, err := store.Mutate(ctx, target.ID, target.PostIDs[0], true); err != nil {
-			return fmt.Errorf("benchmark hot Like: %w", err)
+		normalLike, err := store.Mutate(ctx, targetUser.ID, normalPostID, true)
+		normalLikeTimes = append(normalLikeTimes, time.Since(started))
+		if err != nil || !normalLike.Changed || normalLike.EvictedPostID != 0 || normalLike.ActiveRelations != int64(config.DefaultUserLikeRestoreMaxRelations) {
+			return fmt.Errorf("benchmark normal Like at 9999 relations: result=%+v err=%v", normalLike, err)
 		}
-		likeTimes = append(likeTimes, time.Since(started))
 	}
-	_, err := fmt.Fprintf(stdout, "HotPath samples_per_operation=%d like_p95=%s like_p99=%s unlike_p95=%s unlike_p99=%s\n",
-		sampleCount, quantileDuration(likeTimes, .95), quantileDuration(likeTimes, .99), quantileDuration(unlikeTimes, .95), quantileDuration(unlikeTimes, .99))
+	capP95, capP99 := quantileDuration(evictionTimes, .95), quantileDuration(evictionTimes, .99)
+	normalP95, normalP99 := quantileDuration(normalLikeTimes, .95), quantileDuration(normalLikeTimes, .99)
+	_, err := fmt.Fprintf(stdout, "CapEviction relation_count=10000 samples=%d p95=%s p99=%s normal_like_from_9999_p95=%s normal_like_from_9999_p99=%s p95_extra_over_normal=%s p99_extra_over_normal=%s\n",
+		sampleCount, capP95, capP99, normalP95, normalP99, capP95-normalP95, capP99-normalP99)
 	return err
 }
 
@@ -664,52 +1001,46 @@ ORDER BY reaction.post_id ASC LIMIT 500`, large.ID, models.PostReactionLike).Sca
 	return nil
 }
 
-func cleanupBenchmarkRedis(ctx context.Context, client *redis.Client, groups [][]*benchmarkUser, posts []benchmarkPostRow) {
+func cleanupBenchmarkRedis(ctx context.Context, client *redis.Client) error {
 	if client == nil {
-		return
+		return errors.New("Redis client is not initialized")
 	}
-	pipe := client.WithContext(ctx).Pipeline()
-	queued := 0
-	flush := func() {
-		if queued == 0 {
-			return
-		}
-		_, _ = pipe.ExecContext(ctx)
-		pipe = client.WithContext(ctx).Pipeline()
-		queued = 0
-	}
-	for _, group := range groups {
-		for _, user := range group {
-			uid := strconv.FormatUint(uint64(user.ID), 10)
-			pipe.Del(likes.UserLikesKey(user.ID), likes.UserLikesRestoreLockKey(user.ID))
-			pipe.HDel(likes.UserLikesExpiryLedgerKey, uid)
-			queued += 2
-			for _, postID := range user.PostIDs {
-				pair := likes.BehaviorPair(user.ID, postID)
-				post := strconv.FormatUint(uint64(postID), 10)
-				pipe.SRem(likes.DirtyKey, post)
-				pipe.SRem(likes.RegistryKey, post)
-				pipe.ZRem(likes.ExpiryCandidatesKey, post)
-				pipe.HDel(likes.RecoverableVersionsKey, post)
-				pipe.SRem(likes.BehaviorDirtyKey, pair)
-				pipe.HDel(likes.BehaviorStateKey, pair)
-				pipe.ZRem(likes.BehaviorProcessingKey, pair)
-				pipe.HDel(likes.BehaviorClaimsKey, pair)
-				queued += 8
-				if queued >= 2000 {
-					flush()
+	for pass := 1; pass <= 8; pass++ {
+		var cursor uint64
+		for {
+			keys, nextCursor, err := client.WithContext(ctx).Scan(cursor, "*", 5000).Result()
+			if err != nil {
+				return fmt.Errorf("scan benchmark Redis DB during cleanup: %w", err)
+			}
+			if len(keys) > 0 {
+				if err := client.WithContext(ctx).Unlink(keys...).Err(); err != nil {
+					return fmt.Errorf("unlink benchmark Redis key batch of %d: %w", len(keys), err)
 				}
 			}
+			cursor = nextCursor
+			if cursor == 0 {
+				break
+			}
+		}
+		remaining, err := client.WithContext(ctx).DBSize().Result()
+		if err != nil {
+			return fmt.Errorf("check benchmark Redis DB cleanup pass %d: %w", pass, err)
+		}
+		if remaining == 0 {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("benchmark Redis DB still has %d keys after cleanup pass %d: %w", remaining, pass, err)
 		}
 	}
-	for _, post := range posts {
-		pipe.Del(likes.ReadyKey(post.ID), likes.CountKey(post.ID), likes.VersionKey(post.ID), likes.RebuildTokenKey(post.ID))
-		queued++
-		if queued >= 2000 {
-			flush()
-		}
+	remaining, err := client.WithContext(ctx).DBSize().Result()
+	if err != nil {
+		return fmt.Errorf("verify benchmark Redis cleanup: %w", err)
 	}
-	flush()
+	if remaining != 0 {
+		return fmt.Errorf("benchmark Redis DB still has %d keys after 8 SCAN/UNLINK passes", remaining)
+	}
+	return nil
 }
 
 func sum(values []int64) int64 {

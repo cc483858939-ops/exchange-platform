@@ -48,6 +48,9 @@ var (
 	userLikeRestoreDuration                      = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_user_like_restore_duration_seconds", Help: "User Like Set restore duration.", Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30}})
 	userLikeRestoreRelations                     = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_user_like_restore_relations", Help: "Post relations loaded by one User Like Set restore.", Buckets: []float64{0, 1, 10, 100, 500, 1000, 5000, 10000, 100000}})
 	userLikeRestoreInflight                      = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_user_like_restore_inflight", Help: "Current bounded number of active User Like Set restores."})
+	userLikeCapEvents                            = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_user_like_cap_events_total", Help: "User Like cap and order-index events by bounded event."}, []string{"event"})
+	userLikeActiveRelations                      = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_user_like_active_relations", Help: "Active User Like relations after successful mutations, without user labels.", Buckets: []float64{0, 1, 10, 100, 1000, 5000, 9999, 10000}})
+	userLikeEvictionDuration                     = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_user_like_eviction_duration_seconds", Help: "Duration of atomic oldest-like eviction and replacement.", Buckets: prometheus.DefBuckets})
 	recommendationTelemetryEvents                = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_telemetry_events_total", Help: "Recommendation telemetry events by ingestion outcome."}, []string{"status", "event_type", "reason"})
 	recommendationTelemetryBatchSize             = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_telemetry_batch_size", Help: "Number of recommendation telemetry events per ingestion request.", Buckets: []float64{1, 5, 10, 20, 50}})
 	recommendationTelemetryIngestDuration        = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_telemetry_ingest_duration_seconds", Help: "Recommendation telemetry ingestion latency in seconds.", Buckets: prometheus.DefBuckets})
@@ -99,7 +102,7 @@ var (
 func init() {
 	registry.MustRegister(
 		httpRequestsTotal, httpRequestDuration, recommendationHTTPDuration, postEmbeddingEvents, postEmbeddingFailures, postEmbeddingPublishFailures, postEmbeddingProcessingDuration, kafkaConsumerRecovery,
-		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxRowsLastSuccess, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, consumerInboxRowsLastSuccess, notificationProjectionFailures, notificationProjectionLatency, likePipelineDepth, likePipelineDepthLastSuccess, likeClaimDuration, likeQueueOperations, likeLifecycleEvents, userLikeRelationsRemoved, userLikeCleanupBatchUsers, userLikeCleanupBatchRelations, userLikeCleanupBatchRemoved, userLikeCleanupBatchDuration, userLikeCleanupCycleDuration, userLikeCleanupLastCycle, userLikeTTLEvents, userLikeRestoreResults, userLikeRestoreDuration, userLikeRestoreRelations, userLikeRestoreInflight,
+		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxRowsLastSuccess, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, consumerInboxRowsLastSuccess, notificationProjectionFailures, notificationProjectionLatency, likePipelineDepth, likePipelineDepthLastSuccess, likeClaimDuration, likeQueueOperations, likeLifecycleEvents, userLikeRelationsRemoved, userLikeCleanupBatchUsers, userLikeCleanupBatchRelations, userLikeCleanupBatchRemoved, userLikeCleanupBatchDuration, userLikeCleanupCycleDuration, userLikeCleanupLastCycle, userLikeTTLEvents, userLikeRestoreResults, userLikeRestoreDuration, userLikeRestoreRelations, userLikeRestoreInflight, userLikeCapEvents, userLikeActiveRelations, userLikeEvictionDuration,
 		recommendationTelemetryEvents, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests,
 		recommendationRequestLogFailures, recommendationTrackingResults,
@@ -175,6 +178,23 @@ func ObserveUserLikeRestore(duration time.Duration, relations int) {
 
 func AddUserLikeRestoreInflight(delta int) {
 	userLikeRestoreInflight.Add(float64(delta))
+}
+
+func RecordUserLikeCapEvent(event string) {
+	switch event {
+	case "cap_reached", "eviction_success", "eviction_failed", "order_index_missing", "order_index_inconsistent", "restore_over_cap":
+		userLikeCapEvents.WithLabelValues(event).Inc()
+	}
+}
+
+func ObserveUserLikeActiveRelations(count int64) {
+	if count >= 0 {
+		userLikeActiveRelations.Observe(float64(count))
+	}
+}
+
+func ObserveUserLikeEvictionDuration(duration time.Duration) {
+	userLikeEvictionDuration.Observe(duration.Seconds())
 }
 
 func RecordUserLikeRelationsRemoved(count int64) {

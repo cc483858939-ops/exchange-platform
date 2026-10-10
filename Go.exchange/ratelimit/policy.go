@@ -67,6 +67,14 @@ var Policies = map[Action]Policy{
 			{Limit: 120, Window: time.Minute},
 		},
 	},
+	ActionLikeMutation: {
+		Action: ActionLikeMutation,
+		Rules: []Rule{
+			{Limit: 100, Window: 10 * time.Second},
+			{Limit: 600, Window: time.Minute},
+			{Limit: 20000, Window: 24 * time.Hour},
+		},
+	},
 }
 
 func PolicyFor(action Action) (Policy, error) {

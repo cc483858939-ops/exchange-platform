@@ -14,6 +14,7 @@ func TestPoliciesUseExpectedInitialRules(t *testing.T) {
 		ActionMediaUpload:     {{10, time.Minute}, {100, 24 * time.Hour}},
 		ActionTranslation:     {{20, time.Minute}, {200, time.Hour}},
 		ActionRecommendations: {{120, time.Minute}},
+		ActionLikeMutation:    {{100, 10 * time.Second}, {600, time.Minute}, {20000, 24 * time.Hour}},
 	}
 	if err := ValidatePolicies(); err != nil {
 		t.Fatal(err)

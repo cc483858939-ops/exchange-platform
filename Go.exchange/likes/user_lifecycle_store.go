@@ -13,10 +13,29 @@ import (
 
 const maxUserLikeReadScriptBatch = 100
 
+// PrimeUserLikeRestoreFinalizeScript loads the atomic restore-install script
+// into Redis and returns its SHA, allowing isolated benchmarks to correlate
+// the exact EVALSHA entry in Redis SLOWLOG.
+func (s *Store) PrimeUserLikeRestoreFinalizeScript(ctx context.Context) (string, error) {
+	if s == nil || s.client == nil {
+		return "", errors.New("redis is not initialized")
+	}
+	sha, err := finishUserLikeRestoreScript.Load(s.client.WithContext(ctx)).Result()
+	if err != nil {
+		return "", err
+	}
+	return sha, nil
+}
+
 type UserLikeRedisState struct {
 	Status    string
 	ExpiresAt time.Time
 	TTL       time.Duration
+}
+
+type userLikeRestoreRelation struct {
+	PostID         uint
+	StateChangedAt time.Time
 }
 
 func boolIntString(value bool) string {
@@ -42,7 +61,7 @@ func (s *Store) readUserLikeMembers(ctx context.Context, userID uint, postIDs []
 			args = append(args, strconv.FormatUint(uint64(postID), 10))
 		}
 		value, err := readUserLikeMembersScript.Run(
-			s.client.WithContext(ctx), []string{UserLikesKey(userID)}, args...,
+			s.client.WithContext(ctx), []string{UserLikesKey(userID), UserLikesOrderKey(userID)}, args...,
 		).Result()
 		if err != nil {
 			return nil, mapScriptError(err)
@@ -67,7 +86,7 @@ func (s *Store) InspectUserLikeState(ctx context.Context, userID uint) (UserLike
 	}
 	value, err := inspectUserLikeStateScript.Run(
 		s.client.WithContext(ctx),
-		[]string{UserLikesKey(userID), UserLikesExpiryLedgerKey, UserLikesRestoreLockKey(userID)},
+		[]string{UserLikesKey(userID), UserLikesExpiryLedgerKey, UserLikesRestoreLockKey(userID), UserLikesOrderKey(userID)},
 		userID,
 	).Result()
 	if err != nil {
@@ -116,7 +135,7 @@ func (s *Store) IsUserLikeCold(ctx context.Context, userID uint) (bool, error) {
 func (s *Store) beginUserLikeRestore(ctx context.Context, userID uint, token string, lockTTL time.Duration) (string, string, error) {
 	value, err := beginUserLikeRestoreScript.Run(
 		s.client.WithContext(ctx),
-		[]string{UserLikesKey(userID), UserLikesExpiryLedgerKey, UserLikesRestoreLockKey(userID)},
+		[]string{UserLikesKey(userID), UserLikesExpiryLedgerKey, UserLikesRestoreLockKey(userID), UserLikesOrderKey(userID)},
 		userID, token, lockTTL.Milliseconds(),
 	).Result()
 	if err != nil {
@@ -131,9 +150,10 @@ func (s *Store) beginUserLikeRestore(ctx context.Context, userID uint, token str
 
 func (s *Store) createUserLikeRestoreTemp(ctx context.Context, userID uint, token, expectedExpiry string, ttl time.Duration) (string, error) {
 	key := UserLikesRestoreTempKey(userID, token)
+	orderKey := UserLikesRestoreOrderTempKey(userID, token)
 	if err := createUserLikeRestoreTempScript.Run(
 		s.client.WithContext(ctx),
-		[]string{UserLikesKey(userID), UserLikesExpiryLedgerKey, UserLikesRestoreLockKey(userID), key},
+		[]string{UserLikesKey(userID), UserLikesExpiryLedgerKey, UserLikesRestoreLockKey(userID), key, UserLikesOrderKey(userID), orderKey},
 		userID, token, expectedExpiry, ttl.Milliseconds(),
 	).Err(); err != nil {
 		return "", mapScriptError(err)
@@ -141,18 +161,19 @@ func (s *Store) createUserLikeRestoreTemp(ctx context.Context, userID uint, toke
 	return key, nil
 }
 
-func (s *Store) addUserLikeRestoreTempMembers(ctx context.Context, key string, postIDs []uint) error {
-	if len(postIDs) == 0 {
+func (s *Store) addUserLikeRestoreTempMembers(ctx context.Context, setKey, orderKey string, relations []userLikeRestoreRelation) error {
+	if len(relations) == 0 {
 		return nil
 	}
-	members := make([]interface{}, len(postIDs))
-	for index, postID := range postIDs {
-		if postID == 0 {
+	args := make([]interface{}, 0, len(relations)*2)
+	for _, relation := range relations {
+		if relation.PostID == 0 || relation.StateChangedAt.IsZero() {
 			return ErrUserLikeRecoveryUnsafe
 		}
-		members[index] = strconv.FormatUint(uint64(postID), 10)
+		args = append(args, strconv.FormatUint(uint64(relation.PostID), 10), relation.StateChangedAt.UnixMicro())
 	}
-	return mapScriptError(s.client.WithContext(ctx).SAdd(key, members...).Err())
+	_, err := appendUserLikeRestoreTempScript.Run(s.client.WithContext(ctx), []string{setKey, orderKey}, args...).Result()
+	return mapScriptError(err)
 }
 
 func (s *Store) finishUserLikeRestore(
@@ -164,7 +185,7 @@ func (s *Store) finishUserLikeRestore(
 ) (string, error) {
 	value, err := finishUserLikeRestoreScript.Run(
 		s.client.WithContext(ctx),
-		[]string{UserLikesKey(userID), UserLikesExpiryLedgerKey, UserLikesRestoreLockKey(userID), tempKey},
+		[]string{UserLikesKey(userID), UserLikesExpiryLedgerKey, UserLikesRestoreLockKey(userID), tempKey, UserLikesOrderKey(userID), UserLikesRestoreOrderTempKey(userID, lockToken)},
 		userID, lockToken, expectedExpiry, relationCount, settings.RestoreMaxRelations,
 		boolIntString(settings.ArmingEnabled), settings.SetTTL.Milliseconds(), boolIntString(settings.RestoreEnabled),
 	).Result()
@@ -185,7 +206,7 @@ func (s *Store) releaseUserLikeRestore(ctx context.Context, userID uint, token, 
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 500*time.Millisecond)
 	defer cancel()
 	if tempKey != "" {
-		_ = s.client.WithContext(cleanupCtx).Del(tempKey).Err()
+		_ = s.client.WithContext(cleanupCtx).Del(tempKey, UserLikesRestoreOrderTempKey(userID, token)).Err()
 	}
 	_ = releaseUserLikeRestoreLockScript.Run(
 		s.client.WithContext(cleanupCtx), []string{UserLikesRestoreLockKey(userID)}, token,
@@ -202,7 +223,7 @@ func (s *Store) MigrateUserLikeTTL(ctx context.Context, userID uint) (string, er
 
 func (s *Store) migrateUserLikeTTL(ctx context.Context, userID uint, ttl time.Duration) (string, error) {
 	value, err := migrateUserLikeTTLScript.Run(
-		s.client.WithContext(ctx), []string{UserLikesKey(userID), UserLikesExpiryLedgerKey},
+		s.client.WithContext(ctx), []string{UserLikesKey(userID), UserLikesExpiryLedgerKey, UserLikesOrderKey(userID)},
 		userID, ttl.Milliseconds(),
 	).Result()
 	if err != nil {
@@ -220,7 +241,7 @@ func (s *Store) migrateUserLikeTTL(ctx context.Context, userID uint, ttl time.Du
 
 func (s *Store) RollbackUserLikeTTL(ctx context.Context, userID uint) (string, error) {
 	value, err := rollbackUserLikeTTLScript.Run(
-		s.client.WithContext(ctx), []string{UserLikesKey(userID), UserLikesExpiryLedgerKey}, userID,
+		s.client.WithContext(ctx), []string{UserLikesKey(userID), UserLikesExpiryLedgerKey, UserLikesOrderKey(userID)}, userID,
 	).Result()
 	if err != nil {
 		return "", mapScriptError(err)
@@ -237,7 +258,7 @@ func (s *Store) CleanupOrphanUserLikeLedger(ctx context.Context, userID uint, ex
 		return ErrUserLikeRecoveryUnsafe
 	}
 	return mapScriptError(cleanupOrphanUserLikeLedgerScript.Run(
-		s.client.WithContext(ctx), []string{UserLikesKey(userID), UserLikesExpiryLedgerKey},
+		s.client.WithContext(ctx), []string{UserLikesKey(userID), UserLikesExpiryLedgerKey, UserLikesOrderKey(userID)},
 		userID, expectedExpiry,
 	).Err())
 }
@@ -247,6 +268,6 @@ func (s *Store) CleanupUncommittedUserLikeInitialization(ctx context.Context, us
 		return errors.New("invalid User Like initialization cleanup request")
 	}
 	return mapScriptError(cleanupUncommittedUserLikeInitScript.Run(
-		s.client.WithContext(ctx), []string{UserLikesKey(userID), UserLikesExpiryLedgerKey}, userID,
+		s.client.WithContext(ctx), []string{UserLikesKey(userID), UserLikesExpiryLedgerKey, UserLikesOrderKey(userID)}, userID,
 	).Err())
 }

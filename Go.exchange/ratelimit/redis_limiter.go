@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -59,6 +60,7 @@ return {1, effective_index, effective_remaining}
 type RedisLimiter struct {
 	client    *redis.Client
 	now       func() time.Time
+	policies  map[Action]Policy
 	runScript func(context.Context, []string, []interface{}) (int64, int64, int64, error)
 }
 
@@ -69,7 +71,48 @@ func NewRedisLimiter(client *redis.Client) (Limiter, error) {
 	if err := ValidatePolicies(); err != nil {
 		return nil, fmt.Errorf("validate application rate-limit policies: %w", err)
 	}
-	return &RedisLimiter{client: client, now: time.Now}, nil
+	policies := make(map[Action]Policy, len(Policies))
+	for action := range Policies {
+		policy, err := PolicyFor(action)
+		if err != nil {
+			return nil, fmt.Errorf("load application rate-limit policy %q: %w", action, err)
+		}
+		policies[action] = policy
+	}
+	likePolicy, err := likeMutationPolicyFromEnvironment()
+	if err != nil {
+		return nil, err
+	}
+	if err := validatePolicy(likePolicy); err != nil {
+		return nil, fmt.Errorf("validate Like mutation rate-limit policy: %w", err)
+	}
+	policies[ActionLikeMutation] = likePolicy
+	return &RedisLimiter{client: client, now: time.Now, policies: policies}, nil
+}
+
+func likeMutationPolicyFromEnvironment() (Policy, error) {
+	values := []struct {
+		name   string
+		limit  int64
+		window time.Duration
+	}{
+		{name: "LIKE_MUTATION_RATE_10S", limit: 100, window: 10 * time.Second},
+		{name: "LIKE_MUTATION_RATE_1M", limit: 600, window: time.Minute},
+		{name: "LIKE_MUTATION_RATE_24H", limit: 20000, window: 24 * time.Hour},
+	}
+	rules := make([]Rule, 0, len(values))
+	for _, value := range values {
+		limit := value.limit
+		if raw, exists := os.LookupEnv(value.name); exists {
+			parsed, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+			if err != nil || parsed <= 0 || parsed > 1000000 {
+				return Policy{}, fmt.Errorf("%s must be an integer between 1 and 1000000", value.name)
+			}
+			limit = parsed
+		}
+		rules = append(rules, Rule{Limit: limit, Window: value.window})
+	}
+	return Policy{Action: ActionLikeMutation, Rules: rules}, nil
 }
 
 func (l *RedisLimiter) Allow(ctx context.Context, input Input) (Decision, error) {
@@ -77,7 +120,7 @@ func (l *RedisLimiter) Allow(ctx context.Context, input Input) (Decision, error)
 		metrics.RecordRateLimitError(string(input.Action))
 		return Decision{}, errors.New("application rate limiter is unavailable")
 	}
-	policy, err := PolicyFor(input.Action)
+	policy, err := l.policyFor(input.Action)
 	if err != nil {
 		metrics.RecordRateLimitError(string(input.Action))
 		return Decision{}, err
@@ -151,6 +194,21 @@ func (l *RedisLimiter) Allow(ctx context.Context, input Input) (Decision, error)
 		metrics.RecordRateLimitDecision(string(input.Action), "denied")
 	}
 	return decision, nil
+}
+
+func (l *RedisLimiter) policyFor(action Action) (Policy, error) {
+	if l != nil && l.policies != nil {
+		policy, ok := l.policies[action]
+		if !ok {
+			return Policy{}, fmt.Errorf("%w: %q", ErrUnknownAction, action)
+		}
+		if err := validatePolicy(policy); err != nil {
+			return Policy{}, err
+		}
+		policy.Rules = append([]Rule(nil), policy.Rules...)
+		return policy, nil
+	}
+	return PolicyFor(action)
 }
 
 func runFixedWindowScript(ctx context.Context, client *redis.Client, keys []string, args []interface{}) (int64, int64, int64, error) {

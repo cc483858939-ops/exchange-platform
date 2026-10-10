@@ -3,6 +3,8 @@ package ratelimit
 import (
 	"context"
 	"errors"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,6 +98,7 @@ func TestNewRedisLimiterRejectsInvalidPolicyAtConstruction(t *testing.T) {
 }
 
 func TestNewRedisLimiterConstructsWithoutRedisCall(t *testing.T) {
+	clearLikeMutationRateEnvironment(t)
 	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:0"})
 	defer client.Close()
 	limiter, err := NewRedisLimiter(client)
@@ -104,6 +107,56 @@ func TestNewRedisLimiterConstructsWithoutRedisCall(t *testing.T) {
 	}
 	if limiter == nil {
 		t.Fatal("NewRedisLimiter returned a nil limiter")
+	}
+}
+
+func TestNewRedisLimiterValidatesAndSnapshotsLikeMutationQuotas(t *testing.T) {
+	t.Setenv("LIKE_MUTATION_RATE_10S", "17")
+	t.Setenv("LIKE_MUTATION_RATE_1M", "180")
+	t.Setenv("LIKE_MUTATION_RATE_24H", "5000")
+	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:0"})
+	defer client.Close()
+	rawLimiter, err := NewRedisLimiter(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limiter := rawLimiter.(*RedisLimiter)
+	policy := limiter.policies[ActionLikeMutation]
+	if len(policy.Rules) != 3 || policy.Rules[0] != (Rule{Limit: 17, Window: 10 * time.Second}) ||
+		policy.Rules[1] != (Rule{Limit: 180, Window: time.Minute}) || policy.Rules[2] != (Rule{Limit: 5000, Window: 24 * time.Hour}) {
+		t.Fatalf("configured Like mutation policy=%+v", policy)
+	}
+	previous := Policies[ActionLikeMutation]
+	Policies[ActionLikeMutation] = Policy{Action: ActionLikeMutation, Rules: []Rule{{Limit: 1, Window: time.Second}}}
+	t.Cleanup(func() { Policies[ActionLikeMutation] = previous })
+	limiter.runScript = func(_ context.Context, _ []string, args []interface{}) (int64, int64, int64, error) {
+		if args[0] != int64(17) || args[3] != int64(180) || args[6] != int64(5000) {
+			t.Fatalf("Like mutation hot path did not use startup snapshot: %#v", args)
+		}
+		return 1, 1, 16, nil
+	}
+	if _, err := limiter.Allow(context.Background(), Input{Subject: "77", Action: ActionLikeMutation}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNewRedisLimiterRejectsInvalidLikeMutationQuotaAtStartup(t *testing.T) {
+	clearLikeMutationRateEnvironment(t)
+	t.Setenv("LIKE_MUTATION_RATE_24H", "1000001")
+	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:0"})
+	defer client.Close()
+	if _, err := NewRedisLimiter(client); err == nil || !strings.Contains(err.Error(), "LIKE_MUTATION_RATE_24H") {
+		t.Fatalf("NewRedisLimiter error=%v, want invalid 24h quota", err)
+	}
+}
+
+func clearLikeMutationRateEnvironment(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{"LIKE_MUTATION_RATE_10S", "LIKE_MUTATION_RATE_1M", "LIKE_MUTATION_RATE_24H"} {
+		t.Setenv(key, "")
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

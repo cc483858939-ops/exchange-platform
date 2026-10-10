@@ -118,7 +118,7 @@ func (l *UserLikeLifecycle) RecoverIfCold(ctx context.Context, userID uint) erro
 	defer l.store.releaseUserLikeRestore(requestCtx, userID, token, tempKey)
 	metrics.RecordUserLikeRestoreResult("started")
 
-	if err := l.loadRelationsIntoTemp(requestCtx, userID, tempKey, settings, &relationCount); err != nil {
+	if err := l.loadRelationsIntoTemp(requestCtx, userID, tempKey, UserLikesRestoreOrderTempKey(userID, token), settings, &relationCount); err != nil {
 		result = classifyRestoreFailure(err)
 		metrics.RecordUserLikeRestoreResult(result)
 		metrics.ObserveUserLikeRestore(time.Since(started), relationCount)
@@ -186,7 +186,7 @@ func (l *UserLikeLifecycle) waitForRestore(ctx context.Context, userID uint) err
 func (l *UserLikeLifecycle) loadRelationsIntoTemp(
 	ctx context.Context,
 	userID uint,
-	tempKey string,
+	tempKey, tempOrderKey string,
 	settings config.UserLikeLifecycleConfig,
 	relationCount *int,
 ) error {
@@ -206,10 +206,13 @@ func (l *UserLikeLifecycle) loadRelationsIntoTemp(
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			type postRow struct{ PostID uint }
+			type postRow struct {
+				PostID         uint
+				StateChangedAt time.Time
+			}
 			var rows []postRow
 			if err := tx.Table("post_reaction AS reaction").
-				Select("reaction.post_id AS post_id").
+				Select("reaction.post_id AS post_id, reaction.state_changed_at AS state_changed_at").
 				Joins("JOIN posts ON posts.id = reaction.post_id AND posts.deleted_at IS NULL").
 				Where("reaction.user_id = ? AND reaction.reaction = ? AND reaction.liked = ? AND reaction.post_id > ?",
 					userID, models.PostReactionLike, true, lastPostID).
@@ -220,20 +223,21 @@ func (l *UserLikeLifecycle) loadRelationsIntoTemp(
 				return nil
 			}
 			if *relationCount+len(rows) > settings.RestoreMaxRelations {
+				metrics.RecordUserLikeCapEvent("restore_over_cap")
 				return ErrUserLikeRecoveryTooLarge
 			}
-			postIDs := make([]uint, len(rows))
+			relations := make([]userLikeRestoreRelation, len(rows))
 			for index, row := range rows {
-				if row.PostID == 0 || row.PostID <= lastPostID {
+				if row.PostID == 0 || row.PostID <= lastPostID || row.StateChangedAt.IsZero() {
 					return ErrUserLikeRecoveryUnsafe
 				}
-				postIDs[index] = row.PostID
+				relations[index] = userLikeRestoreRelation{PostID: row.PostID, StateChangedAt: row.StateChangedAt}
 				lastPostID = row.PostID
 			}
-			if err := l.store.addUserLikeRestoreTempMembers(ctx, tempKey, postIDs); err != nil {
+			if err := l.store.addUserLikeRestoreTempMembers(ctx, tempKey, tempOrderKey, relations); err != nil {
 				return withUserLikeRestoreStage(err, "failed_redis")
 			}
-			*relationCount += len(postIDs)
+			*relationCount += len(relations)
 		}
 	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err == nil || errors.Is(err, ErrUserLikeRecoveryUnsafe) || errors.Is(err, ErrUserLikeRecoveryTooLarge) ||
@@ -268,7 +272,7 @@ func classifyRestoreFailure(err error) string {
 		return "lock_busy"
 	case errors.Is(err, ErrUserLikeRecoveryTooLarge):
 		return "too_large"
-	case errors.Is(err, ErrUserLikeRecoveryUnsafe), errors.Is(err, ErrUserLikeRecoveryLockLost), errors.Is(err, ErrUserLikeRecoveryIncomplete), errors.Is(err, ErrUserLikeNotReady), errors.Is(err, ErrLikeRedisType):
+	case errors.Is(err, ErrUserLikeRecoveryUnsafe), errors.Is(err, ErrUserLikeRecoveryLockLost), errors.Is(err, ErrUserLikeRecoveryIncomplete), errors.Is(err, ErrUserLikeNotReady), errors.Is(err, ErrLikeRedisType), errors.Is(err, ErrUserLikeOrderIndexMissing), errors.Is(err, ErrUserLikeOrderIndexInconsistent):
 		return "unsafe"
 	}
 	var staged userLikeRestoreStageError

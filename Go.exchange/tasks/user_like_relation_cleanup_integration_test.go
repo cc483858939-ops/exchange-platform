@@ -51,7 +51,7 @@ func TestUserLikeRelationCleanupUsesSQLLifecycleAndPreservesSentinelIntegration(
 	baseID := uint(time.Now().UnixNano() & 0x3fffffff)
 	userID, deletedID, activeID, missingReadyActiveID, missingSQLID := baseID+101, baseID+1, baseID+2, baseID+3, baseID+4
 	t.Cleanup(func() {
-		_ = client.Del(likes.UserLikesKey(userID), likes.ReadyKey(deletedID), likes.CountKey(deletedID), likes.VersionKey(deletedID), likes.ReadyKey(activeID), likes.CountKey(activeID), likes.VersionKey(activeID), likes.ReadyKey(missingSQLID), likes.CountKey(missingSQLID), likes.VersionKey(missingSQLID)).Err()
+		_ = client.Del(likes.UserLikesKey(userID), likes.UserLikesOrderKey(userID), likes.ReadyKey(deletedID), likes.CountKey(deletedID), likes.VersionKey(deletedID), likes.ReadyKey(activeID), likes.CountKey(activeID), likes.VersionKey(activeID), likes.ReadyKey(missingSQLID), likes.CountKey(missingSQLID), likes.VersionKey(missingSQLID)).Err()
 	})
 	if err := tx.Exec("INSERT INTO users (id) VALUES (?)", userID).Error; err != nil {
 		t.Fatal(err)
@@ -80,7 +80,7 @@ func TestUserLikeRelationCleanupUsesSQLLifecycleAndPreservesSentinelIntegration(
 	if err := store.DeletePost(t.Context(), missingSQLID); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.SAdd(likes.UserLikesKey(userID), deletedID, activeID, missingReadyActiveID, missingSQLID).Err(); err != nil {
+	if err := addUserLikeCleanupRelations(client, userID, deletedID, activeID, missingReadyActiveID, missingSQLID); err != nil {
 		t.Fatal(err)
 	}
 	state := userLikeRelationCleanupState{}
@@ -157,9 +157,9 @@ func newUserLikeCleanupFixture(t *testing.T) *userLikeCleanupFixture {
 }
 
 func (f *userLikeCleanupFixture) keys() []string {
-	keys := make([]string, 0, 4)
+	keys := make([]string, 0, 5)
 	for offset := uint(1); offset <= 256; offset++ {
-		keys = append(keys, likes.UserLikesKey(f.baseID+offset), likes.ReadyKey(f.baseID+offset), likes.CountKey(f.baseID+offset), likes.VersionKey(f.baseID+offset))
+		keys = append(keys, likes.UserLikesKey(f.baseID+offset), likes.UserLikesOrderKey(f.baseID+offset), likes.ReadyKey(f.baseID+offset), likes.CountKey(f.baseID+offset), likes.VersionKey(f.baseID+offset))
 	}
 	return keys
 }
@@ -193,7 +193,7 @@ func TestUserLikeRelationCleanupStartsAnotherRoundAfterEmptyPageIntegration(t *t
 	if state.lastUserID != 0 || state.userID != 0 {
 		t.Fatalf("cycle state after empty page=%+v, want reset", state)
 	}
-	if err := f.client.SAdd(likes.UserLikesKey(userA), deletedPost).Err(); err != nil {
+	if err := addUserLikeCleanupRelations(f.client, userA, deletedPost); err != nil {
 		t.Fatal(err)
 	}
 	if err := runUserLikeRelationCleanupPass(t.Context(), f.store, f.db, &state); err != nil {
@@ -215,7 +215,7 @@ func TestUserLikeRelationCleanupEmptyDatabaseCanSeeLaterUsersIntegration(t *test
 	}
 	userID, deletedPost := f.baseID+1, f.baseID+2
 	f.addUser(t, userID)
-	if err := f.client.SAdd(likes.UserLikesKey(userID), deletedPost).Err(); err != nil {
+	if err := addUserLikeCleanupRelations(f.client, userID, deletedPost); err != nil {
 		t.Fatal(err)
 	}
 	if err := runUserLikeRelationCleanupPass(t.Context(), f.store, f.db, &state); err != nil {
@@ -234,7 +234,7 @@ func TestUserLikeRelationCleanupPagesMoreThanOneUserPageIntegration(t *testing.T
 	for index := 1; index <= users; index++ {
 		userID := f.baseID + uint(index)
 		f.addUser(t, userID)
-		if err := f.client.SAdd(likes.UserLikesKey(userID), postID).Err(); err != nil {
+		if err := addUserLikeCleanupRelations(f.client, userID, postID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -314,7 +314,7 @@ func TestUserLikeRelationCleanupSkipsCorruptUserAndRetriesInfrastructureFailureI
 	if err := f.store.InitializeUserEmpty(t.Context(), userB); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.client.SAdd(likes.UserLikesKey(userB), missingPost).Err(); err != nil {
+	if err := addUserLikeCleanupRelations(f.client, userB, missingPost); err != nil {
 		t.Fatal(err)
 	}
 	state := userLikeRelationCleanupState{}
@@ -347,7 +347,7 @@ func TestUserLikeRelationCleanupSkipsCorruptUserAndRetriesInfrastructureFailureI
 	if err := f.store.InitializeUserEmpty(t.Context(), userA); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.client.SAdd(likes.UserLikesKey(userA), missingPost).Err(); err != nil {
+	if err := addUserLikeCleanupRelations(f.client, userA, missingPost); err != nil {
 		t.Fatal(err)
 	}
 	f.runPasses(t, &state, 3) // User A is retried on the next full round.
@@ -456,7 +456,7 @@ func TestUserLikeRelationCleanupProtectsPostStateIssuesAndHandlesExpiredTombston
 	}
 	postIDs := []uint{activeMissingReady, deletedReadyActive, deletedReadyWrongType, deletedTombstone, deletedExpiredTombstone}
 	for _, postID := range postIDs {
-		if err := f.client.SAdd(likes.UserLikesKey(userID), postID).Err(); err != nil {
+		if err := addUserLikeCleanupRelations(f.client, userID, postID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -520,4 +520,22 @@ func TestUserLikeRelationCleanupSQLFailureDoesNotResetCycleIntegration(t *testin
 	if state.lastUserID != f.baseID+50 {
 		t.Fatalf("SQL failure reset UserID cursor to %d", state.lastUserID)
 	}
+}
+
+func addUserLikeCleanupRelations(client *redis.Client, userID uint, postIDs ...uint) error {
+	if len(postIDs) == 0 {
+		return nil
+	}
+	setMembers := make([]interface{}, 0, len(postIDs))
+	orderedMembers := make([]*redis.Z, 0, len(postIDs))
+	baseScore := time.Now().UnixMicro()
+	for index, postID := range postIDs {
+		member := strconv.FormatUint(uint64(postID), 10)
+		setMembers = append(setMembers, member)
+		orderedMembers = append(orderedMembers, &redis.Z{Score: float64(baseScore + int64(index)), Member: member})
+	}
+	if err := client.SAdd(likes.UserLikesKey(userID), setMembers...).Err(); err != nil {
+		return err
+	}
+	return client.ZAdd(likes.UserLikesOrderKey(userID), orderedMembers...).Err()
 }

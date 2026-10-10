@@ -12,29 +12,33 @@ import (
 var ErrNotReady = errors.New("post like state is not ready")
 
 var (
-	ErrUserLikeNotReady              = errors.New("user like state is not ready")
-	ErrPostLikeNotReady              = errors.New("post like state is not ready")
-	ErrPostLikeUnavailable           = errors.New("post not found")
-	ErrLikeProjectionNotReady        = errors.New("post like projection is not ready")
-	ErrLikeRecoveryUnsafe            = errors.New("post like state cannot be safely recovered")
-	ErrLikeRecoveryFenceLost         = errors.New("post like recovery fence changed")
-	ErrLikeRedisType                 = errors.New("unexpected Redis key type")
-	ErrUserLikeRedisType             = errors.New("unexpected User Like Redis key type")
-	ErrUserLikeCold                  = errors.New("User Like state is legally cold")
-	ErrUserLikeRecoveryUnsafe        = errors.New("User Like state cannot be safely recovered")
-	ErrUserLikeRecoveryBusy          = errors.New("User Like recovery is already in progress")
-	ErrUserLikeRecoveryTimeout       = errors.New("User Like recovery timed out")
-	ErrUserLikeRecoveryUnavailable   = errors.New("User Like state is temporarily unavailable")
-	ErrUserLikeRecoveryTooLarge      = errors.New("User Like recovery exceeds configured relation limit")
-	ErrUserLikeRecoveryDisabled      = errors.New("User Like recovery is disabled")
-	ErrUserLikeRecoveryLockLost      = errors.New("User Like recovery lock ownership changed")
-	ErrUserLikeRecoveryIncomplete    = errors.New("User Like recovery temporary state is incomplete")
-	ErrUserLikeLedgerType            = errors.New("unexpected User Like expiry ledger Redis key type")
-	ErrUserLikeRestoreLockType       = errors.New("unexpected User Like restore lock Redis key type")
-	ErrPostLikeRedisType             = errors.New("unexpected Post Like Redis key type")
-	ErrLikeRelationLifecycleMismatch = errors.New("deleted Post has active Redis Like state")
-	ErrLikeCountInconsistent         = errors.New("post like count is inconsistent with user relation")
-	ErrLikeStateExpiryUnsupported    = config.ErrLikeStateExpiryUnsupported
+	ErrUserLikeNotReady               = errors.New("user like state is not ready")
+	ErrPostLikeNotReady               = errors.New("post like state is not ready")
+	ErrPostLikeUnavailable            = errors.New("post not found")
+	ErrLikeProjectionNotReady         = errors.New("post like projection is not ready")
+	ErrLikeRecoveryUnsafe             = errors.New("post like state cannot be safely recovered")
+	ErrLikeRecoveryFenceLost          = errors.New("post like recovery fence changed")
+	ErrLikeRedisType                  = errors.New("unexpected Redis key type")
+	ErrUserLikeRedisType              = errors.New("unexpected User Like Redis key type")
+	ErrUserLikeCold                   = errors.New("User Like state is legally cold")
+	ErrUserLikeRecoveryUnsafe         = errors.New("User Like state cannot be safely recovered")
+	ErrUserLikeRecoveryBusy           = errors.New("User Like recovery is already in progress")
+	ErrUserLikeRecoveryTimeout        = errors.New("User Like recovery timed out")
+	ErrUserLikeRecoveryUnavailable    = errors.New("User Like state is temporarily unavailable")
+	ErrUserLikeRecoveryTooLarge       = errors.New("User Like recovery exceeds configured relation limit")
+	ErrUserLikeRecoveryDisabled       = errors.New("User Like recovery is disabled")
+	ErrUserLikeRecoveryLockLost       = errors.New("User Like recovery lock ownership changed")
+	ErrUserLikeRecoveryIncomplete     = errors.New("User Like recovery temporary state is incomplete")
+	ErrUserLikeOrderIndexMissing      = errors.New("User Like order index is missing")
+	ErrUserLikeOrderIndexInconsistent = errors.New("User Like order index is inconsistent")
+	ErrUserLikeCapReached             = errors.New("User Like relation cap reached")
+	ErrUserLikeOverCap                = errors.New("User Like relation state exceeds the configured hard cap")
+	ErrUserLikeLedgerType             = errors.New("unexpected User Like expiry ledger Redis key type")
+	ErrUserLikeRestoreLockType        = errors.New("unexpected User Like restore lock Redis key type")
+	ErrPostLikeRedisType              = errors.New("unexpected Post Like Redis key type")
+	ErrLikeRelationLifecycleMismatch  = errors.New("deleted Post has active Redis Like state")
+	ErrLikeCountInconsistent          = errors.New("post like count is inconsistent with user relation")
+	ErrLikeStateExpiryUnsupported     = config.ErrLikeStateExpiryUnsupported
 )
 
 type likeRedisTypeError struct{ kind error }
@@ -75,10 +79,12 @@ func userNotReadyError() error { return readinessError{kind: ErrUserLikeNotReady
 func postNotReadyError() error { return readinessError{kind: ErrPostLikeNotReady} }
 
 type MutationResult struct {
-	Count   int64
-	Liked   bool
-	Changed bool
-	Version int64
+	Count           int64
+	Liked           bool
+	Changed         bool
+	Version         int64
+	EvictedPostID   uint
+	ActiveRelations int64
 }
 
 type State struct {

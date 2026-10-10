@@ -12,14 +12,14 @@ const (
 	DefaultUserLikeSetTTL                = 72 * time.Hour
 	DefaultUserLikeRestoreLockTTL        = 30 * time.Second
 	DefaultUserLikeRestoreBatchSize      = 500
-	DefaultUserLikeRestoreMaxRelations   = 100000
+	DefaultUserLikeRestoreMaxRelations   = 10000
 	DefaultUserLikeRestoreRequestTimeout = 2 * time.Second
 	DefaultUserLikeRestoreConcurrency    = 8
 
 	minUserLikeSetTTL       = time.Hour
 	maxUserLikeSetTTL       = 365 * 24 * time.Hour
 	maxUserLikeRestoreBatch = 5000
-	maxUserLikeRestoreRows  = 1000000
+	maxUserLikeRestoreRows  = 10000
 	maxUserLikeRestoreSlots = 64
 )
 
@@ -49,7 +49,7 @@ func UserLikeLifecycleSettings() (UserLikeLifecycleConfig, error) {
 		RestoreConcurrency:    DefaultUserLikeRestoreConcurrency,
 	}
 	var err error
-	if settings.ArmingEnabled, err = parseBoolSetting("USER_LIKE_TTL_ARMING_ENABLED", false); err != nil {
+	if settings.ArmingEnabled, err = parseBoolSetting("USER_LIKE_TTL_ARMING_ENABLED", true); err != nil {
 		return settings, err
 	}
 	if settings.RestoreEnabled, err = parseBoolSetting("USER_LIKE_TTL_RESTORE_ENABLED", true); err != nil {

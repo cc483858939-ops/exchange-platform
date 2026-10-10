@@ -284,7 +284,7 @@ func seedRelationBenchmark(ctx context.Context, client *redis.Client, model stri
 	postIDs := make(map[uint]struct{})
 	userIDs := make(map[uint]struct{})
 	pipe := client.WithContext(ctx).Pipeline()
-	for _, edge := range edges {
+	for index, edge := range edges {
 		if _, exists := postIDs[edge.postID]; !exists {
 			postIDs[edge.postID] = struct{}{}
 			pipe.Set(ReadyKey(edge.postID), "1", 0)
@@ -297,6 +297,7 @@ func seedRelationBenchmark(ctx context.Context, client *redis.Client, model stri
 				userIDs[edge.userID] = struct{}{}
 				pipe.SAdd(UserLikesKey(edge.userID), UserLikesInitSentinel)
 			}
+			pipe.ZAdd(UserLikesOrderKey(edge.userID), &redis.Z{Score: float64(index + 1), Member: strconv.FormatUint(uint64(edge.postID), 10)})
 		}
 	}
 	_, err := pipe.ExecContext(ctx)

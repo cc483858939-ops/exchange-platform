@@ -10,4 +10,5 @@ const (
 	ActionMediaUpload     Action = "media_upload"
 	ActionTranslation     Action = "translation"
 	ActionRecommendations Action = "recommendations"
+	ActionLikeMutation    Action = "like_mutation"
 )

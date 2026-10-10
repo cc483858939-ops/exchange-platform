@@ -17,20 +17,36 @@ import (
 )
 
 type Store struct {
-	client           *redis.Client
-	userLikeSettings func() (config.UserLikeLifecycleConfig, error)
+	client             *redis.Client
+	userLikeSettings   func() (config.UserLikeLifecycleConfig, error)
+	maxActiveRelations int64
 }
 
 func NewStore(client *redis.Client) *Store {
-	return &Store{client: client, userLikeSettings: config.UserLikeLifecycleSettings}
+	return &Store{
+		client:             client,
+		userLikeSettings:   config.UserLikeLifecycleSettings,
+		maxActiveRelations: int64(config.DefaultUserLikeRestoreMaxRelations),
+	}
 }
 
 // NewStoreWithUserLikeSettings supports isolated tests with short TTLs and
 // deterministic limits. Production constructors should use NewStore.
 func NewStoreWithUserLikeSettings(client *redis.Client, settings config.UserLikeLifecycleConfig) *Store {
-	return &Store{client: client, userLikeSettings: func() (config.UserLikeLifecycleConfig, error) {
-		return settings, nil
-	}}
+	return &Store{
+		client:             client,
+		maxActiveRelations: int64(config.DefaultUserLikeRestoreMaxRelations),
+		userLikeSettings: func() (config.UserLikeLifecycleConfig, error) {
+			return settings, nil
+		},
+	}
+}
+
+func (s *Store) activeRelationLimit() int64 {
+	if s != nil && s.maxActiveRelations > 0 {
+		return s.maxActiveRelations
+	}
+	return int64(config.DefaultUserLikeRestoreMaxRelations)
 }
 
 func (s *Store) lifecycleSettings() (config.UserLikeLifecycleConfig, error) {
@@ -61,26 +77,45 @@ func (s *Store) Mutate(ctx context.Context, userID, postID uint, liked bool) (Mu
 	keys := []string{
 		ReadyKey(postID), CountKey(postID), VersionKey(postID), UserLikesKey(userID),
 		DirtyKey, BehaviorDirtyKey, BehaviorStateKey, RegistryKey,
-		ExpiryCandidatesKey, RecoverableVersionsKey, UserLikesExpiryLedgerKey,
+		ExpiryCandidatesKey, RecoverableVersionsKey, UserLikesExpiryLedgerKey, UserLikesOrderKey(userID),
 	}
 	now := time.Now().UTC()
+	started := time.Now()
 	value, err := mutateScript.Run(
 		s.client.WithContext(ctx), keys, postID, userID, desired,
-		now.Format(time.RFC3339Nano), now.UnixMilli(), settings.SetTTL.Milliseconds(), boolIntString(settings.ArmingEnabled),
+		now.Format(time.RFC3339Nano), now.UnixMilli(), settings.SetTTL.Milliseconds(), boolIntString(settings.ArmingEnabled), s.activeRelationLimit(),
 	).Result()
 	if err != nil {
-		return MutationResult{}, mapScriptError(err)
+		mapped := mapScriptError(err)
+		return MutationResult{}, mapped
 	}
 	items, ok := value.([]interface{})
-	if !ok || len(items) != 5 {
+	if !ok || len(items) != 9 {
 		return MutationResult{}, fmt.Errorf("unexpected mutation response %T", value)
 	}
+	evictedPostID := uint(0)
+	if raw := asString(items[5]); raw != "" {
+		parsed, parseErr := strconv.ParseUint(raw, 10, 64)
+		if parseErr != nil || parsed == 0 || uint64(uint(parsed)) != parsed {
+			return MutationResult{}, fmt.Errorf("unexpected evicted Post ID %q", raw)
+		}
+		evictedPostID = uint(parsed)
+	}
+	activeRelations := asInt64(items[6])
+	if asInt64(items[7]) == 1 {
+		metrics.RecordUserLikeCapEvent("cap_reached")
+		if evictedPostID != 0 {
+			metrics.RecordUserLikeCapEvent("eviction_success")
+			metrics.ObserveUserLikeEvictionDuration(time.Since(started))
+		}
+	}
+	metrics.ObserveUserLikeActiveRelations(activeRelations)
 	if settings.ArmingEnabled {
 		metrics.RecordUserLikeTTLEvent("ttl_refreshed")
 	} else {
 		metrics.RecordUserLikeTTLEvent("ttl_arming_disabled")
 	}
-	return MutationResult{Count: asInt64(items[0]), Liked: asInt64(items[1]) == 1, Changed: asInt64(items[2]) == 1, Version: asInt64(items[3])}, nil
+	return MutationResult{Count: asInt64(items[0]), Liked: asInt64(items[1]) == 1, Changed: asInt64(items[2]) == 1, Version: asInt64(items[3]), EvictedPostID: evictedPostID, ActiveRelations: activeRelations}, nil
 }
 
 func (s *Store) Get(ctx context.Context, userID, postID uint) (State, error) {
@@ -275,7 +310,7 @@ func (s *Store) InitializeUserEmptyWithResult(ctx context.Context, userID uint) 
 		return false, err
 	}
 	value, err := initializeUserEmptyScript.Run(
-		s.client.WithContext(ctx), []string{UserLikesKey(userID), UserLikesExpiryLedgerKey},
+		s.client.WithContext(ctx), []string{UserLikesKey(userID), UserLikesExpiryLedgerKey, UserLikesOrderKey(userID)},
 		userID, boolIntString(settings.ArmingEnabled), settings.SetTTL.Milliseconds(),
 	).Int64()
 	if err != nil {
@@ -565,7 +600,7 @@ func (s *Store) ScanUserLikes(ctx context.Context, userID uint, cursor uint64, c
 	if count > 128 {
 		count = 128
 	}
-	result, err := scanUserLikesScript.Run(s.client.WithContext(ctx), []string{UserLikesKey(userID)}, cursor, count).Result()
+	result, err := scanUserLikesScript.Run(s.client.WithContext(ctx), []string{UserLikesKey(userID), UserLikesOrderKey(userID)}, cursor, count).Result()
 	if err != nil {
 		return nil, cursor, mapScriptError(err)
 	}
@@ -624,8 +659,9 @@ func (s *Store) RemoveDeletedUserPostRelationsDetailed(ctx context.Context, user
 	if len(postIDs) > 128 {
 		return 0, nil, errors.New("relation cleanup batch exceeds 128 Post IDs")
 	}
-	keys := make([]string, 1, len(postIDs)+1)
+	keys := make([]string, 2, len(postIDs)+2)
 	keys[0] = UserLikesKey(userID)
+	keys[1] = UserLikesOrderKey(userID)
 	args := make([]interface{}, 0, len(postIDs))
 	for _, postID := range postIDs {
 		if postID == 0 {
@@ -992,13 +1028,34 @@ func mapScriptError(err error) error {
 	}
 	message := err.Error()
 	switch {
+	case strings.Contains(message, "LIKE_USER_EVICTION_POST_TYPE"):
+		metrics.RecordUserLikeCapEvent("eviction_failed")
+		return postLikeRedisTypeError()
+	case strings.Contains(message, "LIKE_USER_EVICTION_POST_NOT_READY"):
+		metrics.RecordUserLikeCapEvent("eviction_failed")
+		return postNotReadyError()
+	case strings.Contains(message, "LIKE_USER_EVICTION_COUNT_INCONSISTENT"):
+		metrics.RecordUserLikeCapEvent("eviction_failed")
+		return ErrLikeCountInconsistent
 	case strings.Contains(message, "LIKE_USER_TYPE"):
 		return userLikeRedisTypeError()
 	case strings.Contains(message, "LIKE_USER_LEDGER_TYPE"):
 		return userLikeLedgerTypeError()
+	case strings.Contains(message, "LIKE_USER_ORDER_TYPE"):
+		return userLikeRedisTypeError()
+	case strings.Contains(message, "LIKE_USER_ORDER_MISSING"):
+		metrics.RecordUserLikeCapEvent("order_index_missing")
+		return ErrUserLikeOrderIndexMissing
+	case strings.Contains(message, "LIKE_USER_ORDER_INCONSISTENT"):
+		metrics.RecordUserLikeCapEvent("order_index_inconsistent")
+		return ErrUserLikeOrderIndexInconsistent
+	case strings.Contains(message, "LIKE_USER_OVER_CAP"):
+		metrics.RecordUserLikeCapEvent("eviction_failed")
+		return ErrUserLikeOverCap
 	case strings.Contains(message, "LIKE_USER_RESTORE_LOCK_TYPE"):
 		return ErrUserLikeRestoreLockType
 	case strings.Contains(message, "LIKE_USER_RECOVERY_TOO_LARGE"):
+		metrics.RecordUserLikeCapEvent("restore_over_cap")
 		return ErrUserLikeRecoveryTooLarge
 	case strings.Contains(message, "LIKE_USER_RECOVERY_LOCK_LOST"):
 		return ErrUserLikeRecoveryLockLost

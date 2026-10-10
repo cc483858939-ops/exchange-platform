@@ -82,8 +82,11 @@ VALUES (?, ?, 1, ?, 1, now(), now())`, userID, row.postID, row.liked).Error; err
 	if err := store.InitializeUserEmpty(t.Context(), userID); err != nil {
 		t.Fatal(err)
 	}
-	for _, postID := range []uint{p1, p2, p4, p5, pMissing} {
+	for index, postID := range []uint{p1, p2, p4, p5, pMissing} {
 		if err := client.SAdd(UserLikesKey(userID), strconv.FormatUint(uint64(postID), 10)).Err(); err != nil {
+			t.Fatal(err)
+		}
+		if err := client.ZAdd(UserLikesOrderKey(userID), &redis.Z{Score: float64(time.Now().UnixMicro() + int64(index)), Member: strconv.FormatUint(uint64(postID), 10)}).Err(); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -106,7 +109,6 @@ VALUES (?, ?, 1, ?, 1, now(), now())`, userID, row.postID, row.liked).Error; err
 			t.Fatalf("concurrent cold restore: %v", err)
 		}
 	}
-
 	for _, postID := range []uint{p1, p2, p5} {
 		member, err := client.SIsMember(UserLikesKey(userID), strconv.FormatUint(uint64(postID), 10)).Result()
 		if err != nil || !member {
@@ -340,6 +342,9 @@ VALUES (?, ?, 1, TRUE, 5, now(), now())`, userID, originalPostID).Error; err != 
 	if err := client.SAdd(UserLikesKey(userID), strconv.FormatUint(uint64(originalPostID), 10)).Err(); err != nil {
 		t.Fatal(err)
 	}
+	if err := client.ZAdd(UserLikesOrderKey(userID), &redis.Z{Score: float64(time.Now().UnixMicro()), Member: strconv.FormatUint(uint64(originalPostID), 10)}).Err(); err != nil {
+		t.Fatal(err)
+	}
 	awaitUserLikeSetExpiry(t, client, userID, 2*time.Second)
 
 	reactionQueryReached := make(chan struct{})
@@ -481,15 +486,30 @@ func awaitUserLikeSetExpiry(t *testing.T, client *redis.Client, userID uint, tim
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for {
+		if orderType, err := client.Type(UserLikesOrderKey(userID)).Result(); err != nil {
+			t.Fatal(err)
+		} else if orderType == "zset" {
+			expiresAt, err := client.HGet(UserLikesExpiryLedgerKey, strconv.FormatUint(uint64(userID), 10)).Int64()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := client.PExpireAt(UserLikesOrderKey(userID), time.UnixMilli(expiresAt)).Err(); err != nil {
+				t.Fatal(err)
+			}
+		}
 		exists, err := client.Exists(UserLikesKey(userID)).Result()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if exists == 0 {
+		orderExists, orderErr := client.Exists(UserLikesOrderKey(userID)).Result()
+		if orderErr != nil {
+			t.Fatal(orderErr)
+		}
+		if exists == 0 && orderExists == 0 {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("User Like Set did not expire before the integration deadline")
+			t.Fatal("User Like Set and order index did not expire before the integration deadline")
 		}
 		time.Sleep(5 * time.Millisecond)
 	}

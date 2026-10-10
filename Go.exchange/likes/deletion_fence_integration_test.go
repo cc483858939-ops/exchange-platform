@@ -26,7 +26,9 @@ func TestDeletedPostFenceSurvivesCleanupFailureAndStaleRecoveryIntegration(t *te
 		for _, id := range []uint{postID, liveID} {
 			client.Del(ReadyKey(id), CountKey(id), UsersKey(id), VersionKey(id))
 			client.SRem(UserLikesKey(11), strconv.FormatUint(uint64(id), 10))
+			client.ZRem(UserLikesOrderKey(11), strconv.FormatUint(uint64(id), 10))
 			client.SRem(UserLikesKey(12), strconv.FormatUint(uint64(id), 10))
+			client.ZRem(UserLikesOrderKey(12), strconv.FormatUint(uint64(id), 10))
 			client.SRem(RegistryKey, id)
 			client.ZRem(ExpiryCandidatesKey, id)
 			client.HDel(RecoverableVersionsKey, strconv.FormatUint(uint64(id), 10))
