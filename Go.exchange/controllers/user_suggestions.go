@@ -3,11 +3,15 @@ package controllers
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
+	"Go.exchange/config"
 	"Go.exchange/global"
+	"Go.exchange/recommendation"
 
 	"github.com/gin-gonic/gin"
 )
@@ -21,13 +25,18 @@ const (
 )
 
 type suggestedUserQueryRow struct {
-	UserID        uint      `gorm:"column:user_id"`
-	Username      string    `gorm:"column:username"`
-	DisplayName   string    `gorm:"column:display_name"`
-	Bio           string    `gorm:"column:bio"`
-	AvatarURL     string    `gorm:"column:avatar_url"`
-	UserCreatedAt time.Time `gorm:"column:user_created_at"`
+	UserID          uint      `gorm:"column:user_id"`
+	Username        string    `gorm:"column:username"`
+	DisplayName     string    `gorm:"column:display_name"`
+	Bio             string    `gorm:"column:bio"`
+	AvatarURL       string    `gorm:"column:avatar_url"`
+	UserCreatedAt   time.Time `gorm:"column:user_created_at"`
+	RecentPostCount int64     `gorm:"column:recent_post_count"`
+	LatestPostAt    time.Time `gorm:"column:latest_post_at"`
+	RawAffinity     float64   `gorm:"column:raw_affinity"`
 }
+
+const suggestedUserAffinityWeight = 0.75
 
 var loadSuggestedUsers = loadSuggestedUsersFromDB
 
@@ -106,20 +115,22 @@ SELECT candidate.id AS user_id,
 	   candidate.display_name AS display_name,
 	   candidate.bio AS bio,
 	   candidate.avatar_url AS avatar_url,
-	   candidate.created_at AS user_created_at
+	   candidate.created_at AS user_created_at,
+	   author_activity.recent_post_count AS recent_post_count,
+	   author_activity.latest_post_at AS latest_post_at,
+	   COALESCE(author_affinity.raw_affinity, 0) AS raw_affinity
 FROM author_activity
 JOIN users AS candidate
 	ON candidate.id = author_activity.author_id
 	AND candidate.deleted_at IS NULL
+LEFT JOIN user_author_affinities AS author_affinity
+	ON author_affinity.user_id = ?
+	AND author_affinity.author_id = candidate.id
 LEFT JOIN user_follows AS viewer_follow
 	ON viewer_follow.follower_id = ?
 	AND viewer_follow.following_id = candidate.id
 WHERE candidate.id <> ?
-	AND viewer_follow.id IS NULL
-ORDER BY author_activity.recent_post_count DESC,
-	 author_activity.latest_post_at DESC,
-	 candidate.id ASC
-LIMIT ?`
+	AND viewer_follow.id IS NULL`
 
 	var rows []suggestedUserQueryRow
 	if err := global.APIDb.WithContext(ctx).Raw(
@@ -130,10 +141,11 @@ LIMIT ?`
 		suggestedUserActivityCountCap,
 		viewerID,
 		viewerID,
-		limit,
+		viewerID,
 	).Scan(&rows).Error; err != nil {
 		return userConnectionPageResponse{}, err
 	}
+	rows = rankSuggestedUserRows(rows, now, suggestedUserAffinitySaturationScale(), limit)
 
 	page := userConnectionPageResponse{Items: make([]userConnectionResponse, 0, len(rows))}
 	for _, row := range rows {
@@ -146,4 +158,88 @@ LIMIT ?`
 		})
 	}
 	return page, nil
+}
+
+func suggestedUserAffinitySaturationScale() float64 {
+	if config.AppConfig != nil {
+		scale := config.AppConfig.Recommendation.AuthorAffinitySaturationScale
+		if scale > 0 && !math.IsNaN(scale) && !math.IsInf(scale, 0) {
+			return scale
+		}
+	}
+	return recommendation.DefaultConfig().AuthorAffinitySaturationScale
+}
+
+func rankSuggestedUserRows(rows []suggestedUserQueryRow, now time.Time, saturationScale float64, limit int) []suggestedUserQueryRow {
+	if !validPositiveFinite(saturationScale) {
+		saturationScale = recommendation.DefaultConfig().AuthorAffinitySaturationScale
+	}
+
+	personalized := false
+	for _, row := range rows {
+		if validPositiveFinite(row.RawAffinity) {
+			personalized = true
+			break
+		}
+	}
+
+	if !personalized {
+		sort.Slice(rows, func(i, j int) bool {
+			return suggestedUserActivityBefore(rows[i], rows[j])
+		})
+	} else {
+		sort.Slice(rows, func(i, j int) bool {
+			scoreI := suggestedUserFinalScore(rows[i], now, saturationScale)
+			scoreJ := suggestedUserFinalScore(rows[j], now, saturationScale)
+			if scoreI != scoreJ {
+				return scoreI > scoreJ
+			}
+			return suggestedUserActivityBefore(rows[i], rows[j])
+		})
+	}
+
+	if limit >= 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows
+}
+
+func suggestedUserActivityBefore(left, right suggestedUserQueryRow) bool {
+	if left.RecentPostCount != right.RecentPostCount {
+		return left.RecentPostCount > right.RecentPostCount
+	}
+	if !left.LatestPostAt.Equal(right.LatestPostAt) {
+		return left.LatestPostAt.After(right.LatestPostAt)
+	}
+	return left.UserID < right.UserID
+}
+
+func suggestedUserFinalScore(row suggestedUserQueryRow, now time.Time, saturationScale float64) float64 {
+	postCount := row.RecentPostCount
+	if postCount < 0 {
+		postCount = 0
+	} else if postCount > suggestedUserActivityCountCap {
+		postCount = suggestedUserActivityCountCap
+	}
+
+	recencyScore := 0.0
+	if !row.LatestPostAt.IsZero() {
+		recencyScore = 1 - now.Sub(row.LatestPostAt).Hours()/(suggestedUserLookback.Hours())
+		if recencyScore < 0 {
+			recencyScore = 0
+		} else if recencyScore > 1 {
+			recencyScore = 1
+		}
+	}
+
+	activityScore := 0.70*float64(postCount)/float64(suggestedUserActivityCountCap) + 0.30*recencyScore
+	affinityScore := 0.0
+	if validPositiveFinite(row.RawAffinity) {
+		affinityScore = math.Tanh(row.RawAffinity / saturationScale)
+	}
+	return activityScore + suggestedUserAffinityWeight*affinityScore
+}
+
+func validPositiveFinite(value float64) bool {
+	return value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
 }

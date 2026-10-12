@@ -113,7 +113,24 @@
         </template>
 
         <template v-else>
-          <section v-if="!peopleQuery" class="search-view__state">Search for people by name or @username.</section>
+          <template v-if="!peopleQuery">
+            <template v-if="canDiscoverPeople">
+              <SuggestedUsersList
+                class="search-view__suggestions"
+                :viewer-id="currentViewerID"
+                :limit="5"
+                title="Suggested people"
+                :title-level="2"
+                @availability-change="peopleDiscoveryHasSuggestions = $event"
+              />
+              <section v-if="!peopleDiscoveryHasSuggestions" class="search-view__state">
+                Search for people by name or @username.
+              </section>
+            </template>
+            <section v-else-if="!peopleDraftQuery" class="search-view__state">
+              Search for people by name or @username.
+            </section>
+          </template>
           <section v-else-if="peopleInitialLoading" class="search-view__state" aria-live="polite">Searching people…</section>
           <section v-else-if="peopleInitialError" class="search-view__state search-view__state--error" role="alert"><p>{{ peopleInitialError }}</p><button class="search-view__button" type="button" @click="reload">Retry</button></section>
           <section v-else-if="peopleItems.length === 0" class="search-view__state">No people found for “{{ peopleQuery }}”.</section>
@@ -146,6 +163,7 @@ import { storeToRefs } from 'pinia';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import AppIcon from '../components/icons/AppIcon.vue';
 import UserRow from '../components/users/UserRow.vue';
+import SuggestedUsersList from '../components/users/SuggestedUsersList.vue';
 import PostCard from '../components/feed/PostCard.vue';
 import { useAuthStore } from '../store/auth';
 import { normalizeSearchQuery, useSearchSessionStore } from '../store/searchSession';
@@ -199,6 +217,7 @@ const authorSuggestions = ref<UserConnectionItem[]>([]);
 const selectedAuthor = ref<PublicAuthor | null>(null);
 const authorIDDraft = ref<number | null>(null);
 const authorSuggestionLoading = ref(false);
+const peopleDiscoveryHasSuggestions = ref(false);
 const timePreset = ref<'any' | '24h' | '7d' | '30d' | 'custom'>('any');
 const customFromLocal = ref('');
 const customToLocal = ref('');
@@ -248,6 +267,16 @@ const currentViewerID = computed(() => {
   const id = authStore.currentIdentity?.id;
   return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id : null;
 });
+const peopleDraftQuery = computed(() => normalizeSearchQuery(inputValue.value));
+const canDiscoverPeople = computed(() => (
+  authStore.isAuthenticated
+  && currentViewerID.value !== null
+  && searchViewActive.value
+  && route.name === 'UserSearch'
+  && activeTab.value === 'people'
+  && !peopleQuery.value
+  && !peopleDraftQuery.value
+));
 const disconnectObserver = () => { observer?.disconnect(); observer = null; };
 const saveCurrentScroll = () => {
   const viewport = searchScrollViewportRef.value;
@@ -672,6 +701,7 @@ onBeforeUnmount(() => {
 .search-view__button { padding: 0 var(--space-4); text-decoration: none; }.search-view__clear { display: grid; width: 42px; place-items: center; border-color: var(--color-border-strong); background: var(--color-surface); color: var(--color-text-secondary); }
 .search-view__state, .search-view__more { display: grid; justify-items: center; gap: var(--space-3); padding: 56px var(--space-5); color: var(--color-text-secondary); text-align: center; }.search-view__state p { margin: 0; }.search-view__state--error, .search-view__more--error { color: var(--color-danger); }
 .search-view__results-heading { padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--color-border); }.search-view__results-heading h2 { margin: 0; font-size: 16px; }.search-view__sentinel { min-height: 1px; }.search-view__more { min-height: 64px; padding: var(--space-4) var(--space-5); border-top: 1px solid var(--color-border); }
+.search-view__suggestions { min-width: 0; }.search-view__suggestions :deep(.suggested-users-list__heading) { padding: var(--space-4) var(--space-5); font-size: 16px; }.search-view__suggestions :deep(.user-row) { min-width: 0; }
 .post-search__filters { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(150px, 220px); align-items: end; gap: var(--space-3); padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--color-border); }
 .post-search__author-picker { position: relative; display: grid; gap: var(--space-2); }
 .post-search__filter-label, .post-search__custom-time label { display: grid; gap: 6px; color: var(--color-text-secondary); font-size: 12px; font-weight: 700; }

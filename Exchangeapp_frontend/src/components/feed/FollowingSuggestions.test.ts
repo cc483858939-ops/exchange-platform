@@ -12,11 +12,15 @@ const mocks = vi.hoisted(() => ({
   followUser: vi.fn(),
   unfollowUser: vi.fn(),
   syncExternalFollowState: vi.fn(),
+  registerSuggestedUsersSessionSync: vi.fn(() => vi.fn()),
 }));
 
 vi.mock('../../store/auth', () => ({ useAuthStore: () => mocks.authStore }));
 vi.mock('../../store/homeTimeline', () => ({ useHomeTimelineStore: () => mocks.homeTimeline }));
-vi.mock('../../store/sessionSync', () => ({ syncExternalFollowState: mocks.syncExternalFollowState }));
+vi.mock('../../store/sessionSync', () => ({
+  syncExternalFollowState: mocks.syncExternalFollowState,
+  registerSuggestedUsersSessionSync: mocks.registerSuggestedUsersSessionSync,
+}));
 vi.mock('../../services/userService', () => ({
   getSuggestedUsers: mocks.getSuggestedUsers,
   followUser: mocks.followUser,
@@ -74,7 +78,7 @@ const deferred = <T>() => {
 describe('FollowingSuggestions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.authStore = reactive({ isAuthenticated: true, currentIdentity: makeUser(7) });
+    mocks.authStore = reactive({ isAuthenticated: true, sessionVersion: 1, currentIdentity: makeUser(7) });
     mocks.homeTimeline = { revalidateFollowing: vi.fn().mockResolvedValue(undefined) };
     mocks.getSuggestedUsers.mockResolvedValue(page([connection(8)]));
     mocks.followUser.mockResolvedValue(followResponse(8, true));
@@ -91,7 +95,7 @@ describe('FollowingSuggestions', () => {
     expect(mocks.getSuggestedUsers).toHaveBeenCalledOnce();
     expect(mocks.getSuggestedUsers).toHaveBeenCalledWith(3);
     expect(wrapper.text()).toContain('Discover people to follow and see their posts here.');
-    expect(wrapper.get('.following-suggestions__title').text()).toBe('Suggested for you');
+    expect(wrapper.get('.suggested-users-list__heading').text()).toBe('Suggested for you');
     expect(wrapper.findAll('.user-row')).toHaveLength(3);
     expect(wrapper.get('.following-suggestions__primary').text()).toBe('Find more people');
     expect(wrapper.get('.following-suggestions__primary').attributes('data-route-name')).toBe('UserSearch');
@@ -199,6 +203,46 @@ describe('FollowingSuggestions', () => {
 
     mocks.authStore.currentIdentity = makeUser(17);
     await wrapper.setProps({ viewerId: 17 });
+    await flushPromises();
+    pendingFollow.resolve(followResponse(8, true));
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('user-18');
+    expect(wrapper.text()).not.toContain('user-8');
+    expect(mocks.syncExternalFollowState).not.toHaveBeenCalled();
+    expect(mocks.homeTimeline.revalidateFollowing).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('drops recommendation responses from a previous session for the same user', async () => {
+    const stalePage = deferred<ReturnType<typeof page>>();
+    mocks.getSuggestedUsers
+      .mockReturnValueOnce(stalePage.promise)
+      .mockResolvedValueOnce(page([connection(18)]));
+    const wrapper = mountSuggestions();
+
+    mocks.authStore.sessionVersion += 1;
+    await flushPromises();
+    stalePage.resolve(page([connection(8)]));
+    await flushPromises();
+    expect(mocks.getSuggestedUsers).toHaveBeenCalledTimes(2);
+    expect(wrapper.text()).toContain('user-18');
+    expect(wrapper.text()).not.toContain('user-8');
+
+    wrapper.unmount();
+  });
+
+  it('does not sync a pending Follow after the same viewer starts a new session', async () => {
+    const pendingFollow = deferred<ReturnType<typeof followResponse>>();
+    mocks.getSuggestedUsers
+      .mockResolvedValueOnce(page([connection(8)]))
+      .mockResolvedValueOnce(page([connection(18)]));
+    mocks.followUser.mockReturnValueOnce(pendingFollow.promise);
+    const wrapper = mountSuggestions();
+    await flushPromises();
+    await wrapper.get('.test-follow').trigger('click');
+
+    mocks.authStore.sessionVersion += 1;
     await flushPromises();
     pendingFollow.resolve(followResponse(8, true));
     await flushPromises();

@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   searchPosts: vi.fn(),
   getPostEngagementStates: vi.fn(),
   searchUsers: vi.fn(),
+  getSuggestedUsers: vi.fn(),
   getUser: vi.fn(),
   followUser: vi.fn(),
   unfollowUser: vi.fn(),
@@ -31,6 +32,7 @@ vi.mock('../services/postSearchService', () => ({ searchPosts: mocks.searchPosts
 vi.mock('../services/engagementService', () => ({ getPostEngagementStates: mocks.getPostEngagementStates }));
 vi.mock('../services/userService', () => ({
   searchUsers: mocks.searchUsers,
+  getSuggestedUsers: mocks.getSuggestedUsers,
   getUser: mocks.getUser,
   followUser: mocks.followUser,
   unfollowUser: mocks.unfollowUser,
@@ -38,6 +40,7 @@ vi.mock('../services/userService', () => ({
 vi.mock('../store/sessionSync', () => ({
   beginBookmarkStateMutation: vi.fn(),
   registerSearchSessionSync: vi.fn(),
+  registerSuggestedUsersSessionSync: vi.fn(() => vi.fn()),
   registerPostSearchSessionSync: vi.fn(),
   syncExternalFollowState: vi.fn(),
   syncPostSearchLikeState: vi.fn(),

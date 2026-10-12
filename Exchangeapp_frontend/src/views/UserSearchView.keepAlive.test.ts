@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   router: { push: vi.fn() },
   routeLeaveGuard: null as (() => void) | null,
   searchUsers: vi.fn(),
+  getSuggestedUsers: vi.fn(),
   getUser: vi.fn(),
   followUser: vi.fn(),
   unfollowUser: vi.fn(),
@@ -29,12 +30,14 @@ vi.mock('vue-router', () => ({
 vi.mock('../store/auth', () => ({ useAuthStore: () => mocks.authStore }));
 vi.mock('../services/userService', () => ({
   searchUsers: mocks.searchUsers,
+  getSuggestedUsers: mocks.getSuggestedUsers,
   getUser: mocks.getUser,
   followUser: mocks.followUser,
   unfollowUser: mocks.unfollowUser,
 }));
 vi.mock('../store/sessionSync', () => ({
   registerSearchSessionSync: vi.fn(),
+  registerSuggestedUsersSessionSync: vi.fn(() => vi.fn()),
   registerPostSearchSessionSync: vi.fn(),
   syncPostSearchLikeState: vi.fn(),
   syncPostSearchRepostState: vi.fn(),

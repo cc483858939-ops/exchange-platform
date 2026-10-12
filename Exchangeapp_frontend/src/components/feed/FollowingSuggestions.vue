@@ -7,20 +7,16 @@
     {{ hasSuggestions ? 'Discover people to follow and see their posts here.' : 'Find people to follow and see their posts here.' }}
   </p>
 
-  <div v-if="hasSuggestions" class="following-suggestions__content">
-    <h3 class="following-suggestions__title">Suggested for you</h3>
-    <div class="following-suggestions__list">
-      <UserRow
-        v-for="item in items"
-        :key="item.user.id"
-        :item="item"
-        :pending="pendingIDs.has(item.user.id)"
-        :error="mutationErrors.get(item.user.id)"
-        :is-self="item.user.id === viewerId"
-        @toggle-follow="toggleFollow"
-      />
-    </div>
-  </div>
+  <SuggestedUsersList
+    v-if="viewerId !== null"
+    class="following-suggestions__content"
+    :viewer-id="viewerId"
+    :limit="3"
+    title="Suggested for you"
+    :title-level="3"
+    :revalidate-following="true"
+    @availability-change="hasSuggestions = $event"
+  />
 
   <RouterLink
     class="following-suggestions__primary"
@@ -40,180 +36,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue';
+import { ref } from 'vue';
 import AppIcon from '../icons/AppIcon.vue';
-import UserRow from '../users/UserRow.vue';
-import {
-  followUser,
-  getSuggestedUsers,
-  unfollowUser,
-} from '../../services/userService';
-import type { UserConnectionItem } from '../../services/userService';
-import { syncExternalFollowState } from '../../store/sessionSync';
-import { useAuthStore } from '../../store/auth';
-import { useHomeTimelineStore } from '../../store/homeTimeline';
+import SuggestedUsersList from '../users/SuggestedUsersList.vue';
 
-const props = defineProps<{ viewerId: number | null }>();
+defineProps<{ viewerId: number | null }>();
 defineEmits<{ 'browse-for-you': [] }>();
-
-const authStore = useAuthStore();
-const homeTimeline = useHomeTimelineStore();
-const items = ref<UserConnectionItem[]>([]);
-const loading = ref(false);
-const active = ref(false);
-const viewerGeneration = ref(0);
-const pendingIDs = reactive(new Set<number>());
-const mutationErrors = reactive(new Map<number, string>());
-const viewerIdentityID = computed(() => {
-  if (!authStore.isAuthenticated) return null;
-  const id = authStore.currentIdentity?.id;
-  return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id : null;
-});
-const hasSuggestions = computed(() => items.value.length > 0);
-
-let requestVersion = 0;
-let mutationSequence = 0;
-let hasLoaded = false;
-let hasActivated = false;
-const mutationVersions = new Map<number, number>();
-
-const hasCurrentViewer = (viewerId: number) => (
-  authStore.isAuthenticated
-  && viewerIdentityID.value === viewerId
-  && props.viewerId === viewerId
-);
-
-const currentRequest = (version: number, viewerId: number, generation: number) => (
-  active.value
-  && version === requestVersion
-  && generation === viewerGeneration.value
-  && hasCurrentViewer(viewerId)
-);
-
-const loadSuggestions = async (force = false) => {
-  const viewerId = props.viewerId;
-  if (
-    !active.value
-    || viewerId === null
-    || !hasCurrentViewer(viewerId)
-    || loading.value
-    || (hasLoaded && !force)
-  ) return;
-
-  const version = ++requestVersion;
-  const generation = viewerGeneration.value;
-  loading.value = true;
-  try {
-    const page = await getSuggestedUsers(3);
-    if (!currentRequest(version, viewerId, generation)) return;
-    if (!Array.isArray(page.items)) throw new Error('Invalid suggested user response');
-    items.value = page.items.slice(0, 3);
-    hasLoaded = true;
-  } catch {
-    if (!currentRequest(version, viewerId, generation)) return;
-    items.value = [];
-    hasLoaded = true;
-  } finally {
-    if (version === requestVersion) loading.value = false;
-  }
-};
-
-const toggleFollow = async (userId: number) => {
-  const item = items.value.find(candidate => candidate.user.id === userId);
-  const viewerId = props.viewerId;
-  if (!item || viewerId === null || !hasCurrentViewer(viewerId) || pendingIDs.has(userId)) return;
-
-  const capturedViewerGeneration = viewerGeneration.value;
-  const mutationVersion = ++mutationSequence;
-  mutationVersions.set(userId, mutationVersion);
-  pendingIDs.add(userId);
-  mutationErrors.delete(userId);
-  try {
-    const response = item.following
-      ? await unfollowUser(userId)
-      : await followUser(userId);
-    if (
-      !hasCurrentViewer(viewerId)
-      || viewerGeneration.value !== capturedViewerGeneration
-      || mutationVersions.get(userId) !== mutationVersion
-    ) return;
-    if (response.user_id !== userId || typeof response.following !== 'boolean') {
-      throw new Error('Invalid follow response');
-    }
-
-    const currentItem = items.value.find(candidate => candidate.user.id === userId);
-    if (currentItem) currentItem.following = response.following;
-    syncExternalFollowState(response);
-    pendingIDs.delete(userId);
-    if (
-      active.value
-      && viewerGeneration.value === capturedViewerGeneration
-      && hasCurrentViewer(viewerId)
-    ) {
-      try {
-        await homeTimeline.revalidateFollowing();
-      } catch {
-        // The timeline store owns its revalidation error state.
-      }
-    }
-  } catch {
-    if (
-      !hasCurrentViewer(viewerId)
-      || viewerGeneration.value !== capturedViewerGeneration
-      || mutationVersions.get(userId) !== mutationVersion
-    ) return;
-    mutationErrors.set(userId, 'Could not update follow status.');
-  } finally {
-    if (
-      hasCurrentViewer(viewerId)
-      && viewerGeneration.value === capturedViewerGeneration
-      && mutationVersions.get(userId) === mutationVersion
-    ) {
-      pendingIDs.delete(userId);
-    }
-  }
-};
-
-watch([viewerIdentityID, () => props.viewerId], () => {
-  viewerGeneration.value += 1;
-  requestVersion += 1;
-  loading.value = false;
-  hasLoaded = false;
-  items.value = [];
-  pendingIDs.clear();
-  mutationErrors.clear();
-  if (active.value && props.viewerId !== null && hasCurrentViewer(props.viewerId)) {
-    void loadSuggestions();
-  }
-});
-
-onMounted(() => {
-  active.value = true;
-  if (!hasActivated) void loadSuggestions();
-});
-
-onActivated(() => {
-  active.value = true;
-  if (hasActivated) {
-    hasLoaded = false;
-    void loadSuggestions(true);
-  } else if (!loading.value && !hasLoaded) {
-    void loadSuggestions();
-  }
-  hasActivated = true;
-});
-
-onDeactivated(() => {
-  active.value = false;
-  requestVersion += 1;
-  loading.value = false;
-  hasLoaded = false;
-});
-
-onBeforeUnmount(() => {
-  active.value = false;
-  requestVersion += 1;
-});
+const hasSuggestions = ref(false);
 </script>
 
 <style scoped>
@@ -249,26 +78,26 @@ onBeforeUnmount(() => {
   text-align: left;
 }
 
-.following-suggestions__title {
+.following-suggestions__content :deep(.suggested-users-list__heading) {
   margin: 0;
   color: var(--color-text);
   font-size: 16px;
   line-height: 1.4;
 }
 
-.following-suggestions__list {
+.following-suggestions__content :deep(.suggested-users-list__items) {
   width: 100%;
   min-width: 0;
   overflow: hidden;
   border-top: 1px solid var(--color-border);
 }
 
-.following-suggestions__list :deep(.user-row) {
+.following-suggestions__content :deep(.user-row) {
   min-width: 0;
   padding-inline: var(--space-2);
 }
 
-.following-suggestions__list :deep(.user-row__follow) {
+.following-suggestions__content :deep(.user-row__follow) {
   min-height: 44px;
 }
 
@@ -334,7 +163,7 @@ onBeforeUnmount(() => {
     font-size: 22px;
   }
 
-  .following-suggestions__list :deep(.user-row) {
+  .following-suggestions__content :deep(.user-row) {
     padding-inline: var(--space-1);
   }
 }

@@ -50,6 +50,10 @@ export type SearchSessionSync = {
   applyExternalFollowStateLocal: (state: UserFollowState) => boolean;
 };
 
+export type SuggestedUsersSessionSync = {
+  applyExternalFollowStateLocal: (state: UserFollowState) => boolean;
+};
+
 export type PostSearchSessionSync = {
   applyExternalLikeStateLocal: (update: FeedLikeStateUpdate) => boolean;
   applyExternalRepostStateLocal: (update: FeedRepostStateUpdate) => boolean;
@@ -111,6 +115,7 @@ export type QuotesSessionSync = {
 let homeTimelineSync: HomeTimelineSync | null = null;
 let profileSessionSync: ProfileSessionSync | null = null;
 let searchSessionSync: SearchSessionSync | null = null;
+const suggestedUsersSessionSyncs = new Set<SuggestedUsersSessionSync>();
 let postSearchSessionSync: PostSearchSessionSync | null = null;
 let historySessionSync: HistorySessionSync | null = null;
 let topicSessionSync: TopicSessionSync | null = null;
@@ -148,6 +153,13 @@ export const registerProfileSessionSync = (sync: ProfileSessionSync) => {
 
 export const registerSearchSessionSync = (sync: SearchSessionSync) => {
   searchSessionSync = sync;
+};
+
+export const registerSuggestedUsersSessionSync = (sync: SuggestedUsersSessionSync) => {
+  suggestedUsersSessionSyncs.add(sync);
+  return () => {
+    suggestedUsersSessionSyncs.delete(sync);
+  };
 };
 
 export const registerPostSearchSessionSync = (sync: PostSearchSessionSync) => {
@@ -464,6 +476,9 @@ export const syncExternalFollowState = (state: UserFollowState) => {
   homeTimelineSync?.reconcileFollowStateLocal(state);
   profileSessionSync?.applyExternalFollowStateLocal(state);
   searchSessionSync?.applyExternalFollowStateLocal(state);
+  for (const suggestedUsersSessionSync of suggestedUsersSessionSyncs) {
+    suggestedUsersSessionSync.applyExternalFollowStateLocal(state);
+  }
   connectionsSessionSync?.applyExternalFollowStateLocal(state);
 };
 

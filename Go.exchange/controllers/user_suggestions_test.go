@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"Go.exchange/config"
 	"Go.exchange/models"
 
 	"github.com/gin-gonic/gin"
@@ -143,4 +146,123 @@ func newSuggestedUsersUnitContext(query string, viewerID any) (*gin.Context, *ht
 		ctx.Set("user_id", viewerID)
 	}
 	return ctx, recorder
+}
+
+func TestSuggestedUserRankingPreservesColdStartOrder(t *testing.T) {
+	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
+	rows := []suggestedUserQueryRow{
+		{UserID: 3, RecentPostCount: 2, LatestPostAt: now.Add(-time.Minute)},
+		{UserID: 2, RecentPostCount: 5, LatestPostAt: now.Add(-2 * time.Minute)},
+		{UserID: 4, RecentPostCount: 5, LatestPostAt: now.Add(-time.Minute)},
+		{UserID: 1, RecentPostCount: 5, LatestPostAt: now.Add(-time.Minute)},
+	}
+
+	ranked := rankSuggestedUserRows(rows, now, 6, 5)
+	if got, want := suggestedUserIDs(ranked), []uint{1, 4, 2, 3}; !equalSuggestedUserIDs(got, want) {
+		t.Fatalf("cold-start order=%v want=%v", got, want)
+	}
+}
+
+func TestSuggestedUserAffinityScaleUsesRuntimeConfigAndDefault(t *testing.T) {
+	originalConfig := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = originalConfig })
+
+	config.AppConfig = nil
+	if got, want := suggestedUserAffinitySaturationScale(), 6.0; got != want {
+		t.Fatalf("default affinity scale=%g want=%g", got, want)
+	}
+	config.AppConfig = &config.Config{
+		Recommendation: config.RecommendationConfig{AuthorAffinitySaturationScale: 2.5},
+	}
+	if got, want := suggestedUserAffinitySaturationScale(), 2.5; got != want {
+		t.Fatalf("runtime affinity scale=%g want=%g", got, want)
+	}
+}
+
+func TestSuggestedUserRankingUsesAffinityBeforeApplyingLimit(t *testing.T) {
+	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
+	rows := []suggestedUserQueryRow{
+		{UserID: 1, RecentPostCount: 5, LatestPostAt: now.Add(-time.Minute)},
+		{UserID: 2, RecentPostCount: 5, LatestPostAt: now.Add(-time.Minute)},
+		{UserID: 3, RecentPostCount: 5, LatestPostAt: now.Add(-time.Minute)},
+		{UserID: 4, RecentPostCount: 5, LatestPostAt: now.Add(-time.Minute)},
+		{UserID: 5, RecentPostCount: 5, LatestPostAt: now.Add(-time.Minute)},
+		{UserID: 6, RecentPostCount: 1, LatestPostAt: now, RawAffinity: 1000},
+	}
+
+	ranked := rankSuggestedUserRows(rows, now, 6, 5)
+	if len(ranked) != 5 {
+		t.Fatalf("ranked count=%d want=5", len(ranked))
+	}
+	if ranked[0].UserID != 6 {
+		t.Fatalf("personalized first user=%d want high-affinity author 6", ranked[0].UserID)
+	}
+}
+
+func TestSuggestedUserAffinityScoreSaturatesAndUsesConfiguredScale(t *testing.T) {
+	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
+	row := suggestedUserQueryRow{RecentPostCount: 5, LatestPostAt: now, RawAffinity: 6}
+	if got, want := suggestedUserFinalScore(row, now, 6), 1+suggestedUserAffinityWeight*math.Tanh(1); math.Abs(got-want) > 1e-12 {
+		t.Fatalf("score=%g want=%g", got, want)
+	}
+	row.RawAffinity = 1e12
+	if got, want := suggestedUserFinalScore(row, now, 6), 1+suggestedUserAffinityWeight; math.Abs(got-want) > 1e-12 {
+		t.Fatalf("saturated score=%g want=%g", got, want)
+	}
+}
+
+func TestSuggestedUserRankingIgnoresNonPositiveOrInvalidAffinity(t *testing.T) {
+	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
+	rows := []suggestedUserQueryRow{
+		{UserID: 4, RecentPostCount: 1, LatestPostAt: now, RawAffinity: math.Inf(1)},
+		{UserID: 3, RecentPostCount: 2, LatestPostAt: now.Add(-time.Minute), RawAffinity: math.NaN()},
+		{UserID: 2, RecentPostCount: 3, LatestPostAt: now.Add(-2 * time.Minute), RawAffinity: math.Inf(-1)},
+		{UserID: 1, RecentPostCount: 4, LatestPostAt: now.Add(-3 * time.Minute), RawAffinity: -2},
+		{UserID: 5, RecentPostCount: 0, LatestPostAt: now},
+	}
+
+	ranked := rankSuggestedUserRows(rows, now, 6, 5)
+	if got, want := suggestedUserIDs(ranked), []uint{1, 2, 3, 4, 5}; !equalSuggestedUserIDs(got, want) {
+		t.Fatalf("invalid-affinity order=%v want=%v", got, want)
+	}
+	for _, rawAffinity := range []float64{-1, math.NaN(), math.Inf(1), math.Inf(-1), 0} {
+		if score := suggestedUserFinalScore(suggestedUserQueryRow{RawAffinity: rawAffinity}, now, 6); score != 0 {
+			t.Errorf("affinity %v added score %v", rawAffinity, score)
+		}
+	}
+}
+
+func TestSuggestedUserRankingBreaksPersonalizedTiesByActivityAndUserID(t *testing.T) {
+	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
+	rows := []suggestedUserQueryRow{
+		{UserID: 3, RecentPostCount: 2, LatestPostAt: now, RawAffinity: 6},
+		{UserID: 1, RecentPostCount: 2, LatestPostAt: now, RawAffinity: 6},
+		{UserID: 2, RecentPostCount: 2, LatestPostAt: now, RawAffinity: 6},
+		{UserID: 4, RecentPostCount: 1, LatestPostAt: now, RawAffinity: 6},
+	}
+
+	ranked := rankSuggestedUserRows(rows, now, 6, 5)
+	if got, want := suggestedUserIDs(ranked), []uint{1, 2, 3, 4}; !equalSuggestedUserIDs(got, want) {
+		t.Fatalf("personalized tie order=%v want=%v", got, want)
+	}
+}
+
+func suggestedUserIDs(rows []suggestedUserQueryRow) []uint {
+	ids := make([]uint, len(rows))
+	for index, row := range rows {
+		ids[index] = row.UserID
+	}
+	return ids
+}
+
+func equalSuggestedUserIDs(left, right []uint) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }

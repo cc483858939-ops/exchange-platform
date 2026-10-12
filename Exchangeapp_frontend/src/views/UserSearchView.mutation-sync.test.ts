@@ -13,10 +13,12 @@ const mocks = vi.hoisted(() => ({
   authStore: null as any,
   router: { push: vi.fn() },
   searchUsers: vi.fn(),
+  getSuggestedUsers: vi.fn(),
   getUser: vi.fn(),
   followUser: vi.fn(),
   unfollowUser: vi.fn(),
   externalFollow: vi.fn(),
+  registerSuggestedUsersSessionSync: vi.fn(() => vi.fn()),
 }));
 
 vi.mock('vue-router', () => ({
@@ -29,6 +31,7 @@ vi.mock('vue-router', () => ({
 vi.mock('../store/auth', () => ({ useAuthStore: () => mocks.authStore }));
 vi.mock('../services/userService', () => ({
   searchUsers: mocks.searchUsers,
+  getSuggestedUsers: mocks.getSuggestedUsers,
   getUser: mocks.getUser,
   followUser: mocks.followUser,
   unfollowUser: mocks.unfollowUser,
@@ -41,6 +44,7 @@ vi.mock('../store/sessionSync', () => ({
   syncPostSearchBookmarkState: vi.fn(),
   beginBookmarkStateMutation: vi.fn(),
   syncExternalFollowState: mocks.externalFollow,
+  registerSuggestedUsersSessionSync: mocks.registerSuggestedUsersSessionSync,
 }));
 
 const user = (id: number) => ({
@@ -82,6 +86,7 @@ describe('UserSearchView mutation synchronization', () => {
     mocks.authStore = reactive({
       isAuthenticated: true,
       token: 'Bearer token-a',
+      sessionVersion: 0,
       currentIdentity: { id: 7, username: 'viewer' },
     });
     mocks.searchUsers.mockResolvedValue({
@@ -90,6 +95,10 @@ describe('UserSearchView mutation synchronization', () => {
     });
     mocks.followUser.mockResolvedValue(followResponse(8, true));
     mocks.unfollowUser.mockResolvedValue(followResponse(8, false));
+    mocks.getSuggestedUsers.mockResolvedValue({
+      items: [{ user: user(8), following: false }],
+      has_more: false,
+    });
   });
 
   it('syncs a successful follow and unfollow exactly once', async () => {
@@ -186,6 +195,101 @@ describe('UserSearchView mutation synchronization', () => {
 
       expect(wrapper.text()).toContain('Loading more…');
       expect(wrapper.text()).not.toContain('Loading more?');
+      wrapper.unmount();
+    });
+  });
+
+  describe('People suggestions', () => {
+    it('loads at most five real suggestions only in the empty People state', async () => {
+      mocks.route.query = { tab: 'people' };
+      mocks.getSuggestedUsers.mockResolvedValueOnce({
+        items: [8, 9, 10, 11, 12, 13].map(id => ({ user: user(id), following: false })),
+        has_more: false,
+      });
+      const wrapper = mountSearch();
+      await flushPromises();
+
+      expect(mocks.getSuggestedUsers).toHaveBeenCalledExactlyOnceWith(5);
+      expect(wrapper.text()).toContain('Suggested people');
+      expect(wrapper.findAll('.test-follow')).toHaveLength(5);
+      expect(mocks.searchUsers).not.toHaveBeenCalled();
+      wrapper.unmount();
+    });
+
+    it('hides suggestions for a valid draft without searching until submit, then restores them when cleared', async () => {
+      mocks.route.query = { tab: 'people' };
+      const wrapper = mountSearch();
+      await flushPromises();
+      expect(mocks.getSuggestedUsers).toHaveBeenCalledOnce();
+
+      const input = wrapper.get('input[type="search"]');
+      await input.setValue('   ');
+      expect(wrapper.text()).toContain('Suggested people');
+      expect(mocks.searchUsers).not.toHaveBeenCalled();
+
+      await input.setValue('  alice  ');
+      await nextTick();
+      expect(wrapper.text()).not.toContain('Suggested people');
+      expect(mocks.searchUsers).not.toHaveBeenCalled();
+      expect(mocks.getSuggestedUsers).toHaveBeenCalledOnce();
+
+      await wrapper.get('form[role="search"]').trigger('submit');
+      expect(mocks.router.push).toHaveBeenCalled();
+      mocks.route.query = { tab: 'people', q: 'alice' };
+      await flushPromises();
+      expect(mocks.searchUsers).toHaveBeenCalledWith({ q: 'alice', limit: 20, offset: 0 });
+      expect(mocks.getSuggestedUsers).toHaveBeenCalledOnce();
+
+      mocks.route.query = { tab: 'people' };
+      await flushPromises();
+      expect(mocks.getSuggestedUsers).toHaveBeenCalledTimes(2);
+      expect(mocks.searchUsers).toHaveBeenCalledTimes(1);
+      expect(wrapper.text()).toContain('Suggested people');
+      wrapper.unmount();
+    });
+
+    it('falls back to the existing hint for empty or failed suggestions and never requests them for Posts or guests', async () => {
+      mocks.route.query = { tab: 'people' };
+      mocks.getSuggestedUsers.mockResolvedValueOnce({ items: [], has_more: false });
+      const empty = mountSearch();
+      await flushPromises();
+      expect(empty.text()).toContain('Search for people by name or @username.');
+      expect(empty.find('.search-view__state--error').exists()).toBe(false);
+      empty.unmount();
+
+      mocks.getSuggestedUsers.mockRejectedValueOnce(new Error('offline'));
+      const failed = mountSearch();
+      await flushPromises();
+      expect(failed.text()).toContain('Search for people by name or @username.');
+      expect(failed.text()).not.toContain('offline');
+      failed.unmount();
+
+      mocks.route.query = { tab: 'posts' };
+      mocks.getSuggestedUsers.mockClear();
+      const posts = mountSearch();
+      await flushPromises();
+      expect(mocks.getSuggestedUsers).not.toHaveBeenCalled();
+      posts.unmount();
+
+      mocks.route.query = { tab: 'people' };
+      mocks.authStore.isAuthenticated = false;
+      const guest = mountSearch();
+      await flushPromises();
+      expect(mocks.getSuggestedUsers).not.toHaveBeenCalled();
+      expect(guest.text()).toContain('Log in to search posts and people.');
+      guest.unmount();
+    });
+
+    it('uses the shared Follow state machine and syncs successful discovery follows', async () => {
+      mocks.route.query = { tab: 'people' };
+      const wrapper = mountSearch();
+      await flushPromises();
+      await wrapper.get('.test-follow').trigger('click');
+      await flushPromises();
+
+      expect(mocks.followUser).toHaveBeenCalledExactlyOnceWith(8);
+      expect(mocks.externalFollow).toHaveBeenCalledExactlyOnceWith(followResponse(8, true));
+      expect(wrapper.get('.test-follow').attributes('data-following')).toBe('true');
       wrapper.unmount();
     });
   });

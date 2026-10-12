@@ -26,7 +26,7 @@ func TestSuggestedUsersQueryIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Post{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Post{}, &models.UserAuthorAffinity{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB := global.APIDb
@@ -63,6 +63,8 @@ func TestSuggestedUsersQueryIntegration(t *testing.T) {
 	oldAuthor := makeUser("old")
 	replyAuthor := makeUser("reply")
 	deletedPostAuthor := makeUser("deleted-post")
+	affinityAuthor := makeUser("affinity")
+	otherViewer := makeUser("other-viewer")
 	if err := tx.Create(&models.UserFollow{FollowerID: viewer.ID, FollowingID: alreadyFollowed.ID}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +111,8 @@ func TestSuggestedUsersQueryIntegration(t *testing.T) {
 	addPostAt(viewer, 14, "public", 0)
 	addPostAt(alreadyFollowed, 15, "public", 0)
 	addPostAt(deletedAuthor, 16, "public", 0)
-	for minute := 17; minute <= 500; minute++ {
+	addPostAt(affinityAuthor, 17, "public", 0)
+	for minute := 18; minute <= 500; minute++ {
 		addPostAt(filler, minute, "public", 0)
 	}
 	for minute := 501; minute <= 506; minute++ {
@@ -138,6 +141,11 @@ func TestSuggestedUsersQueryIntegration(t *testing.T) {
 		}
 		return page
 	}
+	if err := tx.Create(&models.UserAuthorAffinity{
+		UserID: otherViewer.ID, AuthorID: authorC.ID, RawAffinity: 1000, RebuiltAt: time.Now().UTC(),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	page := request()
 	expected := []uint{popular.ID, filler.ID, authorA.ID, authorB.ID, authorC.ID}
@@ -157,5 +165,14 @@ func TestSuggestedUsersQueryIntegration(t *testing.T) {
 				t.Fatalf("unstable ordering: first=%v second=%v", page.Items, again.Items)
 			}
 		}
+	}
+	if err := tx.Create(&models.UserAuthorAffinity{
+		UserID: viewer.ID, AuthorID: affinityAuthor.ID, RawAffinity: 1000, RebuiltAt: time.Now().UTC(),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	personalizedPage := request()
+	if len(personalizedPage.Items) != 5 || personalizedPage.Items[0].User.ID != affinityAuthor.ID {
+		t.Fatalf("personalized page=%#v want affinity author %d first", personalizedPage, affinityAuthor.ID)
 	}
 }

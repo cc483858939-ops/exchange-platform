@@ -11,6 +11,7 @@ import {
   registerHistorySessionSync,
   registerProfileSessionSync,
   registerSearchSessionSync,
+  registerSuggestedUsersSessionSync,
   registerPostSearchSessionSync,
   registerBookmarksSessionSync,
   registerPostDetailSessionSync,
@@ -495,5 +496,22 @@ describe('sessionSync external mutation sinks', () => {
     syncExternalPostLikeState(likeUpdate);
 
     expect(quotes.applyExternalLikeStateLocal).not.toHaveBeenCalled();
+  });
+
+  it('fans follow state into all mounted suggested-user lists and unregisters them', () => {
+    const first = { applyExternalFollowStateLocal: vi.fn().mockReturnValue(true) };
+    const second = { applyExternalFollowStateLocal: vi.fn().mockReturnValue(true) };
+    const unregisterFirst = registerSuggestedUsersSessionSync(first);
+    const unregisterSecond = registerSuggestedUsersSessionSync(second);
+
+    syncExternalFollowState(followState);
+    expect(first.applyExternalFollowStateLocal).toHaveBeenCalledExactlyOnceWith(followState);
+    expect(second.applyExternalFollowStateLocal).toHaveBeenCalledExactlyOnceWith(followState);
+
+    unregisterFirst();
+    syncExternalFollowState(followState);
+    expect(first.applyExternalFollowStateLocal).toHaveBeenCalledOnce();
+    expect(second.applyExternalFollowStateLocal).toHaveBeenCalledTimes(2);
+    unregisterSecond();
   });
 });
