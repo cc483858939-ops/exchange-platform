@@ -334,6 +334,43 @@ describe('sessionSync external mutation sinks', () => {
     expect(connections.applyExternalFollowStateLocal).toHaveBeenCalledWith(followState);
   });
 
+  it('syncs Profile follow and unfollow state to every suggested list once', () => {
+    const { home, profile, search, connections } = registerSinks();
+    const first = { applyExternalFollowStateLocal: vi.fn().mockReturnValue(true) };
+    const second = { applyExternalFollowStateLocal: vi.fn().mockReturnValue(true) };
+    const unregisterFirst = registerSuggestedUsersSessionSync(first);
+    const unregisterSecond = registerSuggestedUsersSessionSync(second);
+    const followedState = { ...followState, following: true };
+
+    try {
+      syncProfileFollowState(followedState);
+      expect(first.applyExternalFollowStateLocal).toHaveBeenCalledExactlyOnceWith(followedState);
+      expect(second.applyExternalFollowStateLocal).toHaveBeenCalledExactlyOnceWith(followedState);
+      expect(home.reconcileFollowStateLocal).toHaveBeenCalledExactlyOnceWith(followedState);
+      expect(search.applyExternalFollowStateLocal).toHaveBeenCalledExactlyOnceWith(followedState);
+      expect(connections.applyExternalFollowStateLocal).toHaveBeenCalledExactlyOnceWith(followedState);
+
+      syncProfileFollowState(followState);
+      expect(first.applyExternalFollowStateLocal).toHaveBeenNthCalledWith(2, followState);
+      expect(second.applyExternalFollowStateLocal).toHaveBeenNthCalledWith(2, followState);
+      expect(home.reconcileFollowStateLocal).toHaveBeenNthCalledWith(2, followState);
+      expect(search.applyExternalFollowStateLocal).toHaveBeenNthCalledWith(2, followState);
+      expect(connections.applyExternalFollowStateLocal).toHaveBeenNthCalledWith(2, followState);
+
+      unregisterFirst();
+      syncProfileFollowState(followedState);
+      expect(first.applyExternalFollowStateLocal).toHaveBeenCalledTimes(2);
+      expect(second.applyExternalFollowStateLocal).toHaveBeenNthCalledWith(3, followedState);
+      expect(home.reconcileFollowStateLocal).toHaveBeenCalledTimes(3);
+      expect(search.applyExternalFollowStateLocal).toHaveBeenCalledTimes(3);
+      expect(connections.applyExternalFollowStateLocal).toHaveBeenCalledTimes(3);
+      expect(profile.applyExternalFollowStateLocal).not.toHaveBeenCalled();
+    } finally {
+      unregisterFirst();
+      unregisterSecond();
+    }
+  });
+
   it('routes external follow success to Home, Profile, and Search', () => {
     const { home, profile, search, connections } = registerSinks();
 

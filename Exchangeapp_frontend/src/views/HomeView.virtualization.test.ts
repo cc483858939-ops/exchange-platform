@@ -59,7 +59,10 @@ vi.mock('../services/userService', () => ({
   followUser: vi.fn(),
   unfollowUser: vi.fn(),
 }));
-vi.mock('../store/sessionSync', () => ({ syncExternalFollowState: mocks.syncExternalFollowState }));
+vi.mock('../store/sessionSync', () => ({
+  registerSuggestedUsersSessionSync: vi.fn(() => vi.fn()),
+  syncExternalFollowState: mocks.syncExternalFollowState,
+}));
 
 vi.mock('../services/recommendationTelemetry', () => ({
   getRecommendationTelemetry: () => mocks.telemetry,
@@ -664,7 +667,7 @@ describe('HomeView virtualization', () => {
       });
       await openFollowingEmptyState();
       expect(wrapper!.text()).toContain('Discover people to follow and see their posts here.');
-      expect(wrapper!.get('.following-suggestions__title').text()).toBe('Suggested for you');
+      expect(wrapper!.get('.suggested-users-list__heading').text()).toBe('Suggested for you');
       expect(wrapper!.get('.following-suggestions__primary').text()).toBe('Find more people');
       expect(mocks.getSuggestedUsers).toHaveBeenCalledWith(3);
     });

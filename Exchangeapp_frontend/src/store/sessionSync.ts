@@ -470,6 +470,9 @@ export const syncProfileFollowState = (state: UserFollowState) => {
   homeTimelineSync?.reconcileFollowStateLocal(state);
   searchSessionSync?.applyExternalFollowStateLocal(state);
   connectionsSessionSync?.applyExternalFollowStateLocal(state);
+  for (const suggestedUsersSessionSync of suggestedUsersSessionSyncs) {
+    suggestedUsersSessionSync.applyExternalFollowStateLocal(state);
+  }
 };
 
 export const syncExternalFollowState = (state: UserFollowState) => {
