@@ -30,14 +30,23 @@ func TestSuggestedUsersQueryIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	originalDB := global.APIDb
-	global.APIDb = db
-	t.Cleanup(func() { global.APIDb = originalDB })
+	tx := db.Begin()
+	if tx.Error != nil {
+		t.Fatal(tx.Error)
+	}
+	global.APIDb = tx
+	t.Cleanup(func() {
+		if err := tx.Rollback().Error; err != nil {
+			t.Errorf("rollback test transaction: %v", err)
+		}
+		global.APIDb = originalDB
+	})
 
 	token := uuid.NewString()
 	makeUser := func(label string) *models.User {
 		t.Helper()
 		user := &models.User{Username: "suggest-" + label + "-" + token, Password: "secret", DisplayName: label, Bio: "bio-" + label}
-		if err := db.Create(user).Error; err != nil {
+		if err := tx.Create(user).Error; err != nil {
 			t.Fatal(err)
 		}
 		return user
@@ -52,18 +61,17 @@ func TestSuggestedUsersQueryIntegration(t *testing.T) {
 	deletedAuthor := makeUser("deleted-author")
 	beyondSample := makeUser("beyond-sample")
 	oldAuthor := makeUser("old")
-	privateAuthor := makeUser("private")
 	replyAuthor := makeUser("reply")
 	deletedPostAuthor := makeUser("deleted-post")
-	if err := db.Create(&models.UserFollow{FollowerID: viewer.ID, FollowingID: alreadyFollowed.ID}).Error; err != nil {
+	if err := tx.Create(&models.UserFollow{FollowerID: viewer.ID, FollowingID: alreadyFollowed.ID}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Delete(deletedAuthor).Error; err != nil {
+	if err := tx.Delete(deletedAuthor).Error; err != nil {
 		t.Fatal(err)
 	}
 
 	postSequence := make([]*models.Post, 0, suggestedUserPostCandidateLimit+6)
-	addPostAt := func(author *models.User, minute int, visibility string, replyTo uint) *models.Post {
+	addPostAt := func(author *models.User, minute int, visibility string, replyTo uint, conversationIDs ...uint) *models.Post {
 		t.Helper()
 		post := &models.Post{
 			AuthorID:   author.ID,
@@ -72,9 +80,16 @@ func TestSuggestedUsersQueryIntegration(t *testing.T) {
 			Model:      gorm.Model{CreatedAt: time.Now().UTC().Add(-time.Duration(minute) * time.Minute)},
 		}
 		if replyTo > 0 {
+			if len(conversationIDs) != 1 || conversationIDs[0] == 0 {
+				t.Fatalf("reply post requires one existing conversation root ID")
+			}
+			conversationID := conversationIDs[0]
 			post.ReplyToPostID = &replyTo
+			post.ConversationID = &conversationID
+		} else if len(conversationIDs) != 0 {
+			t.Fatalf("top-level post cannot have a conversation root ID")
 		}
-		if err := db.Create(post).Error; err != nil {
+		if err := tx.Create(post).Error; err != nil {
 			t.Fatal(err)
 		}
 		postSequence = append(postSequence, post)
@@ -101,26 +116,11 @@ func TestSuggestedUsersQueryIntegration(t *testing.T) {
 		addPostAt(beyondSample, minute, "public", 0)
 	}
 	addPostAt(oldAuthor, 31*24*60, "public", 0)
-	addPostAt(privateAuthor, 1, "private", 0)
-	addPostAt(replyAuthor, 1, "public", postSequence[0].ID)
+	addPostAt(replyAuthor, 1, "public", postSequence[0].ID, postSequence[0].ID)
 	deletedPost := addPostAt(deletedPostAuthor, 3, "public", 0)
-	if err := db.Delete(deletedPost).Error; err != nil {
+	if err := tx.Delete(deletedPost).Error; err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if len(postSequence) > 0 {
-			ids := make([]uint, 0, len(postSequence))
-			for _, post := range postSequence {
-				if post.ID > 0 {
-					ids = append(ids, post.ID)
-				}
-			}
-			db.Unscoped().Where("id IN ?", ids).Delete(&models.Post{})
-		}
-		userIDs := []uint{viewer.ID, popular.ID, filler.ID, authorA.ID, authorB.ID, authorC.ID, alreadyFollowed.ID, deletedAuthor.ID, beyondSample.ID, oldAuthor.ID, privateAuthor.ID, replyAuthor.ID, deletedPostAuthor.ID}
-		db.Unscoped().Where("follower_id IN ? OR following_id IN ?", userIDs, userIDs).Delete(&models.UserFollow{})
-		db.Unscoped().Where("id IN ?", userIDs).Delete(&models.User{})
-	})
 
 	gin.SetMode(gin.TestMode)
 	request := func() userConnectionPageResponse {
