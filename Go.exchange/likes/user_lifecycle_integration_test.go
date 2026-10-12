@@ -63,6 +63,7 @@ func TestUserLikeTTLInitializationAndMutationsIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	time.Sleep(3 * time.Millisecond)
 	unlike, err := store.Mutate(ctx, userID, postID, false)
 	if err != nil || !unlike.Changed || unlike.Liked || unlike.Count != 0 || unlike.Version != 2 {
 		t.Fatalf("Unlike=%+v err=%v", unlike, err)
@@ -84,6 +85,7 @@ func TestUserLikeTTLInitializationAndMutationsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	time.Sleep(3 * time.Millisecond)
 	duplicateUnlike, err := store.Mutate(ctx, userID, postID, false)
 	if err != nil || duplicateUnlike.Changed || duplicateUnlike.Count != 0 || duplicateUnlike.Version != 2 {
 		t.Fatalf("idempotent Unlike=%+v err=%v", duplicateUnlike, err)
