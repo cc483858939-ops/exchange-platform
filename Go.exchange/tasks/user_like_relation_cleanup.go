@@ -15,9 +15,11 @@ import (
 )
 
 const (
-	userLikeCleanupUserPageSize = 64
-	userLikeCleanupScanCount    = 128
-	userLikeCleanupBatchSize    = 128
+	userLikeCleanupUserPageSize  = 64
+	userLikeCleanupScanCount     = 128
+	userLikeCleanupBatchSize     = 128
+	userLikeCleanupPassesPerTick = 16
+	userLikeCleanupTickBudget    = 200 * time.Millisecond
 )
 
 type userLikeRelationCleanupState struct {
@@ -45,9 +47,11 @@ func startUserLikeRelationCleanup(ctx context.Context, wg interface {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		for {
-			passCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			err := runUserLikeRelationCleanupPass(passCtx, store, db, &state)
-			cancel()
+			err := runUserLikeRelationCleanupTick(ctx, &state, func(tickCtx context.Context, state *userLikeRelationCleanupState) error {
+				passCtx, cancel := context.WithTimeout(tickCtx, 5*time.Second)
+				defer cancel()
+				return runUserLikeRelationCleanupPass(passCtx, store, db, state)
+			})
 			if err != nil && ctx.Err() == nil {
 				metrics.RecordLikeLifecycleEvent("user_relation_cleanup_error")
 				metrics.RecordLikeLifecycleEvent("user_relation_cleanup_retry")
@@ -60,6 +64,51 @@ func startUserLikeRelationCleanup(ctx context.Context, wg interface {
 			}
 		}
 	}()
+}
+
+// runUserLikeRelationCleanupTick runs bounded cleanup passes within one
+// scheduler interval. Each pass shares the same state so cursors and pending
+// members survive both successful batches and retries.
+func runUserLikeRelationCleanupTick(ctx context.Context, state *userLikeRelationCleanupState, pass func(context.Context, *userLikeRelationCleanupState) error) error {
+	if ctx == nil {
+		return errors.New("user relation cleanup tick context is nil")
+	}
+	if state == nil {
+		return errors.New("user relation cleanup tick progress is nil")
+	}
+	if pass == nil {
+		return errors.New("user relation cleanup tick pass is nil")
+	}
+
+	budgetEndsAt := time.Now().Add(userLikeCleanupTickBudget)
+	for passNumber := 0; passNumber < userLikeCleanupPassesPerTick; passNumber++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !time.Now().Before(budgetEndsAt) {
+			return nil
+		}
+		if err := pass(ctx, state); err != nil {
+			return err
+		}
+		if userLikeRelationCleanupCycleIsReset(state) {
+			return nil
+		}
+	}
+	return nil
+}
+
+// A completed scan cycle resets all in-memory cycle progress in
+// loadNextUserPage. Checking the full reset also recognizes an empty user
+// table on the first pass without adding another cursor or changing Pass.
+func userLikeRelationCleanupCycleIsReset(state *userLikeRelationCleanupState) bool {
+	return state.cycleStartedAt.IsZero() &&
+		state.lastUserID == 0 &&
+		len(state.users) == 0 &&
+		state.userIndex == 0 &&
+		state.userID == 0 &&
+		state.scanCursor == 0 &&
+		len(state.pending) == 0
 }
 
 // runUserLikeRelationCleanupPass advances one bounded SSCAN page. Progress is
