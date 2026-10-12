@@ -50,33 +50,22 @@
     </section>
 
     <section
-      v-else-if="activeFeedStatus.empty && !hasRecentlyPublishedPosts"
-      :class="['home-state', { 'home-state--following-empty': activeTab === 'following' }]"
+      v-else-if="activeFeedStatus.empty && !hasRecentlyPublishedPosts && activeTab === 'following'"
+      class="home-state home-state--following-empty"
       aria-live="polite"
     >
-      <template v-if="activeTab === 'following'">
-        <span class="home-state__discovery-icon" aria-hidden="true">
-          <AppIcon name="profile" :size="28" />
-        </span>
-        <h2>Your Following feed is quiet</h2>
-        <p class="home-state__description">Find people to follow and see their posts here.</p>
-        <RouterLink
-          class="home-state__primary"
-          :to="{ name: 'UserSearch', query: { tab: 'people' } }"
-        >
-          Find people
-        </RouterLink>
-        <nav class="home-state__discovery-links" aria-label="Discover more">
-          <RouterLink class="home-state__discovery-link" :to="{ name: 'TopicDirectory' }">
-            Explore topics
-          </RouterLink>
-          <span aria-hidden="true">·</span>
-          <button class="home-state__discovery-link" type="button" @click="selectTab('for-you')">
-            Browse For You
-          </button>
-        </nav>
-      </template>
-      <h2 v-else>No recommendations yet</h2>
+      <FollowingSuggestions
+        :viewer-id="currentViewerID()"
+        @browse-for-you="selectTab('for-you')"
+      />
+    </section>
+
+    <section
+      v-else-if="activeFeedStatus.empty && !hasRecentlyPublishedPosts"
+      class="home-state"
+      aria-live="polite"
+    >
+      <h2>No recommendations yet</h2>
     </section>
 
     <section
@@ -278,6 +267,7 @@ import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import { isInitialDocumentEntryForRoute } from '../router/documentNavigation';
 import { virtualItemsWithInitialFallback } from '../utils/virtualizer';
 import FeedTabs from '../components/feed/FeedTabs.vue';
+import FollowingSuggestions from '../components/feed/FollowingSuggestions.vue';
 import PostCard from '../components/feed/PostCard.vue';
 import AppIcon from '../components/icons/AppIcon.vue';
 import MobileHomeHeader from '../components/layout/MobileHomeHeader.vue';
@@ -1725,63 +1715,6 @@ onBeforeUnmount(() => {
 
 .home-state--following-empty {
   gap: var(--space-4);
-}
-
-.home-state__discovery-icon {
-  display: grid;
-  width: 56px;
-  height: 56px;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--color-surface-subtle);
-  color: var(--color-accent);
-}
-
-.home-state__description {
-  max-width: 30ch;
-  margin: 0;
-  color: var(--color-text-secondary);
-  line-height: 1.5;
-}
-
-.home-state--following-empty .home-state__primary {
-  min-height: 44px;
-}
-
-.home-state__discovery-links {
-  display: flex;
-  max-width: 100%;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-1);
-}
-
-.home-state__discovery-link {
-  display: inline-flex;
-  min-height: 44px;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: var(--radius-pill);
-  padding: 0 var(--space-2);
-  background: transparent;
-  color: var(--color-accent);
-  font: inherit;
-  font-size: 14px;
-  font-weight: 700;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.home-state__discovery-link:hover {
-  color: var(--color-accent-hover);
-  text-decoration: underline;
-}
-
-.home-state__discovery-link:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
 }
 
 .home-state__actions {

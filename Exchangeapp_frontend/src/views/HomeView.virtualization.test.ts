@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   route: null as any,
   router: null as any,
   routeLeave: null as (() => unknown) | null,
+  getSuggestedUsers: vi.fn(),
+  syncExternalFollowState: vi.fn(),
   initialDocumentNavigation: {
     type: 'unknown',
     url: '',
@@ -52,6 +54,12 @@ vi.mock('../store/feed', () => ({
 vi.mock('../store/homeTimeline', () => ({
   useHomeTimelineStore: () => mocks.homeTimeline,
 }));
+vi.mock('../services/userService', () => ({
+  getSuggestedUsers: mocks.getSuggestedUsers,
+  followUser: vi.fn(),
+  unfollowUser: vi.fn(),
+}));
+vi.mock('../store/sessionSync', () => ({ syncExternalFollowState: mocks.syncExternalFollowState }));
 
 vi.mock('../services/recommendationTelemetry', () => ({
   getRecommendationTelemetry: () => mocks.telemetry,
@@ -570,6 +578,9 @@ describe('HomeView virtualization', () => {
     mocks.routeLeave = null;
     mocks.postViewTelemetry.releaseFeedViewSession.mockClear();
     Object.values(mocks.telemetry).forEach((mock) => mock.mockClear());
+    mocks.getSuggestedUsers.mockReset();
+    mocks.getSuggestedUsers.mockResolvedValue({ items: [], has_more: false });
+    mocks.syncExternalFollowState.mockClear();
   });
 
   afterEach(() => {
@@ -593,14 +604,14 @@ describe('HomeView virtualization', () => {
 
       expect(wrapper!.get('.home-state').text()).toContain('Your Following feed is quiet');
       expect(wrapper!.get('.home-state').text()).toContain('Find people to follow and see their posts here.');
-      expect(wrapper!.get('.home-state__discovery-icon').attributes('aria-hidden')).toBe('true');
+      expect(wrapper!.get('.following-suggestions__icon').attributes('aria-hidden')).toBe('true');
 
-      const peopleLink = wrapper!.get('.home-state__primary');
+      const peopleLink = wrapper!.get('.following-suggestions__primary');
       expect(peopleLink.text()).toBe('Find people');
       expect(peopleLink.attributes('data-route-name')).toBe('UserSearch');
       expect(peopleLink.attributes('data-route-tab')).toBe('people');
 
-      const topicsLink = wrapper!.get('.home-state__discovery-links a');
+      const topicsLink = wrapper!.get('.following-suggestions__links a');
       expect(topicsLink.text()).toBe('Explore topics');
       expect(topicsLink.attributes('data-route-name')).toBe('TopicDirectory');
     });
@@ -611,7 +622,7 @@ describe('HomeView virtualization', () => {
       mocks.homeTimeline.setActiveTab.mockClear();
       mocks.homeTimeline.loadForYou.mockClear();
 
-      await wrapper!.get('button.home-state__discovery-link').trigger('click');
+      await wrapper!.get('button.following-suggestions__link').trigger('click');
       await settle();
 
       expect(mocks.homeTimeline.activeTab).toBe('for-you');
@@ -628,7 +639,34 @@ describe('HomeView virtualization', () => {
       await settle();
 
       expect(wrapper.get('.home-state h2').text()).toBe('No recommendations yet');
-      expect(wrapper.find('.home-state__discovery-icon').exists()).toBe(false);
+      expect(mocks.getSuggestedUsers).not.toHaveBeenCalled();
+      expect(wrapper.find('.following-suggestions__icon').exists()).toBe(false);
+    });
+
+    it('requests recommendations only when an empty Following feed is active', async () => {
+      mocks.homeTimeline = makeTimeline({ forYouItems: [] });
+      wrapper = mountHome();
+      await settle();
+      expect(mocks.getSuggestedUsers).not.toHaveBeenCalled();
+      await wrapper.get('[data-feed-tab="following"]').trigger('click');
+      await settle();
+      expect(mocks.getSuggestedUsers).toHaveBeenCalledOnce();
+      expect(wrapper.find('.following-suggestions__content').exists()).toBe(false);
+    });
+    it('shows V2 suggestions only after the Following empty state appears', async () => {
+      const suggestedUser = {
+        id: 88, username: 'suggested', display_name: 'Suggested', avatar_url: '',
+        bio: 'Recent posts', created_at: '2026-09-01T00:00:00.000Z',
+      };
+      mocks.getSuggestedUsers.mockResolvedValueOnce({
+        items: [{ user: suggestedUser, following: false }],
+        has_more: false,
+      });
+      await openFollowingEmptyState();
+      expect(wrapper!.text()).toContain('Discover people to follow and see their posts here.');
+      expect(wrapper!.get('.following-suggestions__title').text()).toBe('Suggested for you');
+      expect(wrapper!.get('.following-suggestions__primary').text()).toBe('Find more people');
+      expect(mocks.getSuggestedUsers).toHaveBeenCalledWith(3);
     });
 
     it('keeps Loading and Error states ahead of the empty state', async () => {
@@ -641,6 +679,7 @@ describe('HomeView virtualization', () => {
       await settle();
 
       expect(wrapper.find('.feed-list--loading').exists()).toBe(true);
+      expect(mocks.getSuggestedUsers).not.toHaveBeenCalled();
       expect(wrapper.find('.home-state').exists()).toBe(false);
 
       timeline.following.loading = false;
@@ -659,8 +698,9 @@ describe('HomeView virtualization', () => {
       await wrapper.get('[data-feed-tab="following"]').trigger('click');
       await settle();
 
-      expect(wrapper.find('.home-state__discovery-icon').exists()).toBe(false);
+      expect(wrapper.find('.following-suggestions__icon').exists()).toBe(false);
       expect(wrapper.find('.post-card-stub[data-post-id="901"]').exists()).toBe(true);
+      expect(mocks.getSuggestedUsers).not.toHaveBeenCalled();
     });
   });
 

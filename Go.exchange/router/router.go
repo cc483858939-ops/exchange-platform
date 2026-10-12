@@ -117,6 +117,7 @@ func setupRouter(authController *controllers.AuthController, verifier auth.Acces
 		api.POST("/uploads/profile-avatar", controllers.UploadProfileAvatar)
 		api.POST("/uploads/profile-cover", controllers.UploadProfileCover)
 		api.GET("/users/search", controllers.SearchUsers)
+		api.GET("/users/suggestions", controllers.GetSuggestedUsers)
 		api.PATCH("/users/:id", controllers.UpdateUserProfile)
 		api.GET("/users/:id/follow", controllers.GetUserFollowState)
 		api.PUT("/users/:id/follow", withRateLimit(enableApplicationRateLimit, applicationLimiter, ratelimit.ActionFollowMutation, ratelimit.FailClosed, controllers.FollowUser)...)

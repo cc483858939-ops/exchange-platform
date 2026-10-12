@@ -112,6 +112,11 @@ export async function searchUsers(options: UserSearchQuery): Promise<UserConnect
 	return response.data;
 }
 
+export async function getSuggestedUsers(limit = 3): Promise<UserConnectionPage> {
+	const response = await apiClient.get<UserConnectionPage>('/users/suggestions', { params: { limit } });
+	return response.data;
+}
+
 export async function followUser(userId: number | string): Promise<UserFollowState> {
   const id = normalizeResourceID(userId, 'user');
   const response = await apiClient.put<UserFollowState>(`/users/${id}/follow`);
