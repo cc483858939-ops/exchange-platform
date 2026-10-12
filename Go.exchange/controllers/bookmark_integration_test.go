@@ -100,7 +100,7 @@ func bytesReader(body []byte) *bytes.Buffer {
 
 func TestPostBookmarkIntegration(t *testing.T) {
 	db := openPostBookmarkIntegrationDatabase(t)
-	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostMedia{}, &models.PostBookmark{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostMedia{}, &models.PostBookmark{}, &models.PostRepost{}); err != nil {
 		t.Fatal(err)
 	}
 

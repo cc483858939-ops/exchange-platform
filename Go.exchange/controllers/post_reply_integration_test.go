@@ -39,7 +39,7 @@ func openReplyIntegrationDatabase(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostMedia{}, &models.PostMediaUpload{}, &models.PostBehavior{}, &models.PostRepost{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.PostMedia{}, &models.PostMediaUpload{}, &models.PostBehavior{}, &models.PostRepost{}, &models.PostReaction{}, &models.PostLikeCleanup{}, &models.PostLikeInitJob{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB, originalConfig := global.APIDb, config.AppConfig
@@ -72,6 +72,7 @@ func newReplyIntegrationFixture(t *testing.T, db *gorm.DB) replyIntegrationFixtu
 		}
 		postIDs := append(childIDs, fixture.Article.ID)
 		if len(postIDs) > 0 {
+			db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostLikeInitJob{})
 			db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostRepost{})
 			db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostReaction{})
 			db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostMedia{})

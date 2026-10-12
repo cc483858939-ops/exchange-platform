@@ -275,16 +275,16 @@ func TestPublishedSchemaVersionContractIsIndependentAndValid(t *testing.T) {
 	if err := validatePublishedSchemaVersions(); err != nil {
 		t.Fatalf("published schema version contract is invalid: %v", err)
 	}
-	if PublishedSchemaCurrentVersion != 17 || PublishedSchemaCompatibilityFloor != 14 || RequiredSchemaVersion != 17 {
+	if PublishedSchemaCurrentVersion != 18 || PublishedSchemaCompatibilityFloor != 14 || RequiredSchemaVersion != 18 {
 		t.Fatalf("unexpected initial published schema interval: current=%d floor=%d required=%d", PublishedSchemaCurrentVersion, PublishedSchemaCompatibilityFloor, RequiredSchemaVersion)
 	}
-	for _, version := range []int64{14, 15, 16, 17} {
-		if !runtimeSchemaVersionsCompatible(17, 14, version) {
-			t.Fatalf("schema 17 rejected compatible binary %d", version)
+	for _, version := range []int64{14, 15, 16, 17, 18} {
+		if !runtimeSchemaVersionsCompatible(18, 14, version) {
+			t.Fatalf("schema 18 rejected compatible binary %d", version)
 		}
 	}
 	if runtimeSchemaVersionsCompatible(17, 14, 13) {
-		t.Fatal("schema 17 must reject schema-13 binaries")
+		t.Fatal("schema 18 must reject schema-13 binaries")
 	}
 }
 

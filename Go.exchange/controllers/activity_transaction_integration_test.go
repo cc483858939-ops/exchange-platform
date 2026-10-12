@@ -25,7 +25,7 @@ func TestActivityOutboxFailureRollsBackCanonicalReplyAndFollowIntegration(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Post{}, &models.Post{}, &models.PostBehavior{}, &models.UserRecoProfileDirty{}, &models.OutboxEvent{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Post{}, &models.Post{}, &models.PostBehavior{}, &models.UserRecoProfileDirty{}, &models.OutboxEvent{}, &models.PostLikeInitJob{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB, originalConfig := global.APIDb, config.AppConfig

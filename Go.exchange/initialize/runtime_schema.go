@@ -17,15 +17,15 @@ import (
 )
 
 // RequiredSchemaVersion is the schema version required by this binary.
-// Schema 17 adds durable propagation of deleted Post Like state.
-const RequiredSchemaVersion int64 = 17
+// Schema 18 adds durable initialization retries for newly created Posts.
+const RequiredSchemaVersion int64 = 18
 
 // PublishedSchemaCurrentVersion and PublishedSchemaCompatibilityFloor are
 // migration-owned values. They are deliberately separate from the binary's
 // required version so a migration can publish a compatibility interval that
 // spans more than one release.
 const (
-	PublishedSchemaCurrentVersion     int64 = 17
+	PublishedSchemaCurrentVersion     int64 = 18
 	PublishedSchemaCompatibilityFloor int64 = 14
 )
 
@@ -135,6 +135,15 @@ var postSchemaObjectCanaries = []schemaObjectCanary{
 		Indexes:     []string{"post_like_cleanups_pkey", "idx_post_like_cleanup_due"},
 	},
 	{
+		Table: "post_like_init_jobs",
+		Constraints: []string{
+			"chk_post_like_init_jobs_post_positive",
+			"chk_post_like_init_jobs_attempts_nonnegative",
+			"chk_post_like_init_jobs_state",
+		},
+		Indexes: []string{"post_like_init_jobs_pkey", "idx_post_like_init_jobs_due"},
+	},
+	{
 		Table: "post_media_uploads",
 		Constraints: []string{
 			"fk_post_media_uploads_owner",
@@ -217,6 +226,7 @@ var apiSchemaModels = []interface{}{
 	&models.PostMediaUpload{},
 	&models.PostMediaCleanup{},
 	&models.PostLikeCleanup{},
+	&models.PostLikeInitJob{},
 	&models.PostRepost{},
 	&models.PostBookmark{},
 	&models.PostReaction{},

@@ -51,6 +51,7 @@ func openPostEmbeddingOutboxIntegrationDatabase(t *testing.T) *gorm.DB {
 		&models.PostBehavior{},
 		&models.UserRecoProfileDirty{},
 		&models.OutboxEvent{},
+		&models.PostLikeInitJob{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -98,6 +99,7 @@ func (fixture *postEmbeddingOutboxFixture) cleanup() {
 			aggregateIDs = append(aggregateIDs, strconv.FormatUint(uint64(post.ID), 10))
 			postIDs = append(postIDs, post.ID)
 		}
+		fixture.db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostLikeInitJob{})
 		fixture.db.Unscoped().Where("aggregate_id IN ?", aggregateIDs).Delete(&models.OutboxEvent{})
 		fixture.db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostMedia{})
 		fixture.db.Unscoped().Where("post_id IN ?", postIDs).Delete(&models.PostBehavior{})

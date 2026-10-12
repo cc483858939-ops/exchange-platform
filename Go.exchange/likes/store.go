@@ -455,8 +455,13 @@ func (s *Store) LoadFullState(ctx context.Context, postID uint) (FullState, erro
 	if ready.Err() == nil && ready.Val() == "deleted" {
 		return FullState{}, ErrPostLikeUnavailable
 	}
+	for _, commandErr := range []error{ready.Err(), count.Err(), version.Err()} {
+		if commandErr != nil && commandErr != redis.Nil {
+			return FullState{}, postCommandErrorOrNotReady(commandErr)
+		}
+	}
 	if execErr != nil && execErr != redis.Nil {
-		return FullState{}, execErr
+		return FullState{}, postCommandErrorOrNotReady(execErr)
 	}
 	if err := postCommandErrorOrNotReady(ready.Err()); err != nil {
 		return FullState{}, err

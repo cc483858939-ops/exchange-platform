@@ -36,6 +36,7 @@ var (
 	likeClaimDuration                            = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "go_exchange_like_claim_duration_seconds", Help: "Redis Like claim batch duration by queue.", Buckets: prometheus.DefBuckets}, []string{"queue"})
 	likeQueueOperations                          = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_like_queue_operations_total", Help: "Redis Like queue operations by queue, operation and bounded outcome."}, []string{"queue", "operation", "outcome"})
 	likeLifecycleEvents                          = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_like_lifecycle_events_total", Help: "Like lifecycle and User -> Posts repair events by bounded outcome."}, []string{"event"})
+	postLikeInitJobsBacklog                      = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_post_like_init_jobs_backlog", Help: "Number of durable Post Like initialization jobs waiting or being retried."})
 	userLikeRelationsRemoved                     = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_user_like_relations_removed_total", Help: "Deleted Post relations removed from User Like Sets by bounded maintenance."})
 	userLikeCleanupBatchUsers                    = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_user_like_cleanup_batch_users", Help: "Users processed by one bounded User Like cleanup batch.", Buckets: []float64{0, 1, 2, 4, 8, 16, 32, 64}})
 	userLikeCleanupBatchRelations                = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_user_like_cleanup_batch_relations", Help: "Relations examined by one bounded User Like cleanup batch.", Buckets: []float64{0, 1, 4, 16, 32, 64, 128}})
@@ -102,7 +103,7 @@ var (
 func init() {
 	registry.MustRegister(
 		httpRequestsTotal, httpRequestDuration, recommendationHTTPDuration, postEmbeddingEvents, postEmbeddingFailures, postEmbeddingPublishFailures, postEmbeddingProcessingDuration, kafkaConsumerRecovery,
-		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxRowsLastSuccess, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, consumerInboxRowsLastSuccess, notificationProjectionFailures, notificationProjectionLatency, likePipelineDepth, likePipelineDepthLastSuccess, likeClaimDuration, likeQueueOperations, likeLifecycleEvents, userLikeRelationsRemoved, userLikeCleanupBatchUsers, userLikeCleanupBatchRelations, userLikeCleanupBatchRemoved, userLikeCleanupBatchDuration, userLikeCleanupCycleDuration, userLikeCleanupLastCycle, userLikeTTLEvents, userLikeRestoreResults, userLikeRestoreDuration, userLikeRestoreRelations, userLikeRestoreInflight, userLikeCapEvents, userLikeActiveRelations, userLikeEvictionDuration,
+		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxRowsLastSuccess, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, consumerInboxRowsLastSuccess, notificationProjectionFailures, notificationProjectionLatency, likePipelineDepth, likePipelineDepthLastSuccess, likeClaimDuration, likeQueueOperations, likeLifecycleEvents, postLikeInitJobsBacklog, userLikeRelationsRemoved, userLikeCleanupBatchUsers, userLikeCleanupBatchRelations, userLikeCleanupBatchRemoved, userLikeCleanupBatchDuration, userLikeCleanupCycleDuration, userLikeCleanupLastCycle, userLikeTTLEvents, userLikeRestoreResults, userLikeRestoreDuration, userLikeRestoreRelations, userLikeRestoreInflight, userLikeCapEvents, userLikeActiveRelations, userLikeEvictionDuration,
 		recommendationTelemetryEvents, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests,
 		recommendationRequestLogFailures, recommendationTrackingResults,
@@ -150,11 +151,18 @@ func RecordLikeLifecycleEvent(event string) {
 	case "user_not_ready", "post_not_ready", "redis_type_error", "count_inconsistent", "user_init_failure", "post_init_failure", "post_recovery_refused",
 		"stale_relation_removed", "user_relation_cleanup_error", "user_relation_cleanup_retry", "user_relation_cleanup_user_state_error",
 		"user_relation_cleanup_post_state_error", "user_relation_cleanup_lifecycle_mismatch", "user_relation_cleanup_cold_skipped", "post_init_retry", "post_reactivation_refused",
-		"post_delete_fence_success", "post_delete_cleanup_failure", "post_delete_cleanup_retry":
+		"post_delete_fence_success", "post_delete_cleanup_failure", "post_delete_cleanup_retry", "post_init_success", "post_init_unsafe":
 		likeLifecycleEvents.WithLabelValues(event).Inc()
 	default:
 		likeLifecycleEvents.WithLabelValues("unknown").Inc()
 	}
+}
+
+func SetPostLikeInitJobsBacklog(backlog int64) {
+	if backlog < 0 {
+		backlog = 0
+	}
+	postLikeInitJobsBacklog.Set(float64(backlog))
 }
 
 func RecordUserLikeTTLEvent(event string) {

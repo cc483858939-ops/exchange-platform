@@ -12,6 +12,7 @@ import (
 	"Go.exchange/global"
 	"Go.exchange/likes"
 	"Go.exchange/models"
+	"Go.exchange/postlikeinit"
 
 	"github.com/go-redis/redis/v7"
 )
@@ -43,6 +44,7 @@ func TestPostCreationFormsAreImmediatelyLikeReadyIntegration(t *testing.T) {
 		if err := cleanupPostLikeIntegrationState(redisClient, createdIDs, userIDs); err != nil {
 			t.Errorf("cleanup post-like Redis integration state: %v", err)
 		}
+		db.Unscoped().Where("post_id IN ?", createdIDs).Delete(&models.PostLikeInitJob{})
 		db.Unscoped().Where("post_id IN ?", createdIDs).Delete(&models.PostReaction{})
 		db.Unscoped().Where("post_id IN ? OR user_id IN ?", createdIDs, userIDs).Delete(&models.PostBehavior{})
 		db.Unscoped().Where("user_id IN ?", userIDs).Delete(&models.UserRecoProfileDirty{})
@@ -99,6 +101,79 @@ func TestPostCreationFormsAreImmediatelyLikeReadyIntegration(t *testing.T) {
 	assertPostLikeMutationIntegration(t, dedicatedReply.ID, fixture.Commenter.ID, false, 0, false)
 	assertPostLikeStateIntegration(t, shortRoot.ID, fixture.Commenter.ID, 0, false)
 	assertPostLikeStatesIntegration(t, []uint{shortRoot.ID, dedicatedReply.ID, nestedReply.ID}, fixture.Commenter.ID)
+}
+
+func TestPostLikeInitSurvivesRedisOutageAndRecoversIntegration(t *testing.T) {
+	if os.Getenv("POSTGRES_TEST_DSN") == "" || os.Getenv("REDIS_TEST_ADDR") == "" {
+		t.Skip("set POSTGRES_TEST_DSN and REDIS_TEST_ADDR to run PostgreSQL/Redis integration test")
+	}
+	db := openReplyIntegrationDatabase(t)
+	if err := db.AutoMigrate(&models.PostReaction{}, &models.UserRecoProfileDirty{}, &models.OutboxEvent{}); err != nil {
+		t.Fatal(err)
+	}
+	fixture := newReplyIntegrationFixture(t, db)
+	redisClient := openPostLikeIntegrationRedis(t)
+	store := likes.NewStore(redisClient)
+	if err := store.InitializeUserEmpty(t.Context(), fixture.Author.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	var postID uint
+	t.Cleanup(func() {
+		global.RedisDB = redisClient
+		if postID != 0 {
+			if err := cleanupPostLikeIntegrationState(redisClient, []uint{postID}, []uint{fixture.Author.ID}); err != nil {
+				t.Errorf("cleanup Post Like initialization recovery state: %v", err)
+			}
+			db.Unscoped().Where("post_id = ?", postID).Delete(&models.PostLikeInitJob{})
+			db.Unscoped().Where("id = ?", postID).Delete(&models.Post{})
+		}
+	})
+
+	previousRedis := global.RedisDB
+	offlineRedis := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 100 * time.Millisecond})
+	global.RedisDB = offlineRedis
+	ctx, recorder := newReplyIntegrationContext(http.MethodPost, "/api/posts", "", `{"content":"retry after Redis recovery"}`, fixture.Author.ID)
+	createPost(ctx)
+	_ = offlineRedis.Close()
+	global.RedisDB = previousRedis
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create status during Redis outage=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	created := decodeCreatedPost(t, recorder)
+	postID = created.ID
+
+	var job models.PostLikeInitJob
+	if err := db.First(&job, "post_id = ?", postID).Error; err != nil {
+		t.Fatalf("durable initialization task after Redis outage: %v", err)
+	}
+	if job.State != models.PostLikeInitJobPending || job.Attempts == 0 || !job.RetryAfter.After(time.Now().UTC()) {
+		t.Fatalf("outage task=%+v want pending with an attempt and future backoff", job)
+	}
+	if _, err := store.LoadFullState(t.Context(), postID); err == nil {
+		t.Fatal("Post Like state became ready while Redis was unavailable")
+	}
+
+	// Advance this task past its verified backoff so it is the first due row
+	// even when the shared integration database contains older fixture jobs.
+	if err := db.Model(&models.PostLikeInitJob{}).Where("post_id = ?", postID).
+		Update("retry_after", time.Unix(1, 0).UTC()).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := postlikeinit.RunPass(t.Context(), db, store, time.Now().UTC()); err != nil {
+		t.Fatalf("worker retry after Redis recovery: %v", err)
+	}
+	state, err := store.LoadFullState(t.Context(), postID)
+	if err != nil || state.Count != 0 || state.Version != 0 {
+		t.Fatalf("recovered state=%+v err=%v want count=0 version=0", state, err)
+	}
+	if err := db.First(&job, "post_id = ?", postID).Error; err == nil {
+		t.Fatal("recovered initialization task was not acknowledged")
+	}
+	mutation, err := store.Mutate(t.Context(), fixture.Author.ID, postID, true)
+	if err != nil || !mutation.Liked || mutation.Count != 1 {
+		t.Fatalf("Like after initialization recovery result=%+v err=%v", mutation, err)
+	}
 }
 
 func openPostLikeIntegrationRedis(t *testing.T) *redis.Client {
@@ -248,6 +323,13 @@ func createPostForLikeIntegration(t *testing.T, userID uint, body string) postRe
 	}
 	if response.ID == 0 {
 		t.Fatalf("create post response=%#v", response)
+	}
+	var pendingJobs int64
+	if err := global.APIDb.Model(&models.PostLikeInitJob{}).Where("post_id = ?", response.ID).Count(&pendingJobs).Error; err != nil {
+		t.Fatal(err)
+	}
+	if pendingJobs != 0 {
+		t.Fatalf("successful synchronous Like initialization left %d tasks for Post %d", pendingJobs, response.ID)
 	}
 	return response
 }

@@ -42,6 +42,7 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 			&models.PostMediaUpload{},
 			&models.PostMediaCleanup{},
 			&models.PostLikeCleanup{},
+			&models.PostLikeInitJob{},
 			&models.PostRepost{},
 			&models.PostBookmark{},
 			&models.PostEmbedding{},

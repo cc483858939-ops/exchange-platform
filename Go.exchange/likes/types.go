@@ -41,6 +41,8 @@ var (
 	ErrLikeStateExpiryUnsupported     = config.ErrLikeStateExpiryUnsupported
 )
 
+var ErrLikeInitializationOutcomeUnknown = errors.New("post like initialization outcome is unknown")
+
 type likeRedisTypeError struct{ kind error }
 
 func (e likeRedisTypeError) Error() string { return e.kind.Error() }

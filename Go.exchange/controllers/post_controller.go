@@ -13,9 +13,9 @@ import (
 	"Go.exchange/eventing"
 	"Go.exchange/global"
 	"Go.exchange/likes"
-	"Go.exchange/metrics"
 	"Go.exchange/models"
 	"Go.exchange/postlanguage"
+	"Go.exchange/postlikeinit"
 	"Go.exchange/postmediaupload"
 	"Go.exchange/ratelimit"
 	"Go.exchange/recommendation"
@@ -43,21 +43,10 @@ const (
 
 var loadPostAuthorForCreate = loadPublicAuthorByID
 var initializePostLikeState = func(ctx context.Context, postID uint) error {
-	if global.RedisDB == nil {
-		return errors.New("redis is not initialized")
+	if global.APIDb == nil {
+		return errors.New("database is not initialized")
 	}
-	store := likes.NewStore(global.RedisDB)
-	_, err := store.InitializeNewPostFrom(ctx, postID, func(ctx context.Context) (likes.FullState, error) {
-		baseline, err := loadPostLikeBaselineFromDB(ctx, postID)
-		if err != nil {
-			return likes.FullState{}, err
-		}
-		if err := validatePostLikeBaseline(baseline); err != nil {
-			return likes.FullState{}, err
-		}
-		return likes.FullState{Count: baseline.Count, Version: baseline.Version}, nil
-	})
-	return err
+	return postlikeinit.RunNow(ctx, global.APIDb, likes.NewStore(global.RedisDB), postID)
 }
 
 var invalidatePostCreateParentDetailCache = func(postID uint) error {
@@ -69,7 +58,6 @@ var invalidatePostCreateParentDetailCache = func(postID uint) error {
 
 func initializePostLikeStateAfterCommit(ctx context.Context, postID uint) {
 	if err := initializePostLikeState(ctx, postID); err != nil {
-		metrics.RecordLikeLifecycleEvent("post_init_failure")
 		log.Printf("[PostCreate] initialize Redis like state post=%d: %v", postID, err)
 		if global.APIDb != nil {
 			global.APIDb.Logger.Error(ctx, "failed to initialize post like state", err)
@@ -293,6 +281,11 @@ func persistPostGraph(ctx context.Context, post *models.Post, userID uint, conte
 		post.CreatedAt = now
 		post.UpdatedAt = now
 		if err := tx.Create(post).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&models.PostLikeInitJob{
+			PostID: post.ID, RetryAfter: now.UTC(), State: models.PostLikeInitJobPending,
+		}).Error; err != nil {
 			return err
 		}
 		if len(media) > 0 {

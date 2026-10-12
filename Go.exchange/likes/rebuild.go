@@ -3,6 +3,7 @@ package likes
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -67,18 +68,26 @@ var newPostInitializationRetryDelays = [...]time.Duration{50 * time.Millisecond,
 // retries transient infrastructure failures a bounded number of times while
 // retaining the same rebuild token; safety and lifecycle errors fail closed.
 func (s *Store) InitializeNewPostFrom(ctx context.Context, postID uint, load func(context.Context) (FullState, error)) (bool, error) {
+	created, _, err := s.InitializeNewPostFromWithOutcome(ctx, postID, load)
+	return created, err
+}
+
+// InitializeNewPostFromWithOutcome reports whether a failed initialization
+// call may have changed Redis. Callers with durable retry state must not
+// bootstrap a missing state after an ambiguous network result.
+func (s *Store) InitializeNewPostFromWithOutcome(ctx context.Context, postID uint, load func(context.Context) (FullState, error)) (bool, bool, error) {
 	if ctx == nil {
-		return false, errors.New("new Post Like initialization context is nil")
+		return false, false, errors.New("new Post Like initialization context is nil")
 	}
 	if s == nil || s.client == nil {
-		return false, errors.New("redis is not initialized")
+		return false, false, errors.New("redis is not initialized")
 	}
 	if postID == 0 || load == nil {
-		return false, ErrLikeRecoveryUnsafe
+		return false, false, ErrLikeRecoveryUnsafe
 	}
 
 	token := uuid.NewString()
-	acquired := false
+	mutationPossible := false
 	acquire := func(attemptCtx context.Context, ownerToken string) error {
 		err := beginRebuildScript.Run(
 			s.client.WithContext(attemptCtx),
@@ -87,9 +96,6 @@ func (s *Store) InitializeNewPostFrom(ctx context.Context, postID uint, load fun
 			config.LikeRebuildTokenTTL().Milliseconds(),
 			0,
 		).Err()
-		if err == nil {
-			acquired = true
-		}
 		return mapScriptError(err)
 	}
 	initialize := func(attemptCtx context.Context, ownerToken string) (bool, error) {
@@ -104,18 +110,46 @@ func (s *Store) InitializeNewPostFrom(ctx context.Context, postID uint, load fun
 		if err == nil {
 			return created, nil
 		}
-		if errors.Is(err, ErrLikeRecoveryFenceLost) {
-			if _, stateErr := s.Get(attemptCtx, 0, postID); stateErr == nil {
-				return false, nil
+		if isDefinitelyUnexecutedLikeInitialization(err) || errors.Is(err, ErrLikeRecoveryUnsafe) ||
+			errors.Is(err, ErrLikeRecoveryFenceLost) || errors.Is(err, ErrPostLikeUnavailable) ||
+			errors.Is(err, ErrLikeRedisType) {
+			if errors.Is(err, ErrLikeRecoveryFenceLost) {
+				if _, stateErr := s.LoadFullState(attemptCtx, postID); stateErr == nil {
+					return false, nil
+				}
 			}
+			return false, err
 		}
-		return false, err
+		mutationPossible = true
+		if _, stateErr := s.LoadFullState(attemptCtx, postID); stateErr == nil {
+			return false, nil
+		}
+		return false, fmt.Errorf("%w: %v", ErrLikeInitializationOutcomeUnknown, err)
 	}
 	created, err := runNewPostInitializationWithRetry(ctx, token, acquire, initialize)
-	if acquired {
-		s.ReleaseRebuildMany(ctx, map[uint]string{postID: token})
+	// The acquire reply can be lost after Redis stored the token. Releasing by
+	// owner token is safe even when acquisition failed or another token won.
+	s.ReleaseRebuildMany(ctx, map[uint]string{postID: token})
+	return created, mutationPossible, err
+}
+
+func isDefinitelyUnexecutedLikeInitialization(err error) bool {
+	if err == nil {
+		return false
 	}
-	return created, err
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EHOSTUNREACH) {
+		return true
+	}
+	var redisErr redis.Error
+	if errors.As(err, &redisErr) {
+		message := strings.TrimSpace(redisErr.Error())
+		for _, prefix := range []string{"LOADING ", "TRYAGAIN ", "READONLY ", "CLUSTERDOWN ", "MASTERDOWN "} {
+			if strings.HasPrefix(message, prefix) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func runNewPostInitializationWithRetry(
@@ -174,7 +208,7 @@ func waitNewPostInitializationRetry(ctx context.Context, attempt int) error {
 }
 
 func isRetryableLikeInitializationError(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if err == nil || errors.Is(err, ErrLikeInitializationOutcomeUnknown) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	if errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ETIMEDOUT) {
