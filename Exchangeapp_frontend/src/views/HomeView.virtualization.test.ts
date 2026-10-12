@@ -266,7 +266,10 @@ const mountHome = () => mount(HomeView, {
       PostCard: PostCardStub,
       AppIcon: { template: '<span />' },
       MobileHomeHeader: { template: '<div />' },
-      RouterLink: { template: '<a><slot /></a>' },
+      RouterLink: defineComponent({
+        props: ['to'],
+        template: '<a :data-route-name="to.name" :data-route-tab="to.query?.tab"><slot /></a>',
+      }),
     },
   },
 });
@@ -574,6 +577,91 @@ describe('HomeView virtualization', () => {
     wrapper = null;
     restoreGeometry();
     document.body.innerHTML = '';
+  });
+
+  describe('Following discovery empty state', () => {
+    const openFollowingEmptyState = async () => {
+      mocks.homeTimeline = makeTimeline({ forYouItems: [] });
+      wrapper = mountHome();
+      await settle();
+      await wrapper.get('[data-feed-tab="following"]').trigger('click');
+      await settle();
+    };
+
+    it('shows the Following guidance and its People and Topics destinations', async () => {
+      await openFollowingEmptyState();
+
+      expect(wrapper!.get('.home-state').text()).toContain('Your Following feed is quiet');
+      expect(wrapper!.get('.home-state').text()).toContain('Find people to follow and see their posts here.');
+      expect(wrapper!.get('.home-state__discovery-icon').attributes('aria-hidden')).toBe('true');
+
+      const peopleLink = wrapper!.get('.home-state__primary');
+      expect(peopleLink.text()).toBe('Find people');
+      expect(peopleLink.attributes('data-route-name')).toBe('UserSearch');
+      expect(peopleLink.attributes('data-route-tab')).toBe('people');
+
+      const topicsLink = wrapper!.get('.home-state__discovery-links a');
+      expect(topicsLink.text()).toBe('Explore topics');
+      expect(topicsLink.attributes('data-route-name')).toBe('TopicDirectory');
+    });
+
+    it('switches back through selectTab and the existing Home route state', async () => {
+      await openFollowingEmptyState();
+      mocks.router.push.mockClear();
+      mocks.homeTimeline.setActiveTab.mockClear();
+      mocks.homeTimeline.loadForYou.mockClear();
+
+      await wrapper!.get('button.home-state__discovery-link').trigger('click');
+      await settle();
+
+      expect(mocks.homeTimeline.activeTab).toBe('for-you');
+      expect(mocks.homeTimeline.setActiveTab).toHaveBeenCalledTimes(1);
+      expect(mocks.homeTimeline.setActiveTab).toHaveBeenCalledWith('for-you');
+      expect(mocks.router.push).toHaveBeenCalledTimes(1);
+      expect(mocks.router.push).toHaveBeenCalledWith({ name: 'Home', query: {} });
+      expect(mocks.homeTimeline.loadForYou).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the For You empty state unchanged', async () => {
+      mocks.homeTimeline = makeTimeline({ forYouItems: [] });
+      wrapper = mountHome();
+      await settle();
+
+      expect(wrapper.get('.home-state h2').text()).toBe('No recommendations yet');
+      expect(wrapper.find('.home-state__discovery-icon').exists()).toBe(false);
+    });
+
+    it('keeps Loading and Error states ahead of the empty state', async () => {
+      const timeline = makeTimeline({ forYouItems: [] });
+      timeline.following.loading = true;
+      mocks.homeTimeline = timeline;
+      wrapper = mountHome();
+      await settle();
+      await wrapper.get('[data-feed-tab="following"]').trigger('click');
+      await settle();
+
+      expect(wrapper.find('.feed-list--loading').exists()).toBe(true);
+      expect(wrapper.find('.home-state').exists()).toBe(false);
+
+      timeline.following.loading = false;
+      timeline.following.error = true;
+      await settle();
+
+      expect(wrapper.get('.home-state h2').text()).toBe('Feed unavailable');
+      expect(wrapper.get('.home-state__primary').text()).toBe('Retry');
+    });
+
+    it('shows Following posts without the discovery guidance', async () => {
+      const timeline = makeTimeline({ forYouItems: [], followingItems: [makePost(901)] });
+      mocks.homeTimeline = timeline;
+      wrapper = mountHome();
+      await settle();
+      await wrapper.get('[data-feed-tab="following"]').trigger('click');
+      await settle();
+
+      expect(wrapper.find('.home-state__discovery-icon').exists()).toBe(false);
+      expect(wrapper.find('.post-card-stub[data-post-id="901"]').exists()).toBe(true);
+    });
   });
 
 
