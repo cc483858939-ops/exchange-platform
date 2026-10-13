@@ -14,6 +14,7 @@ import (
 )
 
 func TestConfigLoadingDoesNotInitializeExternalResources(t *testing.T) {
+	t.Setenv("DATABASE_DSN", "")
 	configPath := filepath.Join(t.TempDir(), "config.yml")
 	if err := os.WriteFile(configPath, []byte("app:\n  port: ':3000'\ndatabase:\n  dsn: postgres://localhost/test\n"), 0o600); err != nil {
 		t.Fatal(err)

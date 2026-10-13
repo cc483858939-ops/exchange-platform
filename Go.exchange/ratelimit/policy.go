@@ -54,6 +54,13 @@ var Policies = map[Action]Policy{
 			{Limit: 100, Window: 24 * time.Hour},
 		},
 	},
+	ActionProfileMediaUpload: {
+		Action: ActionProfileMediaUpload,
+		Rules: []Rule{
+			{Limit: 10, Window: time.Minute},
+			{Limit: 50, Window: 24 * time.Hour},
+		},
+	},
 	ActionTranslation: {
 		Action: ActionTranslation,
 		Rules: []Rule{
