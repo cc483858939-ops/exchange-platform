@@ -15,7 +15,7 @@ import (
 
 func TestConfigLoadingDoesNotInitializeExternalResources(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yml")
-	if err := os.WriteFile(configPath, []byte("app:\n  port: ':3000'\ndatabase:\n  maxopenconns: 4\n  maxidleconns: 2\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("app:\n  port: ':3000'\ndatabase:\n  dsn: postgres://localhost/test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -34,7 +34,7 @@ func TestConfigLoadingDoesNotInitializeExternalResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load configuration: %v", err)
 	}
-	if cfg.Database.MaxOpenConns != 4 || AppConfig != cfg {
+	if cfg.Database.Dsn != "postgres://localhost/test" || AppConfig != cfg {
 		t.Fatalf("loaded config was not returned and published: cfg=%+v AppConfig=%p", cfg.Database, AppConfig)
 	}
 	if global.APIDb != nil || global.WorkerDb != nil || global.MaintenanceDb != nil || global.RedisDB != nil || global.MinioClient != nil {

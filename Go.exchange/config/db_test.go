@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -240,32 +241,84 @@ func TestPostgresTimeoutMillisRoundsUpAndPreservesZero(t *testing.T) {
 	}
 }
 
-func TestRuntimeDatabasePoolOptionsUseIndependentOverrides(t *testing.T) {
+func TestRuntimeDatabasePoolOptionsUseIndependentDefaultsAndOverrides(t *testing.T) {
+	for _, key := range []string{"API_DB_MAX_OPEN_CONNS", "WORKER_DB_MAX_OPEN_CONNS", "MAINTENANCE_DB_MAX_OPEN_CONNS"} {
+		unsetDatabasePoolEnv(t, key)
+	}
 	cfg := &Config{}
-	cfg.Database.MaxOpenConns = 114
-	cfg.Database.MaxIdleconns = 11
-	t.Setenv("API_DB_MAX_OPEN_CONNS", "80")
-	t.Setenv("WORKER_DB_MAX_OPEN_CONNS", "30")
+	roles := []struct {
+		name     string
+		key      string
+		fallback int
+		want     DatabasePoolOptions
+	}{
+		{name: "api", key: "API_DB_MAX_OPEN_CONNS", fallback: apiDatabaseMaxOpenConnsDefault, want: DatabasePoolOptions{MaxOpenConns: 20, MaxIdleConns: 2}},
+		{name: "worker", key: "WORKER_DB_MAX_OPEN_CONNS", fallback: workerDatabaseMaxOpenConnsDefault, want: DatabasePoolOptions{MaxOpenConns: 10, MaxIdleConns: 2}},
+		{name: "maintenance", key: "MAINTENANCE_DB_MAX_OPEN_CONNS", fallback: maintenanceDatabaseMaxOpenConnsDefault, want: DatabasePoolOptions{MaxOpenConns: 3, MaxIdleConns: 2}},
+	}
+	for _, role := range roles {
+		t.Run(role.name+" default", func(t *testing.T) {
+			got, err := runtimeDatabasePoolOptions(cfg, role.key, role.fallback)
+			if err != nil || got != role.want {
+				t.Fatalf("pool options=(%+v, %v), want %+v", got, err, role.want)
+			}
+		})
+	}
 
-	api, err := runtimeDatabasePoolOptions(cfg, "API_DB_MAX_OPEN_CONNS")
-	if err != nil {
-		t.Fatal(err)
+	t.Setenv("API_DB_MAX_OPEN_CONNS", "1")
+	t.Setenv("WORKER_DB_MAX_OPEN_CONNS", "17")
+	t.Setenv("MAINTENANCE_DB_MAX_OPEN_CONNS", "4")
+	for _, test := range []struct {
+		role     string
+		key      string
+		fallback int
+		want     DatabasePoolOptions
+	}{
+		{role: "api", key: "API_DB_MAX_OPEN_CONNS", fallback: apiDatabaseMaxOpenConnsDefault, want: DatabasePoolOptions{MaxOpenConns: 1, MaxIdleConns: 1}},
+		{role: "worker", key: "WORKER_DB_MAX_OPEN_CONNS", fallback: workerDatabaseMaxOpenConnsDefault, want: DatabasePoolOptions{MaxOpenConns: 17, MaxIdleConns: 2}},
+		{role: "maintenance", key: "MAINTENANCE_DB_MAX_OPEN_CONNS", fallback: maintenanceDatabaseMaxOpenConnsDefault, want: DatabasePoolOptions{MaxOpenConns: 4, MaxIdleConns: 2}},
+	} {
+		t.Run(test.role+" override", func(t *testing.T) {
+			got, err := runtimeDatabasePoolOptions(cfg, test.key, test.fallback)
+			if err != nil || got != test.want {
+				t.Fatalf("pool options=(%+v, %v), want %+v", got, err, test.want)
+			}
+		})
 	}
-	worker, err := runtimeDatabasePoolOptions(cfg, "WORKER_DB_MAX_OPEN_CONNS")
-	if err != nil {
-		t.Fatal(err)
+
+	if got, err := runtimeDatabasePoolOptions(cfg, "MISSING_DB_MAX_OPEN_CONNS", 9); err != nil || got != (DatabasePoolOptions{MaxOpenConns: 9, MaxIdleConns: 2}) {
+		t.Fatalf("unset role option=(%+v, %v), want fallback 9/2", got, err)
 	}
-	if api.MaxOpenConns != 80 || api.MaxIdleConns != 11 {
-		t.Fatalf("API database pool=%+v, want max open 80 and max idle 11", api)
+}
+
+func TestRuntimeDatabasePoolOptionsRejectInvalidExplicitValues(t *testing.T) {
+	for _, key := range []string{"API_DB_MAX_OPEN_CONNS", "WORKER_DB_MAX_OPEN_CONNS", "MAINTENANCE_DB_MAX_OPEN_CONNS"} {
+		for _, value := range []string{"", "0", "-1", "1.5", "many"} {
+			t.Run(key+"="+value, func(t *testing.T) {
+				t.Setenv(key, value)
+				if _, err := runtimeDatabasePoolOptions(&Config{}, key, 5); err == nil || !strings.Contains(err.Error(), key) {
+					t.Fatalf("invalid explicit pool value %q returned error %v", value, err)
+				}
+			})
+		}
 	}
-	if worker.MaxOpenConns != 30 || worker.MaxIdleConns != 11 {
-		t.Fatalf("Worker database pool=%+v, want max open 30 and max idle 11", worker)
+}
+
+func unsetDatabasePoolEnv(t *testing.T, key string) {
+	t.Helper()
+	value, hadValue := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("unset %s: %v", key, err)
 	}
-	if _, err := runtimeDatabasePoolOptions(cfg, "MISSING_DB_MAX_OPEN_CONNS"); err != nil {
-		t.Fatalf("missing override should use configured pool: %v", err)
-	}
-	t.Setenv("WORKER_DB_MAX_OPEN_CONNS", "115")
-	if _, err := runtimeDatabasePoolOptions(cfg, "WORKER_DB_MAX_OPEN_CONNS"); err == nil {
-		t.Fatal("pool override above configured process pool should be rejected")
-	}
+	t.Cleanup(func() {
+		var err error
+		if hadValue {
+			err = os.Setenv(key, value)
+		} else {
+			err = os.Unsetenv(key)
+		}
+		if err != nil {
+			t.Errorf("restore %s: %v", key, err)
+		}
+	})
 }

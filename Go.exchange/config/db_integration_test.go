@@ -316,8 +316,6 @@ func TestPostgresExplicitAPIDatabasesUseIndependentPoolAndTimeoutProfiles(t *tes
 	t.Setenv("WORKER_DB_MAX_OPEN_CONNS", "4")
 	cfg := &Config{}
 	cfg.Database.Dsn = dsn
-	cfg.Database.MaxOpenConns = 4
-	cfg.Database.MaxIdleconns = 2
 	apiDB, err := OpenAPIDatabase(cfg)
 	if err != nil {
 		t.Fatalf("open API database: %v", err)

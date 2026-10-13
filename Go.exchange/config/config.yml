@@ -4,8 +4,6 @@ app:
 
 database:
   dsn: ""
-  maxidleconns: 11
-  maxopenconns: 114
 
 embedding:
   enabled: false

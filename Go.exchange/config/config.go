@@ -317,9 +317,7 @@ type Config struct {
 		Port string
 	}
 	Database struct {
-		Dsn          string
-		MaxIdleconns int
-		MaxOpenConns int
+		Dsn string
 	}
 	Embedding              EmbeddingConfig
 	Translation            TranslationConfig

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"Go.exchange/core"
 	"Go.exchange/eventing"
 	"Go.exchange/global"
+	"Go.exchange/metrics"
 	"Go.exchange/observability/tracing"
 
 	"github.com/gin-gonic/gin"
@@ -63,6 +65,13 @@ func run() error {
 			log.Printf("close API database: %v", err)
 		}
 	}()
+	sqlDB, err := db.DB()
+	if err != nil {
+		return fmt.Errorf("get API database metrics pool: %w", err)
+	}
+	if err := metrics.RegisterDatabasePool("api", sqlDB); err != nil {
+		return fmt.Errorf("register API database metrics: %w", err)
+	}
 
 	redisClient, err := config.NewRedisClient()
 	if err != nil {

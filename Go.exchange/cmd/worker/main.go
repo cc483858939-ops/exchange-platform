@@ -15,6 +15,7 @@ import (
 	"Go.exchange/config"
 	"Go.exchange/core"
 	"Go.exchange/global"
+	"Go.exchange/metrics"
 	"Go.exchange/tasks"
 
 	"github.com/go-redis/redis/v7"
@@ -118,6 +119,13 @@ func runWithDependencies(deps workerBootstrapDeps) error {
 			log.Printf("close Worker Redis client: %v", err)
 		}
 	}()
+	sqlDB, err := runtime.database.DB()
+	if err != nil {
+		return fmt.Errorf("get Worker database metrics pool: %w", err)
+	}
+	if err := metrics.RegisterDatabasePool("worker", sqlDB); err != nil {
+		return fmt.Errorf("register Worker database metrics: %w", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -188,6 +188,7 @@ services:
     entrypoint: ["/app/go-exchange-migrate"]
     environment:
       DATABASE_DSN: "${DATABASE_DSN:?DATABASE_DSN is required}"
+      MAINTENANCE_DB_MAX_OPEN_CONNS: "${MAINTENANCE_DB_MAX_OPEN_CONNS-3}"
     depends_on:
       db:
         condition: service_healthy
@@ -199,6 +200,7 @@ services:
     entrypoint: ["/app/go-exchange-post-media-gc"]
     environment:
       POST_MEDIA_GC_DATABASE_DSN: "${POST_MEDIA_GC_DATABASE_DSN:?POST_MEDIA_GC_DATABASE_DSN is required}"
+      MAINTENANCE_DB_MAX_OPEN_CONNS: "${MAINTENANCE_DB_MAX_OPEN_CONNS-3}"
       POST_MEDIA_GC_MINIO_ENDPOINT: "${POST_MEDIA_GC_MINIO_ENDPOINT:?POST_MEDIA_GC_MINIO_ENDPOINT is required}"
       POST_MEDIA_GC_MINIO_ACCESS_KEY: "${POST_MEDIA_GC_MINIO_ACCESS_KEY:?POST_MEDIA_GC_MINIO_ACCESS_KEY is required}"
       POST_MEDIA_GC_MINIO_SECRET_KEY: "${POST_MEDIA_GC_MINIO_SECRET_KEY:?POST_MEDIA_GC_MINIO_SECRET_KEY is required}"
@@ -227,6 +229,7 @@ services:
     environment:
       KAFKA_BROKERS: "${KAFKA_BROKERS:-kafka:9092}"
       KAFKA_DLQ_DATABASE_DSN: "${KAFKA_DLQ_DATABASE_DSN:?KAFKA_DLQ_DATABASE_DSN is required}"
+      MAINTENANCE_DB_MAX_OPEN_CONNS: "${MAINTENANCE_DB_MAX_OPEN_CONNS-3}"
     restart: "no"
 
   kafka-init:
@@ -276,6 +279,7 @@ services:
     entrypoint: ["/app/go-exchange-cdc-init"]
     environment:
       <<: *backend-environment
+      MAINTENANCE_DB_MAX_OPEN_CONNS: "${MAINTENANCE_DB_MAX_OPEN_CONNS-3}"
     depends_on:
       db:
         condition: service_healthy
@@ -291,6 +295,7 @@ services:
     stop_grace_period: 45s
     environment:
       <<: [*backend-environment, *minio-environment, *jwt-environment]
+      API_DB_MAX_OPEN_CONNS: "${API_DB_MAX_OPEN_CONNS-20}"
     volumes:
       - "${JWT_PRIVATE_KEY_FILE:?JWT_PRIVATE_KEY_FILE is required}:/run/secrets/jwt/private.pem:ro"
       - "${JWT_VERIFY_KEYS_DIR:?JWT_VERIFY_KEYS_DIR is required}:/run/secrets/jwt/public:ro"
@@ -318,6 +323,7 @@ services:
     entrypoint: ["/app/go-exchange-worker"]
     environment:
       <<: *backend-environment
+      WORKER_DB_MAX_OPEN_CONNS: "${WORKER_DB_MAX_OPEN_CONNS-10}"
       WORKER_HEALTH_PORT: "${WORKER_HEALTH_PORT:-8081}"
       LIKE_BEHAVIOR_BATCH_SIZE: "${LIKE_BEHAVIOR_BATCH_SIZE:-500}"
       LIKE_BEHAVIOR_CLAIM_LEASE: "${LIKE_BEHAVIOR_CLAIM_LEASE:-30s}"
@@ -347,6 +353,7 @@ services:
     command: ["verify"]
     environment:
       <<: [*backend-environment, *minio-environment]
+      WORKER_DB_MAX_OPEN_CONNS: "${WORKER_DB_MAX_OPEN_CONNS-10}"
       RSSHUB_BASE_URL: "${RSSHUB_BASE_URL:-http://rsshub:1200}"
       RSSHUB_TIMEOUT: "${RSSHUB_TIMEOUT:-60s}"
       X_API_BASE_URL: "${X_API_BASE_URL:-https://api.x.com}"

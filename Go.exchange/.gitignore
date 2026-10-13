@@ -5,6 +5,7 @@
 !/docs/runbooks/
 /docs/runbooks/*
 !/docs/runbooks/kafka-dlq.md
+!/docs/runbooks/database-connection-budget.md
 !/docs/like-persistence-v4.md
 !/docs/like-state-recovery.md
 /.codex/

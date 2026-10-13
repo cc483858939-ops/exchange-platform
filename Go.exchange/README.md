@@ -41,6 +41,9 @@ cd D:\code\mf
 docker compose run --rm migrate
 ```
 
+For per-process PostgreSQL pool defaults and multi-process connection budgeting,
+see [the database connection budget runbook](docs/runbooks/database-connection-budget.md).
+
 Runtime readiness is evaluated from an immutable two-second snapshot. `/healthz`
 is liveness-only; `/readyz` gates API startup on PostgreSQL, the published
 `runtime_schema_state` compatibility interval and the Redis ping. Kafka is

@@ -102,6 +102,7 @@ var (
 
 func init() {
 	registry.MustRegister(
+		databasePoolCollector,
 		httpRequestsTotal, httpRequestDuration, recommendationHTTPDuration, postEmbeddingEvents, postEmbeddingFailures, postEmbeddingPublishFailures, postEmbeddingProcessingDuration, kafkaConsumerRecovery,
 		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxRowsLastSuccess, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, consumerInboxRowsLastSuccess, notificationProjectionFailures, notificationProjectionLatency, likePipelineDepth, likePipelineDepthLastSuccess, likeClaimDuration, likeQueueOperations, likeLifecycleEvents, postLikeInitJobsBacklog, userLikeRelationsRemoved, userLikeCleanupBatchUsers, userLikeCleanupBatchRelations, userLikeCleanupBatchRemoved, userLikeCleanupBatchDuration, userLikeCleanupCycleDuration, userLikeCleanupLastCycle, userLikeTTLEvents, userLikeRestoreResults, userLikeRestoreDuration, userLikeRestoreRelations, userLikeRestoreInflight, userLikeCapEvents, userLikeActiveRelations, userLikeEvictionDuration,
 		recommendationTelemetryEvents, recommendationTelemetryBatchSize,

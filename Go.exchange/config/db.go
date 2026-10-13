@@ -33,8 +33,14 @@ type DatabasePoolOptions struct {
 	MaxIdleConns int
 }
 
+const (
+	apiDatabaseMaxOpenConnsDefault         = 20
+	workerDatabaseMaxOpenConnsDefault      = 10
+	maintenanceDatabaseMaxOpenConnsDefault = 3
+)
+
 func OpenAPIDatabase(cfg *Config) (*gorm.DB, error) {
-	pool, err := runtimeDatabasePoolOptions(cfg, "API_DB_MAX_OPEN_CONNS")
+	pool, err := runtimeDatabasePoolOptions(cfg, "API_DB_MAX_OPEN_CONNS", apiDatabaseMaxOpenConnsDefault)
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +53,7 @@ func OpenAPIDatabase(cfg *Config) (*gorm.DB, error) {
 }
 
 func OpenWorkerDatabase(cfg *Config) (*gorm.DB, error) {
-	pool, err := runtimeDatabasePoolOptions(cfg, "WORKER_DB_MAX_OPEN_CONNS")
+	pool, err := runtimeDatabasePoolOptions(cfg, "WORKER_DB_MAX_OPEN_CONNS", workerDatabaseMaxOpenConnsDefault)
 	if err != nil {
 		return nil, err
 	}
@@ -88,20 +94,9 @@ func OpenMaintenanceDatabaseWithDSN(cfg *Config, dsn string) (*gorm.DB, error) {
 	if strings.TrimSpace(dsn) == "" {
 		return nil, errors.New("maintenance database DSN is not configured")
 	}
-	pool := DatabasePoolOptions{
-		MaxOpenConns: cfg.Database.MaxOpenConns,
-		MaxIdleConns: cfg.Database.MaxIdleconns,
-	}
-	if override, set, err := databasePoolSizeOverride("MAINTENANCE_DB_MAX_OPEN_CONNS"); err != nil {
+	pool, err := runtimeDatabasePoolOptions(cfg, "MAINTENANCE_DB_MAX_OPEN_CONNS", maintenanceDatabaseMaxOpenConnsDefault)
+	if err != nil {
 		return nil, fmt.Errorf("configure maintenance database pool: %w", err)
-	} else if set {
-		if override > pool.MaxOpenConns {
-			return nil, fmt.Errorf("MAINTENANCE_DB_MAX_OPEN_CONNS (%d) exceeds total database pool budget (%d)", override, pool.MaxOpenConns)
-		}
-		pool.MaxOpenConns = override
-		if pool.MaxIdleConns > override {
-			pool.MaxIdleConns = override
-		}
 	}
 	db, err := openMaintenanceDatabase(dsn, pool)
 	if err != nil {
@@ -270,26 +265,18 @@ func postgresTimeoutMillis(timeout time.Duration) (string, error) {
 	return strconv.FormatInt(int64(millis), 10), nil
 }
 
-func runtimeDatabasePoolOptions(cfg *Config, overrideKey string) (DatabasePoolOptions, error) {
+func runtimeDatabasePoolOptions(cfg *Config, overrideKey string, defaultMaxOpen int) (DatabasePoolOptions, error) {
 	if cfg == nil {
 		return DatabasePoolOptions{}, errors.New("application configuration is not initialized")
 	}
-	totalOpen := cfg.Database.MaxOpenConns
-	totalIdle := cfg.Database.MaxIdleconns
-	if totalOpen <= 0 {
-		return DatabasePoolOptions{}, errors.New("database max open connections must be positive")
+	if defaultMaxOpen <= 0 {
+		return DatabasePoolOptions{}, errors.New("database default max open connections must be positive")
 	}
-	if totalIdle < 0 {
-		return DatabasePoolOptions{}, errors.New("database max idle connections must not be negative")
-	}
-	if totalIdle > totalOpen {
-		totalIdle = totalOpen
-	}
-	maxOpen, err := requestedPoolSize(overrideKey, totalOpen, totalOpen)
+	maxOpen, err := databasePoolSize(overrideKey, defaultMaxOpen)
 	if err != nil {
 		return DatabasePoolOptions{}, err
 	}
-	return DatabasePoolOptions{MaxOpenConns: maxOpen, MaxIdleConns: min(totalIdle, maxOpen)}, nil
+	return DatabasePoolOptions{MaxOpenConns: maxOpen, MaxIdleConns: min(2, maxOpen)}, nil
 }
 
 func databaseDSN(cfg *Config) string {
@@ -302,30 +289,16 @@ func databaseDSN(cfg *Config) string {
 	return cfg.Database.Dsn
 }
 
-func requestedPoolSize(key string, fallback, totalBudget int) (int, error) {
-	value, set, err := databasePoolSizeOverride(key)
-	if err != nil {
-		return 0, err
-	}
-	if !set {
+func databasePoolSize(key string, fallback int) (int, error) {
+	raw, configured := os.LookupEnv(key)
+	if !configured {
 		return fallback, nil
 	}
-	if value > totalBudget {
-		return 0, fmt.Errorf("%s (%d) exceeds total database pool budget (%d)", key, value, totalBudget)
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer", key)
 	}
 	return value, nil
-}
-
-func databasePoolSizeOverride(key string) (int, bool, error) {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return 0, false, nil
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil || value <= 0 {
-		return 0, false, fmt.Errorf("%s must be a positive integer", key)
-	}
-	return value, true, nil
 }
 
 func logDatabaseProfile(role string, db *gorm.DB, pool DatabasePoolOptions) {
