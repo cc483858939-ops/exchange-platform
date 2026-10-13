@@ -149,35 +149,10 @@ func (s *Store) get(ctx context.Context, userID, postID uint) (State, error) {
 	if postID == 0 {
 		return State{}, postNotReadyError()
 	}
-	pipe := s.client.WithContext(ctx).Pipeline()
-	ready := pipe.Get(ReadyKey(postID))
-	count := pipe.Get(CountKey(postID))
-	version := pipe.Get(VersionKey(postID))
-	_, execErr := pipe.ExecContext(ctx)
-	if ready.Err() == nil && ready.Val() == "deleted" {
-		return State{}, ErrPostLikeUnavailable
-	}
-	if execErr != nil && execErr != redis.Nil {
-		return State{}, mapScriptError(execErr)
-	}
-	if err := requireReadyCommand(ready); err != nil {
+	state, err := s.loadAggregateState(ctx, postID)
+	if err != nil {
 		return State{}, err
 	}
-	if err := postCommandErrorOrNotReady(count.Err()); err != nil {
-		return State{}, err
-	}
-	if err := postCommandErrorOrNotReady(version.Err()); err != nil {
-		return State{}, err
-	}
-	countValue, ok := parseNonNegativeInt64(count.Val())
-	if !ok || count.Err() == redis.Nil {
-		return State{}, postNotReadyError()
-	}
-	versionValue, ok := parseNonNegativeInt64(version.Val())
-	if !ok || version.Err() == redis.Nil {
-		return State{}, postNotReadyError()
-	}
-	state := State{Count: countValue, Version: versionValue}
 	if userID > 0 {
 		members, err := s.readUserLikeMembers(ctx, userID, []uint{postID})
 		if err != nil {
@@ -217,70 +192,40 @@ func (s *Store) getMany(ctx context.Context, userID uint, postIDs []uint) (map[u
 		return states, unavailable, nil
 	}
 
-	type commands struct {
-		postID  uint
-		ready   *redis.StringCmd
-		count   *redis.StringCmd
-		version *redis.StringCmd
-	}
-	pipe := s.client.WithContext(ctx).Pipeline()
-	batch := make([]commands, 0, len(postIDs))
+	batch := make([]uint, 0, len(postIDs))
 	for _, postID := range postIDs {
 		if postID == 0 {
 			unavailable = append(unavailable, postID)
 			continue
 		}
-		batch = append(batch, commands{
-			postID:  postID,
-			ready:   pipe.Get(ReadyKey(postID)),
-			count:   pipe.Get(CountKey(postID)),
-			version: pipe.Get(VersionKey(postID)),
-		})
+		batch = append(batch, postID)
 	}
-	_, execErr := pipe.ExecContext(ctx)
-	ignoredExecErr := false
+	if len(batch) == 0 {
+		return states, unavailable, nil
+	}
+	results, err := s.readAggregateStates(ctx, batch)
+	if err != nil {
+		recordStoreLifecycleFailure(err, userID, 0)
+		return nil, nil, err
+	}
 	activeIDs := make([]uint, 0, len(batch))
-	for _, command := range batch {
-		if command.ready.Err() == nil && command.ready.Val() == "deleted" {
-			for _, commandErr := range []error{command.count.Err(), command.version.Err()} {
-				if commandErr != nil && commandErr != redis.Nil {
-					mapped := mapScriptError(commandErr)
-					if !errors.Is(mapped, ErrLikeRedisType) {
-						recordStoreLifecycleFailure(mapped, userID, command.postID)
-						return nil, nil, mapped
-					}
-					if execErr == commandErr {
-						ignoredExecErr = true
-					}
-				}
-			}
-			unavailable = append(unavailable, command.postID)
+	for i, postID := range batch {
+		result := results[i]
+		if errors.Is(result.err, ErrPostLikeUnavailable) {
+			unavailable = append(unavailable, postID)
 			continue
 		}
-		for _, commandErr := range []error{command.ready.Err(), command.count.Err(), command.version.Err()} {
-			if commandErr != nil && commandErr != redis.Nil {
-				mapped := mapScriptError(commandErr)
-				recordStoreLifecycleFailure(mapped, userID, command.postID)
-				return nil, nil, mapped
+		if result.err != nil {
+			if errors.Is(result.err, ErrPostLikeNotReady) {
+				unavailable = append(unavailable, postID)
+				recordStoreLifecycleFailure(result.err, userID, postID)
+				continue
 			}
+			recordStoreLifecycleFailure(result.err, userID, postID)
+			return nil, nil, result.err
 		}
-		count, countOK := parseNonNegativeInt64(command.count.Val())
-		version, versionOK := parseNonNegativeInt64(command.version.Val())
-		if command.ready.Val() != "1" || command.ready.Err() == redis.Nil ||
-			command.count.Err() == redis.Nil || command.version.Err() == redis.Nil ||
-			!countOK || !versionOK {
-			unavailable = append(unavailable, command.postID)
-			err := postNotReadyError()
-			recordStoreLifecycleFailure(err, userID, command.postID)
-			continue
-		}
-		states[command.postID] = State{Count: count, Version: version}
-		activeIDs = append(activeIDs, command.postID)
-	}
-	if execErr != nil && execErr != redis.Nil && !ignoredExecErr {
-		mapped := mapScriptError(execErr)
-		recordStoreLifecycleFailure(mapped, userID, 0)
-		return nil, nil, mapped
+		states[postID] = result.state
+		activeIDs = append(activeIDs, postID)
 	}
 	if userID > 0 && len(activeIDs) > 0 {
 		members, err := s.readUserLikeMembers(ctx, userID, activeIDs)
@@ -440,50 +385,11 @@ func (s *Store) PurgePost(ctx context.Context, postID uint) error {
 }
 
 func (s *Store) LoadFullState(ctx context.Context, postID uint) (FullState, error) {
-	if s == nil || s.client == nil {
-		return FullState{}, errors.New("redis is not initialized")
-	}
-	if postID == 0 {
-		return FullState{}, postNotReadyError()
-	}
-	client := s.client.WithContext(ctx)
-	pipe := client.Pipeline()
-	ready := pipe.Get(ReadyKey(postID))
-	count := pipe.Get(CountKey(postID))
-	version := pipe.Get(VersionKey(postID))
-	_, execErr := pipe.ExecContext(ctx)
-	if ready.Err() == nil && ready.Val() == "deleted" {
-		return FullState{}, ErrPostLikeUnavailable
-	}
-	for _, commandErr := range []error{ready.Err(), count.Err(), version.Err()} {
-		if commandErr != nil && commandErr != redis.Nil {
-			return FullState{}, postCommandErrorOrNotReady(commandErr)
-		}
-	}
-	if execErr != nil && execErr != redis.Nil {
-		return FullState{}, postCommandErrorOrNotReady(execErr)
-	}
-	if err := postCommandErrorOrNotReady(ready.Err()); err != nil {
+	state, err := s.loadAggregateState(ctx, postID)
+	if err != nil {
 		return FullState{}, err
 	}
-	if ready.Val() != "1" {
-		return FullState{}, postNotReadyError()
-	}
-	if err := postCommandErrorOrNotReady(count.Err()); err != nil {
-		return FullState{}, err
-	}
-	if err := postCommandErrorOrNotReady(version.Err()); err != nil {
-		return FullState{}, err
-	}
-	countValue, ok := parseNonNegativeInt64(count.Val())
-	if count.Err() == redis.Nil || !ok {
-		return FullState{}, postNotReadyError()
-	}
-	versionValue, ok := parseNonNegativeInt64(version.Val())
-	if version.Err() == redis.Nil || !ok {
-		return FullState{}, postNotReadyError()
-	}
-	return FullState{Count: countValue, Version: versionValue}, nil
+	return FullState{Count: state.Count, Version: state.Version}, nil
 }
 
 func (s *Store) RegistryContains(ctx context.Context, postID uint) (bool, error) {
@@ -931,45 +837,143 @@ func (s *Store) loadAggregateState(ctx context.Context, postID uint) (State, err
 	if postID == 0 {
 		return State{}, postNotReadyError()
 	}
-	pipe := s.client.WithContext(ctx).Pipeline()
-	ready := pipe.Get(ReadyKey(postID))
-	count := pipe.Get(CountKey(postID))
-	version := pipe.Get(VersionKey(postID))
-	if _, err := pipe.ExecContext(ctx); err != nil && err != redis.Nil {
-		return State{}, mapScriptError(err)
-	}
-	if ready.Err() == nil && ready.Val() == "deleted" {
-		return State{}, ErrPostLikeUnavailable
-	}
-	if err := postCommandErrorOrNotReady(ready.Err()); err != nil {
+	results, err := s.readAggregateStates(ctx, []uint{postID})
+	if err != nil {
 		return State{}, err
 	}
-	if ready.Val() != "1" {
-		return State{}, postNotReadyError()
-	}
-	if err := postCommandErrorOrNotReady(count.Err()); err != nil {
-		return State{}, err
-	}
-	if err := postCommandErrorOrNotReady(version.Err()); err != nil {
-		return State{}, err
-	}
-	countValue, countOK := parseNonNegativeInt64(count.Val())
-	versionValue, versionOK := parseNonNegativeInt64(version.Val())
-	if !countOK || !versionOK {
-		return State{}, postNotReadyError()
-	}
-	return State{Count: countValue, Version: versionValue}, nil
+	return results[0].state, results[0].err
 }
 
-func requireReadyCommand(command *redis.StringCmd) error {
-	if command == nil {
-		return postNotReadyError()
+type aggregateReadResult struct {
+	state State
+	err   error
+}
+
+type aggregateMissingValue struct {
+	key string
+	cmd *redis.StatusCmd
+}
+
+// readAggregateStates loads Ready, Count and Version for each Post in one
+// MGET. TYPE is used only for nil MGET elements, where Redis cannot distinguish
+// a missing key from a key with an unsupported type.
+func (s *Store) readAggregateStates(ctx context.Context, postIDs []uint) ([]aggregateReadResult, error) {
+	if len(postIDs) == 0 {
+		return []aggregateReadResult{}, nil
 	}
-	if err := postCommandErrorOrNotReady(command.Err()); err != nil {
-		return err
+	keys := make([]string, 0, len(postIDs)*3)
+	for _, postID := range postIDs {
+		keys = append(keys, ReadyKey(postID), CountKey(postID), VersionKey(postID))
 	}
-	if command.Val() != "1" {
-		return postNotReadyError()
+	values, err := s.client.WithContext(ctx).MGet(keys...).Result()
+	if err != nil {
+		return nil, mapScriptError(err)
+	}
+	if len(values) != len(keys) {
+		return nil, fmt.Errorf("unexpected Redis MGET aggregate response length: got %d want %d", len(values), len(keys))
+	}
+
+	missing := make([]*aggregateMissingValue, 0)
+	missingByIndex := make(map[int]*aggregateMissingValue)
+	addMissing := func(index int, key string) {
+		item := &aggregateMissingValue{key: key}
+		missing = append(missing, item)
+		missingByIndex[index] = item
+	}
+	for i, postID := range postIDs {
+		base := i * 3
+		if values[base] == nil {
+			addMissing(base, ReadyKey(postID))
+			continue
+		}
+		ready, ok := redisBulkString(values[base])
+		if !ok || ready != "1" {
+			continue
+		}
+		if values[base+1] == nil {
+			addMissing(base+1, CountKey(postID))
+		}
+		if values[base+2] == nil {
+			addMissing(base+2, VersionKey(postID))
+		}
+	}
+	if len(missing) > 0 {
+		pipe := s.client.WithContext(ctx).Pipeline()
+		for _, item := range missing {
+			item.cmd = pipe.Type(item.key)
+		}
+		if _, err := pipe.ExecContext(ctx); err != nil && err != redis.Nil {
+			return nil, mapScriptError(err)
+		}
+		for _, item := range missing {
+			if err := item.cmd.Err(); err != nil && err != redis.Nil {
+				return nil, mapScriptError(err)
+			}
+		}
+	}
+
+	results := make([]aggregateReadResult, len(postIDs))
+	for i := range postIDs {
+		base := i * 3
+		ready, readyOK := redisBulkString(values[base])
+		if values[base] == nil {
+			if aggregateTypeError := aggregateMissingTypeError(missingByIndex, base); aggregateTypeError != nil {
+				results[i].err = aggregateTypeError
+			} else {
+				results[i].err = postNotReadyError()
+			}
+			continue
+		}
+		if !readyOK {
+			results[i].err = fmt.Errorf("unexpected Redis MGET Ready value type %T", values[base])
+			continue
+		}
+		if ready == "deleted" {
+			results[i].err = ErrPostLikeUnavailable
+			continue
+		}
+		if ready != "1" {
+			results[i].err = postNotReadyError()
+			continue
+		}
+
+		count, countOK := redisBulkString(values[base+1])
+		if values[base+1] == nil {
+			if aggregateTypeError := aggregateMissingTypeError(missingByIndex, base+1); aggregateTypeError != nil {
+				results[i].err = aggregateTypeError
+			} else {
+				results[i].err = postNotReadyError()
+			}
+			continue
+		}
+		version, versionOK := redisBulkString(values[base+2])
+		if values[base+2] == nil {
+			if aggregateTypeError := aggregateMissingTypeError(missingByIndex, base+2); aggregateTypeError != nil {
+				results[i].err = aggregateTypeError
+			} else {
+				results[i].err = postNotReadyError()
+			}
+			continue
+		}
+		countValue, countValid := parseNonNegativeInt64(count)
+		versionValue, versionValid := parseNonNegativeInt64(version)
+		if !countOK || !versionOK || !countValid || !versionValid {
+			results[i].err = postNotReadyError()
+			continue
+		}
+		results[i].state = State{Count: countValue, Version: versionValue}
+	}
+	return results, nil
+}
+
+func aggregateMissingTypeError(missing map[int]*aggregateMissingValue, index int) error {
+	item := missing[index]
+	if item == nil {
+		return nil
+	}
+	keyType := item.cmd.Val()
+	if keyType != "none" && keyType != "string" {
+		return fmt.Errorf("like Redis key %s has type %q: %w", item.key, keyType, ErrLikeRedisType)
 	}
 	return nil
 }
