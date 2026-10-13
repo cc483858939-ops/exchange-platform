@@ -190,8 +190,8 @@ describe('Pages Function API proxy cache policy', () => {
     expect(response.headers.get('cache-control')).toBe('no-store');
   });
 
-  it('preserves the immutable cache header for successful post media', async () => {
-    const cacheControl = 'public, max-age=31536000, immutable';
+  it('preserves the backend no-cache policy for successful post media', async () => {
+    const cacheControl = 'private, no-cache, max-age=0, must-revalidate';
     const { context } = createContext({
       path: ['files', 'post-media', 'users', 'v1', '42', 'example', 'medium.jpg'],
       upstreamHeaders: {
@@ -256,7 +256,7 @@ describe('Pages Function API proxy cache policy', () => {
   });
 
   it('preserves the cache header for successful HEAD file requests', async () => {
-    const cacheControl = 'public, max-age=31536000, immutable';
+    const cacheControl = 'private, no-cache, max-age=0, must-revalidate';
     const { context } = createContext({
       path: ['files', 'post-media', 'example.jpg'],
       method: 'HEAD',
