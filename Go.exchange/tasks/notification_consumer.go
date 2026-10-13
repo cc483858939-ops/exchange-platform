@@ -50,6 +50,8 @@ type notificationActivityRecord struct {
 	Candidate *models.Notification
 }
 
+type notificationRecordsApplyFunc func(context.Context, []notificationActivityRecord) error
+
 type notificationPostRow struct {
 	AuthorID      uint
 	ReplyToPostID *uint
@@ -175,7 +177,16 @@ func processNotificationBatch(ctx context.Context, messages []kafka.Message, pub
 func processNotificationBatchWithRetry(ctx context.Context, messages []kafka.Message, publisher interface {
 	PublishRaw(context.Context, string, ...kafka.Message) error
 }, policy kafkaRetryPolicy) error {
+	return processNotificationBatchWithForeignKeyRecovery(ctx, messages, publisher, policy, applyNotificationRecords, lookupKafkaForeignKeyParent)
+}
+
+func processNotificationBatchWithForeignKeyRecovery(ctx context.Context, messages []kafka.Message, publisher interface {
+	PublishRaw(context.Context, string, ...kafka.Message) error
+}, policy kafkaRetryPolicy, apply notificationRecordsApplyFunc, lookup kafkaForeignKeyParentLookup) error {
 	started := time.Now()
+	if apply == nil {
+		return errors.New("notification database apply function is nil")
+	}
 	records := make([]notificationActivityRecord, 0, len(messages))
 	for _, message := range messages {
 		record, err := decodeNotificationActivity(message)
@@ -199,14 +210,93 @@ func processNotificationBatchWithRetry(ctx context.Context, messages []kafka.Mes
 	if len(records) == 0 {
 		return nil
 	}
+	var terminalDLQ map[kafkaMessageIdentity]struct{}
 	if err := retryNotificationDatabaseApply(ctx, policy, func() error {
-		return applyNotificationRecords(ctx, records)
+		pending := records
+		if len(terminalDLQ) > 0 {
+			pending = make([]notificationActivityRecord, 0, len(records))
+			for _, record := range records {
+				if _, terminal := terminalDLQ[kafkaMessageIdentityOf(record.Message)]; !terminal {
+					pending = append(pending, record)
+				}
+			}
+		}
+		applySubset := func(applyCtx context.Context, subset []notificationActivityRecord) error {
+			applyErr := apply(applyCtx, subset)
+			if applyErr == nil || kafkaFailureClassOf(applyErr) != "" {
+				return applyErr
+			}
+			return retryableKafkaError(kafkaFailureCodeDatabaseTransaction, applyErr)
+		}
+		return applyKafkaBatchWithForeignKeyIsolation(ctx, pending, applySubset,
+			func(err error) bool {
+				return kafkaPostgresForeignKeyIsAllowed(err,
+					"fk_notifications_recipient", "fk_notifications_actor", "fk_notifications_post")
+			},
+			func(handleCtx context.Context, record notificationActivityRecord, _ error) error {
+				// Re-run the singleton through the existing candidate filter after the
+				// failed transaction has rolled back. If a concurrent deletion is now
+				// visible to the filter, Inbox can complete as a normal no-op.
+				secondErr := applySubset(handleCtx, []notificationActivityRecord{record})
+				if secondErr == nil {
+					return nil
+				}
+				if !kafkaPostgresForeignKeyIsAllowed(secondErr,
+					"fk_notifications_recipient", "fk_notifications_actor", "fk_notifications_post") {
+					return secondErr
+				}
+				constraint, _ := kafkaPostgresForeignKeyConstraint(secondErr)
+				userID, postID, ok := notificationForeignKeyParentIDs(record, constraint)
+				if !ok {
+					return retryableKafkaError(kafkaFailureCodeDatabaseTransaction, secondErr)
+				}
+				if config.AppConfig == nil {
+					return retryableKafkaError(kafkaFailureCodeInternalState, errors.New("notification consumer configuration is not initialized"))
+				}
+				dlqErr := publishConfirmedMissingParentKafkaForeignKeyDLQ(
+					handleCtx, global.WorkerDb, lookup, publisher,
+					config.AppConfig.Kafka.ConsumerDLQTopic, kafkaConsumerNotificationProjection,
+					record.Message, secondErr, userID, postID,
+				)
+				if dlqErr != nil {
+					metrics.RecordNotificationProjectionFailure("dlq")
+					metrics.RecordKafkaConsumerRecovery(kafkaConsumerNotificationProjection, kafkaRecoveryOutcomeDLQPublishFailed, kafkaFailureCode(dlqErr))
+					return dlqErr
+				}
+				log.Printf("[NotificationProjection] route permanent foreign-key message to DLQ topic=%s partition=%d offset=%d constraint=%s", record.Message.Topic, record.Message.Partition, record.Message.Offset, constraint)
+				metrics.RecordKafkaConsumerRecovery(kafkaConsumerNotificationProjection, kafkaRecoveryOutcomeMessageDLQ, kafkaFailureCodeDatabaseForeignKey)
+				if terminalDLQ == nil {
+					terminalDLQ = make(map[kafkaMessageIdentity]struct{})
+				}
+				terminalDLQ[kafkaMessageIdentityOf(record.Message)] = struct{}{}
+				return nil
+			},
+		)
 	}); err != nil {
 		metrics.RecordNotificationProjectionFailure("database")
 		return fmt.Errorf("apply notification records: %w", err)
 	}
 	metrics.ObserveNotificationProjectionLatency(time.Since(started))
 	return nil
+}
+
+func notificationForeignKeyParentIDs(record notificationActivityRecord, constraint string) (uint, uint, bool) {
+	if record.Candidate == nil {
+		return 0, 0, false
+	}
+	switch constraint {
+	case "fk_notifications_recipient":
+		return record.Candidate.RecipientID, 0, record.Candidate.RecipientID != 0
+	case "fk_notifications_actor":
+		return record.Candidate.ActorID, 0, record.Candidate.ActorID != 0
+	case "fk_notifications_post":
+		if record.Candidate.PostID == nil || *record.Candidate.PostID == 0 {
+			return 0, 0, false
+		}
+		return 0, *record.Candidate.PostID, true
+	default:
+		return 0, 0, false
+	}
 }
 
 func retryNotificationDatabaseApply(ctx context.Context, policy kafkaRetryPolicy, apply func() error) error {
@@ -220,6 +310,9 @@ func retryNotificationDatabaseApply(ctx context.Context, policy kafkaRetryPolicy
 	}, func() error {
 		attempts++
 		if applyErr := apply(); applyErr != nil {
+			if kafkaFailureClassOf(applyErr) != "" {
+				return applyErr
+			}
 			return retryableKafkaError(kafkaFailureCodeDatabaseTransaction, applyErr)
 		}
 		return nil

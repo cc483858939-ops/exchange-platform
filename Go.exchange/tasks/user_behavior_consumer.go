@@ -39,6 +39,7 @@ type userBehaviorMessageReader interface {
 type userBehaviorEventRecord struct {
 	Envelope eventing.Envelope
 	Payload  eventing.UserBehaviorPayload
+	Message  kafka.Message
 }
 
 type userBehaviorRecordsApplyFunc func(context.Context, *gorm.DB, string, config.KafkaConfig, []userBehaviorEventRecord) error
@@ -130,6 +131,19 @@ func consumeUserBehaviorMessagesWithApply(
 	policy kafkaRetryPolicy,
 	apply userBehaviorRecordsApplyFunc,
 ) error {
+	return consumeUserBehaviorMessagesWithForeignKeyLookup(ctx, reader, publisher, db, kafkaConfig, policy, apply, lookupKafkaForeignKeyParent)
+}
+
+func consumeUserBehaviorMessagesWithForeignKeyLookup(
+	ctx context.Context,
+	reader userBehaviorMessageReader,
+	publisher rawKafkaMessagePublisher,
+	db *gorm.DB,
+	kafkaConfig config.KafkaConfig,
+	policy kafkaRetryPolicy,
+	apply userBehaviorRecordsApplyFunc,
+	lookup kafkaForeignKeyParentLookup,
+) error {
 	if ctx == nil {
 		return errors.New("user behavior consumer context is nil")
 	}
@@ -154,13 +168,54 @@ func consumeUserBehaviorMessagesWithApply(
 		}
 		if len(records) > 0 {
 			attempts := 0
+			var terminalDLQ map[kafkaMessageIdentity]struct{}
 			err = retryKafkaOperation(ctx, policy, func(attempt int, retryErr error) {
 				metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCode(retryErr))
 				log.Printf("[BehaviorProjection] retry attempt=%d max_attempts=%d code=%s", attempt, policy.MaxAttempts, kafkaFailureCode(retryErr))
 			}, func() error {
 				attempts++
-				applyErr := apply(ctx, db, strings.TrimSpace(kafkaConfig.UserBehaviorGroupID), kafkaConfig, records)
-				return applyErr
+				pending := records
+				if len(terminalDLQ) > 0 {
+					pending = make([]userBehaviorEventRecord, 0, len(records))
+					for _, record := range records {
+						if _, terminal := terminalDLQ[kafkaMessageIdentityOf(record.Message)]; !terminal {
+							pending = append(pending, record)
+						}
+					}
+				}
+				return applyKafkaBatchWithForeignKeyIsolation(ctx, pending,
+					func(applyCtx context.Context, subset []userBehaviorEventRecord) error {
+						return apply(applyCtx, db, strings.TrimSpace(kafkaConfig.UserBehaviorGroupID), kafkaConfig, subset)
+					},
+					func(err error) bool {
+						return kafkaPostgresForeignKeyIsAllowed(err,
+							"fk_post_behaviors_user",
+							"fk_post_reaction_user", "fk_post_reaction_post",
+							"fk_user_reco_profile_dirty_user")
+					},
+					func(handleCtx context.Context, record userBehaviorEventRecord, fkErr error) error {
+						constraint, _ := kafkaPostgresForeignKeyConstraint(fkErr)
+						if !userBehaviorForeignKeyIsPermanentForRecord(record, constraint) {
+							return retryableKafkaError(kafkaFailureCodeDatabaseTransaction, fkErr)
+						}
+						dlqErr := publishConfirmedMissingParentKafkaForeignKeyDLQ(
+							handleCtx, db, lookup, publisher, kafkaConfig.ConsumerDLQTopic,
+							kafkaConsumerUserBehaviorProjection, record.Message, fkErr,
+							record.Payload.UserID, record.Payload.PostID,
+						)
+						if dlqErr != nil {
+							metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeDLQPublishFailed, kafkaFailureCode(dlqErr))
+							return dlqErr
+						}
+						log.Printf("[BehaviorProjection] route permanent foreign-key message to DLQ topic=%s partition=%d offset=%d constraint=%s", record.Message.Topic, record.Message.Partition, record.Message.Offset, constraint)
+						metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeMessageDLQ, kafkaFailureCodeDatabaseForeignKey)
+						if terminalDLQ == nil {
+							terminalDLQ = make(map[kafkaMessageIdentity]struct{})
+						}
+						terminalDLQ[kafkaMessageIdentityOf(record.Message)] = struct{}{}
+						return nil
+					},
+				)
 			})
 			if err != nil {
 				if ctx.Err() != nil {
@@ -234,7 +289,7 @@ func decodeUserBehaviorMessage(message kafka.Message) (userBehaviorEventRecord, 
 	if (event.Type == eventing.EventTypePostLiked || event.Type == eventing.EventTypePostUnliked) && payload.LikeVersion <= 0 {
 		return userBehaviorEventRecord{}, permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("like behavior payload requires positive like_version"))
 	}
-	return userBehaviorEventRecord{Envelope: event, Payload: payload}, nil
+	return userBehaviorEventRecord{Envelope: event, Payload: payload, Message: message}, nil
 }
 
 func classifyUserBehaviorBatch(
@@ -295,6 +350,20 @@ func isUserBehaviorEvent(eventType string) bool {
 	return eventType == eventing.EventTypePostViewed ||
 		eventType == eventing.EventTypePostLiked ||
 		eventType == eventing.EventTypePostUnliked
+}
+
+func userBehaviorForeignKeyIsPermanentForRecord(record userBehaviorEventRecord, constraint string) bool {
+	switch record.Envelope.Type {
+	case eventing.EventTypePostViewed:
+		// The view endpoint accepts any positive PostID without checking the
+		// posts table. A guessed future ID may become valid later, so a missing
+		// post for a view is not safe to classify as permanent.
+		return constraint == "fk_post_behaviors_user" || constraint == "fk_user_reco_profile_dirty_user"
+	case eventing.EventTypePostLiked, eventing.EventTypePostUnliked:
+		return constraint == "fk_post_reaction_user" || constraint == "fk_post_reaction_post" || constraint == "fk_user_reco_profile_dirty_user"
+	default:
+		return false
+	}
 }
 
 // ConsumerInbox retention must be coordinated with Kafka retention, the replay

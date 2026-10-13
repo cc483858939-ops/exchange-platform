@@ -33,6 +33,7 @@ const (
 type recommendationMetricEvent struct {
 	Envelope eventing.Envelope
 	Payload  eventing.RecommendationBehaviorPayload
+	Message  kafka.Message
 }
 
 type recommendationMetricsMessageReader interface {
@@ -138,6 +139,19 @@ func consumeRecommendationMetricsMessagesWithApply(
 	policy kafkaRetryPolicy,
 	apply recommendationMetricRecordsApplyFunc,
 ) error {
+	return consumeRecommendationMetricsMessagesWithForeignKeyLookup(ctx, reader, publisher, db, kafkaConfig, policy, apply, lookupKafkaForeignKeyParent)
+}
+
+func consumeRecommendationMetricsMessagesWithForeignKeyLookup(
+	ctx context.Context,
+	reader recommendationMetricsMessageReader,
+	publisher rawKafkaMessagePublisher,
+	db *gorm.DB,
+	kafkaConfig config.KafkaConfig,
+	policy kafkaRetryPolicy,
+	apply recommendationMetricRecordsApplyFunc,
+	lookup kafkaForeignKeyParentLookup,
+) error {
 	if ctx == nil {
 		return errors.New("recommendation metrics consumer context is nil")
 	}
@@ -163,13 +177,49 @@ func consumeRecommendationMetricsMessagesWithApply(
 		}
 		if len(records) > 0 {
 			attempts := 0
+			var terminalDLQ map[kafkaMessageIdentity]struct{}
 			err = retryKafkaOperation(ctx, policy, func(attempt int, retryErr error) {
 				metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCode(retryErr))
 				log.Printf("[RecommendationMetrics] retry attempt=%d max_attempts=%d code=%s", attempt, policy.MaxAttempts, kafkaFailureCode(retryErr))
 			}, func() error {
 				attempts++
-				applyErr := apply(ctx, db, strings.TrimSpace(kafkaConfig.RecommendationMetricsGroupID), kafkaConfig, records)
-				return applyErr
+				pending := records
+				if len(terminalDLQ) > 0 {
+					pending = make([]recommendationMetricEvent, 0, len(records))
+					for _, record := range records {
+						if _, terminal := terminalDLQ[kafkaMessageIdentityOf(record.Message)]; !terminal {
+							pending = append(pending, record)
+						}
+					}
+				}
+				return applyKafkaBatchWithForeignKeyIsolation(ctx, pending,
+					func(applyCtx context.Context, subset []recommendationMetricEvent) error {
+						return apply(applyCtx, db, strings.TrimSpace(kafkaConfig.RecommendationMetricsGroupID), kafkaConfig, subset)
+					},
+					func(err error) bool {
+						return kafkaPostgresForeignKeyIsAllowed(err,
+							"fk_post_behaviors_user", "fk_post_behaviors_post",
+							"fk_user_reco_profile_dirty_user")
+					},
+					func(handleCtx context.Context, record recommendationMetricEvent, fkErr error) error {
+						dlqErr := publishConfirmedMissingParentKafkaForeignKeyDLQ(
+							handleCtx, db, lookup, publisher, kafkaConfig.ConsumerDLQTopic,
+							kafkaConsumerRecommendationMetrics, record.Message, fkErr,
+							record.Payload.UserID, record.Payload.PostID,
+						)
+						if dlqErr != nil {
+							metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeDLQPublishFailed, kafkaFailureCode(dlqErr))
+							return dlqErr
+						}
+						log.Printf("[RecommendationMetrics] route permanent foreign-key message to DLQ topic=%s partition=%d offset=%d", record.Message.Topic, record.Message.Partition, record.Message.Offset)
+						metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeMessageDLQ, kafkaFailureCodeDatabaseForeignKey)
+						if terminalDLQ == nil {
+							terminalDLQ = make(map[kafkaMessageIdentity]struct{})
+						}
+						terminalDLQ[kafkaMessageIdentityOf(record.Message)] = struct{}{}
+						return nil
+					},
+				)
 			})
 			if err != nil {
 				metrics.RecordRecommendationTelemetryProjection("retryable_error")
@@ -252,7 +302,7 @@ func decodeRecommendationMetricEvent(message kafka.Message) (recommendationMetri
 		!validRecommendationMetricsPayload(event.Type, payload) {
 		return recommendationMetricEvent{}, permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("recommendation behavior payload failed validation"))
 	}
-	return recommendationMetricEvent{Envelope: event, Payload: payload}, nil
+	return recommendationMetricEvent{Envelope: event, Payload: payload, Message: message}, nil
 }
 
 func classifyRecommendationMetricsBatch(
