@@ -8,24 +8,55 @@ function errorResponse(status, message) {
   });
 }
 
-export async function onRequest(context) {
-  const apiOrigin = context.env.API_ORIGIN;
+function parseApiOrigin(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    return null;
+  }
 
-  if (!apiOrigin) {
+  let origin;
+  try {
+    origin = new URL(value.trim());
+  } catch {
+    return null;
+  }
+
+  if (
+    !['http:', 'https:'].includes(origin.protocol)
+    || origin.username
+    || origin.password
+    || origin.search
+    || origin.hash
+    || origin.pathname.replace(/\/+$/, '') !== '/api'
+  ) {
+    return null;
+  }
+
+  origin.pathname = '/api';
+  return origin;
+}
+
+export async function onRequest(context) {
+  const configuredApiOrigin = context.env.API_ORIGIN;
+  if (typeof configuredApiOrigin !== 'string' || !configuredApiOrigin.trim()) {
     return errorResponse(500, 'API proxy is not configured');
+  }
+  const upstreamUrl = parseApiOrigin(configuredApiOrigin);
+  if (!upstreamUrl) {
+    return errorResponse(500, 'API_ORIGIN must be an absolute URL with exactly one /api path prefix');
   }
 
   const matchedPath = context.params.path;
-  const segments = Array.isArray(matchedPath)
-    ? matchedPath
-    : matchedPath
-      ? [matchedPath]
+  const rawSegments = Array.isArray(matchedPath)
+    ? matchedPath.flatMap((segment) => String(segment).split('/'))
+    : typeof matchedPath === 'string'
+      ? matchedPath.split('/')
       : [];
+  const segments = rawSegments.filter(Boolean);
+  if (segments[0] === 'api') {
+    return errorResponse(400, 'API proxy path must be relative to /api');
+  }
 
-  const upstreamUrl = new URL(apiOrigin);
-  upstreamUrl.pathname =
-    `${upstreamUrl.pathname.replace(/\/+$/, '')}/` +
-    segments.map(encodeURIComponent).join('/');
+  upstreamUrl.pathname = `/api${segments.length ? `/${segments.map(encodeURIComponent).join('/')}` : ''}`;
   upstreamUrl.search = new URL(context.request.url).search;
 
   const headers = new Headers(context.request.headers);

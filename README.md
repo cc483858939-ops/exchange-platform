@@ -271,11 +271,33 @@ docker compose --env-file deploy/.env -f deploy/compose.prod.yml up -d
 一次性初始化按以下依赖顺序执行：`migrate` → `kafka-init` → `kafka-connect` →
 `cdc-init` → API / Worker。仓库不再支持 historical pre-final Outbox schemas。
 
-前端在 Cloudflare Pages 构建时使用：
+### Cloudflare Pages 前端与同源 API
 
-```text
-VITE_API_BASE_URL=https://api.example.com/api
-```
+Cloudflare Pages 项目根目录设为 Exchangeapp_frontend，构建命令为
+npm run build，输出目录为 dist。functions/api 目录必须与前端项目一起
+部署，供 Pages Function 处理同源 API 请求。
+
+浏览器业务请求固定使用同源 /api，媒体 URL 保持 /api/files/*。前端不再
+配置 VITE_API_BASE_URL，也不直连 VPS API。
+
+在实际使用的 Cloudflare Pages Production、Preview 等运行环境中配置服务端变量：
+API_ORIGIN=https://api.example.com/api。该值必须包含且只包含一个 /api 路径
+前缀；末尾斜杠允许。Function 保留请求路径和 Query String 转发到该上游。
+
+如需 Cloudflare Access，在 Pages Runtime Secrets 中同时配置
+CF_ACCESS_CLIENT_ID 和 CF_ACCESS_CLIENT_SECRET。两项必须成对配置，不能使用
+VITE_* 前缀或进入前端构建产物。
+
+VPS 继续使用真实 API_DOMAIN 配置 Caddy。Go API 路由与 Caddy 反向代理保持
+现有 /api 路径；CORS_ALLOWED_ORIGINS 应包含实际 Pages 域名。
+
+本地 Vite 通过 /api 代理到 Go API，默认目标为 http://127.0.0.1:3000。
+需要覆盖时，在启动 Vite 的进程环境设置 API_URL；容器开发环境继续使用
+Compose 注入的 API_URL=http://api:3000。
+
+上传接口及帖子图片、头像、封面继续使用返回的相对 /api/files/* URL，通过
+Pages Function 同源访问。成功媒体响应沿用后端 Cache-Control，普通 API 和
+错误响应不缓存。
 
 生产 Compose 不包含前端服务，也不向宿主机公开数据库、Redis、Kafka、Kafka
 Connect、MinIO 或 API 端口；公网只由 Caddy 暴露 80/443，并将域名流量代理到
