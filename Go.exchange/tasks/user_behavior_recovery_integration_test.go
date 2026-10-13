@@ -2,7 +2,9 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"Go.exchange/models"
 
 	"github.com/google/uuid"
+	"github.com/segmentio/kafka-go"
 )
 
 func TestUserBehaviorProjectionRecoverySemanticsIntegration(t *testing.T) {
@@ -133,4 +136,120 @@ func TestUserBehaviorProjectionRecoverySemanticsIntegration(t *testing.T) {
 		t.Fatalf("stale reaction should be terminal: %v", err)
 	}
 	assertReaction(t, db, viewer.ID, stalePost.ID, true, 10, baseAt)
+}
+
+func TestUserBehaviorViewedMissingPostRecoveryIntegration(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
+	}
+	db, err := testdb.Open(t, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(
+		&models.User{}, &models.Post{}, &models.ConsumerInbox{}, &models.PostBehavior{},
+		&models.PostReaction{}, &models.UserRecoProfileDirty{}, &models.OutboxEvent{},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	tx := db.Begin()
+	if tx.Error != nil {
+		t.Fatal(tx.Error)
+	}
+	t.Cleanup(func() {
+		if err := tx.Rollback().Error; err != nil {
+			t.Errorf("rollback User Behavior recovery integration transaction: %v", err)
+		}
+	})
+
+	consumerName := "test-user-behavior-view-recovery-" + uuid.NewString()
+	kafkaConfig := config.KafkaConfig{
+		UserBehaviorGroupID: consumerName,
+		ActivityEventsTopic: "goexchange.user.behavior.v1",
+		ConsumerDLQTopic:    "goexchange.consumer.dlq.v1",
+	}
+	author := models.User{Username: "user-behavior-view-author-" + uuid.NewString(), Password: "test"}
+	viewer := models.User{Username: "user-behavior-view-viewer-" + uuid.NewString(), Password: "test"}
+	if err := tx.Create(&author).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Create(&viewer).Error; err != nil {
+		t.Fatal(err)
+	}
+	post := models.Post{AuthorID: author.ID, Content: "view recovery target", Visibility: "public"}
+	missingPost := models.Post{AuthorID: author.ID, Content: "post removed before view", Visibility: "public"}
+	if err := tx.Create(&post).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Create(&missingPost).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Unscoped().Delete(&models.Post{}, missingPost.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	baseAt := time.Now().UTC().Truncate(time.Microsecond)
+	messageForView := func(offset int64, eventID string, postID uint, occurredAt time.Time) kafka.Message {
+		message := userBehaviorMessage(t, mustPostViewedEvent(t, eventID, viewer.ID, postID, occurredAt))
+		message.Topic = kafkaConfig.ActivityEventsTopic
+		message.Partition = 4
+		message.Offset = offset
+		message.Key = []byte(eventID)
+		message.Time = occurredAt
+		return message
+	}
+	first := messageForView(90, "view-recovery-before", post.ID, baseAt)
+	bad := messageForView(91, "view-recovery-missing-post", missingPost.ID, baseAt.Add(time.Second))
+	last := messageForView(92, "view-recovery-after", post.ID, baseAt.Add(2*time.Second))
+	publisher := &fakeRawKafkaMessagePublisher{}
+	consumeBatch := func() (*fakeUserBehaviorReader, error) {
+		reader := &fakeUserBehaviorReader{messages: []kafka.Message{first, bad, last}}
+		err := consumeUserBehaviorMessagesWithForeignKeyLookup(context.Background(), reader, publisher, tx, kafkaConfig, kafkaRetryPolicy{MaxAttempts: 1}, applyUserBehaviorRecords, lookupKafkaForeignKeyParent)
+		return reader, err
+	}
+
+	reader, err := consumeBatch()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("first delivery consume error=%v", err)
+	}
+	if len(reader.commits) != 1 || len(reader.commits[0]) != 3 || len(publisher.messages) != 1 {
+		t.Fatalf("first delivery commits=%#v DLQ=%d", reader.commits, len(publisher.messages))
+	}
+	deadLetter, err := eventing.DecodeDeadLetterRecord(publisher.messages[0].Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publisher.topics[0] != kafkaConfig.ConsumerDLQTopic || deadLetter.Failure.Class != string(kafkaFailurePermanent) || deadLetter.Failure.Code != kafkaFailureCodeDatabaseForeignKey {
+		t.Fatalf("DLQ topic=%q failure=%+v", publisher.topics[0], deadLetter.Failure)
+	}
+	if deadLetter.Source.Topic != bad.Topic || deadLetter.Source.Partition != bad.Partition || deadLetter.Source.Offset != bad.Offset || string(deadLetter.Source.Value) != string(bad.Value) {
+		t.Fatalf("DLQ source does not match bad view message: %+v", deadLetter.Source)
+	}
+	assertViewBehaviorCount(t, tx, viewer.ID, post.ID, 2, baseAt.Add(2*time.Second))
+	assertPostViewCount(t, tx, post.ID, 2)
+	for _, eventID := range []string{"view-recovery-before", "view-recovery-after"} {
+		if count := countRecoveryInboxEvent(t, tx, consumerName, eventID); count != 1 {
+			t.Fatalf("view inbox rows for %s=%d want=1", eventID, count)
+		}
+	}
+	if count := countRecoveryInboxEvent(t, tx, consumerName, "view-recovery-missing-post"); count != 0 {
+		t.Fatalf("missing Post view inbox rows=%d want=0", count)
+	}
+
+	reader, err = consumeBatch()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("redelivery consume error=%v", err)
+	}
+	if len(reader.commits) != 1 || len(reader.commits[0]) != 3 || len(publisher.messages) != 2 {
+		t.Fatalf("redelivery commits=%#v DLQ=%d", reader.commits, len(publisher.messages))
+	}
+	assertViewBehaviorCount(t, tx, viewer.ID, post.ID, 2, baseAt.Add(2*time.Second))
+	assertPostViewCount(t, tx, post.ID, 2)
+	for _, eventID := range []string{"view-recovery-before", "view-recovery-after"} {
+		if count := countRecoveryInboxEvent(t, tx, consumerName, eventID); count != 1 {
+			t.Fatalf("redelivered view inbox rows for %s=%d want=1", eventID, count)
+		}
+	}
 }

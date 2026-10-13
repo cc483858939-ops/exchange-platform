@@ -189,7 +189,7 @@ func consumeUserBehaviorMessagesWithForeignKeyLookup(
 					},
 					func(err error) bool {
 						return kafkaPostgresForeignKeyIsAllowed(err,
-							"fk_post_behaviors_user",
+							"fk_post_behaviors_user", "fk_post_behaviors_post",
 							"fk_post_reaction_user", "fk_post_reaction_post",
 							"fk_user_reco_profile_dirty_user")
 					},
@@ -355,10 +355,7 @@ func isUserBehaviorEvent(eventType string) bool {
 func userBehaviorForeignKeyIsPermanentForRecord(record userBehaviorEventRecord, constraint string) bool {
 	switch record.Envelope.Type {
 	case eventing.EventTypePostViewed:
-		// The view endpoint accepts any positive PostID without checking the
-		// posts table. A guessed future ID may become valid later, so a missing
-		// post for a view is not safe to classify as permanent.
-		return constraint == "fk_post_behaviors_user" || constraint == "fk_user_reco_profile_dirty_user"
+		return constraint == "fk_post_behaviors_user" || constraint == "fk_post_behaviors_post" || constraint == "fk_user_reco_profile_dirty_user"
 	case eventing.EventTypePostLiked, eventing.EventTypePostUnliked:
 		return constraint == "fk_post_reaction_user" || constraint == "fk_post_reaction_post" || constraint == "fk_user_reco_profile_dirty_user"
 	default:

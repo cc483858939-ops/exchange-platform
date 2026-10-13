@@ -262,8 +262,63 @@ func TestUserBehaviorForeignKeyAlreadyDLQedMessageIsNotRepublishedOnRetry(t *tes
 	}
 }
 
-func TestUserBehaviorViewWithMissingPostRemainsRetryable(t *testing.T) {
-	message := mustUserBehaviorRecoveryMessage(t, 30, "view-unverified-post", eventing.EventTypePostViewed, 7, 999, 0)
+func TestUserBehaviorViewWithMissingPostDLQsOnlyBadRecordAndCommitsBatch(t *testing.T) {
+	first := mustUserBehaviorRecoveryMessage(t, 30, "view-before-missing-post", eventing.EventTypePostViewed, 7, 42, 0)
+	bad := mustUserBehaviorRecoveryMessage(t, 31, "view-missing-post", eventing.EventTypePostViewed, 7, 999, 0)
+	bad.Key = []byte("missing-post-view")
+	bad.Headers = []kafka.Header{{Key: "trace", Value: []byte("view-trace")}}
+	bad.Time = time.Date(2026, 10, 13, 7, 8, 9, 10, time.UTC)
+	last := mustUserBehaviorRecoveryMessage(t, 32, "view-after-missing-post", eventing.EventTypePostViewed, 7, 42, 0)
+	reader := &fakeUserBehaviorReader{messages: []kafka.Message{first, bad, last}}
+	publisher := &fakeRawKafkaMessagePublisher{}
+	var applied []string
+	lookupCalls := 0
+	cfg := userBehaviorRecoveryConfig()
+	err := consumeUserBehaviorMessagesWithForeignKeyLookup(context.Background(), reader, publisher, nil, cfg, kafkaRetryPolicy{MaxAttempts: 1},
+		func(_ context.Context, _ *gorm.DB, _ string, _ config.KafkaConfig, records []userBehaviorEventRecord) error {
+			for _, record := range records {
+				if record.Payload.PostID == 999 {
+					return retryableKafkaError(kafkaFailureCodeDatabaseTransaction, testPostgresForeignKeyError("fk_post_behaviors_post"))
+				}
+			}
+			for _, record := range records {
+				applied = append(applied, record.Envelope.ID)
+			}
+			return nil
+		},
+		func(_ context.Context, _ *gorm.DB, table string, id uint) (bool, error) {
+			lookupCalls++
+			if table != "posts" || id != 999 {
+				t.Fatalf("unexpected lookup target %s/%d", table, id)
+			}
+			return false, nil
+		},
+	)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("consume error=%v", err)
+	}
+	if !reflect.DeepEqual(applied, []string{"view-before-missing-post", "view-after-missing-post"}) {
+		t.Fatalf("applied events=%v", applied)
+	}
+	if lookupCalls != 1 || len(publisher.messages) != 1 || len(reader.commits) != 1 || len(reader.commits[0]) != 3 {
+		t.Fatalf("parent lookups=%d DLQ=%d commits=%#v", lookupCalls, len(publisher.messages), reader.commits)
+	}
+	deadLetter, err := eventing.DecodeDeadLetterRecord(publisher.messages[0].Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publisher.topics[0] != cfg.ConsumerDLQTopic || deadLetter.Failure.Class != string(kafkaFailurePermanent) || deadLetter.Failure.Code != kafkaFailureCodeDatabaseForeignKey {
+		t.Fatalf("topic=%q failure=%+v", publisher.topics[0], deadLetter.Failure)
+	}
+	if deadLetter.Source.Topic != bad.Topic || deadLetter.Source.Partition != bad.Partition || deadLetter.Source.Offset != bad.Offset ||
+		!bytes.Equal(deadLetter.Source.Key, bad.Key) || !bytes.Equal(deadLetter.Source.Value, bad.Value) || len(deadLetter.Source.Headers) != 1 ||
+		deadLetter.Source.Headers[0].Key != bad.Headers[0].Key || !bytes.Equal(deadLetter.Source.Headers[0].Value, bad.Headers[0].Value) || !deadLetter.Source.Time.Equal(bad.Time) {
+		t.Fatalf("DLQ source metadata does not match original Kafka message: %+v", deadLetter.Source)
+	}
+}
+
+func TestUserBehaviorViewWithExistingPostRemainsRetryable(t *testing.T) {
+	message := mustUserBehaviorRecoveryMessage(t, 33, "view-existing-post", eventing.EventTypePostViewed, 7, 999, 0)
 	reader := &fakeUserBehaviorReader{messages: []kafka.Message{message}}
 	publisher := &fakeRawKafkaMessagePublisher{}
 	lookupCalls, applyCalls := 0, 0
@@ -272,16 +327,69 @@ func TestUserBehaviorViewWithMissingPostRemainsRetryable(t *testing.T) {
 			applyCalls++
 			return retryableKafkaError(kafkaFailureCodeDatabaseTransaction, testPostgresForeignKeyError("fk_post_behaviors_post"))
 		},
-		func(context.Context, *gorm.DB, string, uint) (bool, error) {
+		func(_ context.Context, _ *gorm.DB, table string, id uint) (bool, error) {
 			lookupCalls++
-			return false, nil
+			if table != "posts" || id != 999 {
+				t.Fatalf("unexpected lookup target %s/%d", table, id)
+			}
+			return true, nil
 		},
 	)
-	if kafkaFailureClassOf(err) != kafkaFailureRetryable || kafkaFailureCode(err) != kafkaFailureCodeDatabaseTransaction || applyCalls != 1 || lookupCalls != 0 {
+	if kafkaFailureClassOf(err) != kafkaFailureRetryable || kafkaFailureCode(err) != kafkaFailureCodeDatabaseTransaction || applyCalls != 1 || lookupCalls != 1 {
 		t.Fatalf("class=%q code=%q apply=%d lookup=%d err=%v", kafkaFailureClassOf(err), kafkaFailureCode(err), applyCalls, lookupCalls, err)
 	}
 	if len(publisher.messages) != 0 || len(reader.commits) != 0 {
-		t.Fatalf("DLQ=%d commits=%d; unverified view PostID must remain retryable", len(publisher.messages), len(reader.commits))
+		t.Fatalf("DLQ=%d commits=%d; an existing Post must remain retryable", len(publisher.messages), len(reader.commits))
+	}
+}
+
+func TestUserBehaviorViewParentLookupFailureRemainsRetryable(t *testing.T) {
+	message := mustUserBehaviorRecoveryMessage(t, 34, "view-parent-lookup-failed", eventing.EventTypePostViewed, 7, 999, 0)
+	reader := &fakeUserBehaviorReader{messages: []kafka.Message{message}}
+	publisher := &fakeRawKafkaMessagePublisher{}
+	err := consumeUserBehaviorMessagesWithForeignKeyLookup(context.Background(), reader, publisher, nil, userBehaviorRecoveryConfig(), kafkaRetryPolicy{MaxAttempts: 1},
+		func(context.Context, *gorm.DB, string, config.KafkaConfig, []userBehaviorEventRecord) error {
+			return retryableKafkaError(kafkaFailureCodeDatabaseTransaction, testPostgresForeignKeyError("fk_post_behaviors_post"))
+		},
+		func(context.Context, *gorm.DB, string, uint) (bool, error) {
+			return false, errors.New("temporary PostgreSQL outage")
+		},
+	)
+	if kafkaFailureClassOf(err) != kafkaFailureRetryable || kafkaFailureCode(err) != kafkaFailureCodeDatabaseUnavailable {
+		t.Fatalf("class=%q code=%q err=%v", kafkaFailureClassOf(err), kafkaFailureCode(err), err)
+	}
+	if len(publisher.messages) != 0 || len(reader.commits) != 0 {
+		t.Fatalf("DLQ=%d commits=%d; lookup failures must remain retryable", len(publisher.messages), len(reader.commits))
+	}
+}
+
+func TestUserBehaviorViewDLQFailureStopsBeforeLaterRecordsAndCommit(t *testing.T) {
+	reader := &fakeUserBehaviorReader{messages: []kafka.Message{
+		mustUserBehaviorRecoveryMessage(t, 35, "view-before-dlq-failure", eventing.EventTypePostViewed, 7, 42, 0),
+		mustUserBehaviorRecoveryMessage(t, 36, "view-missing-post-dlq-failure", eventing.EventTypePostViewed, 7, 999, 0),
+		mustUserBehaviorRecoveryMessage(t, 37, "view-after-dlq-failure", eventing.EventTypePostViewed, 7, 42, 0),
+	}}
+	publisher := &fakeRawKafkaMessagePublisher{err: errors.New("DLQ unavailable")}
+	var applied []string
+	err := consumeUserBehaviorMessagesWithForeignKeyLookup(context.Background(), reader, publisher, nil, userBehaviorRecoveryConfig(), kafkaRetryPolicy{MaxAttempts: 1},
+		func(_ context.Context, _ *gorm.DB, _ string, _ config.KafkaConfig, records []userBehaviorEventRecord) error {
+			for _, record := range records {
+				if record.Payload.PostID == 999 {
+					return retryableKafkaError(kafkaFailureCodeDatabaseTransaction, testPostgresForeignKeyError("fk_post_behaviors_post"))
+				}
+			}
+			for _, record := range records {
+				applied = append(applied, record.Envelope.ID)
+			}
+			return nil
+		},
+		func(context.Context, *gorm.DB, string, uint) (bool, error) { return false, nil },
+	)
+	if kafkaFailureClassOf(err) != kafkaFailureRetryable || kafkaFailureCode(err) != kafkaFailureCodeDLQPublish {
+		t.Fatalf("error class=%q code=%q err=%v", kafkaFailureClassOf(err), kafkaFailureCode(err), err)
+	}
+	if !reflect.DeepEqual(applied, []string{"view-before-dlq-failure"}) || len(reader.commits) != 0 {
+		t.Fatalf("applied=%v commits=%d; later events must stop and batch remain uncommitted", applied, len(reader.commits))
 	}
 }
 
