@@ -882,12 +882,11 @@ func (s *Store) readAggregateStates(ctx context.Context, postIDs []uint) ([]aggr
 	}
 	for i, postID := range postIDs {
 		base := i * 3
+		ready, readyOK := redisBulkString(values[base])
 		if values[base] == nil {
 			addMissing(base, ReadyKey(postID))
-			continue
 		}
-		ready, ok := redisBulkString(values[base])
-		if !ok || ready != "1" {
+		if readyOK && ready == "deleted" {
 			continue
 		}
 		if values[base+1] == nil {
@@ -916,43 +915,35 @@ func (s *Store) readAggregateStates(ctx context.Context, postIDs []uint) ([]aggr
 	for i := range postIDs {
 		base := i * 3
 		ready, readyOK := redisBulkString(values[base])
-		if values[base] == nil {
-			if aggregateTypeError := aggregateMissingTypeError(missingByIndex, base); aggregateTypeError != nil {
-				results[i].err = aggregateTypeError
-			} else {
-				results[i].err = postNotReadyError()
-			}
-			continue
-		}
-		if !readyOK {
-			results[i].err = fmt.Errorf("unexpected Redis MGET Ready value type %T", values[base])
-			continue
-		}
-		if ready == "deleted" {
+		if readyOK && ready == "deleted" {
 			results[i].err = ErrPostLikeUnavailable
 			continue
 		}
-		if ready != "1" {
+		for _, index := range [3]int{base, base + 1, base + 2} {
+			if values[index] != nil {
+				continue
+			}
+			if aggregateTypeError := aggregateMissingTypeError(missingByIndex, index); aggregateTypeError != nil {
+				results[i].err = aggregateTypeError
+				break
+			}
+		}
+		if results[i].err != nil {
+			continue
+		}
+		if values[base] == nil || !readyOK || ready != "1" {
 			results[i].err = postNotReadyError()
 			continue
 		}
 
 		count, countOK := redisBulkString(values[base+1])
 		if values[base+1] == nil {
-			if aggregateTypeError := aggregateMissingTypeError(missingByIndex, base+1); aggregateTypeError != nil {
-				results[i].err = aggregateTypeError
-			} else {
-				results[i].err = postNotReadyError()
-			}
+			results[i].err = postNotReadyError()
 			continue
 		}
 		version, versionOK := redisBulkString(values[base+2])
 		if values[base+2] == nil {
-			if aggregateTypeError := aggregateMissingTypeError(missingByIndex, base+2); aggregateTypeError != nil {
-				results[i].err = aggregateTypeError
-			} else {
-				results[i].err = postNotReadyError()
-			}
+			results[i].err = postNotReadyError()
 			continue
 		}
 		countValue, countValid := parseNonNegativeInt64(count)

@@ -112,6 +112,11 @@ func TestLikeAggregateReadsRemainConsistentDuringAtomicMutationsIntegration(t *t
 	client, store := openAggregateReadRedisIntegration(t)
 	postID := aggregateReadTestPostID()
 	cleanupAggregateReadPost(t, client, postID)
+	t.Cleanup(func() {
+		if err := client.Del(ReadyKey(postID), CountKey(postID), VersionKey(postID)).Err(); err != nil {
+			t.Errorf("clear aggregate keys for post %d: %v", postID, err)
+		}
+	})
 	if err := client.MSet(ReadyKey(postID), "1", CountKey(postID), "13", VersionKey(postID), "0").Err(); err != nil {
 		t.Fatal(err)
 	}
@@ -170,8 +175,8 @@ return version
 func TestLikeAggregateReadErrorsRemainClassifiedIntegration(t *testing.T) {
 	client, store := openAggregateReadRedisIntegration(t)
 	base := aggregateReadTestPostID()
-	postIDs := make([]uint, 0, 9)
-	for i := uint(0); i < 9; i++ {
+	postIDs := make([]uint, 0, 11)
+	for i := uint(0); i < 11; i++ {
 		postIDs = append(postIDs, base+i)
 	}
 	for _, postID := range postIDs {
@@ -207,6 +212,26 @@ func TestLikeAggregateReadErrorsRemainClassifiedIntegration(t *testing.T) {
 				return client.MSet(CountKey(postID), "1", VersionKey(postID), "1").Err()
 			},
 			want: ErrPostLikeNotReady,
+		},
+		{
+			name: "missing Ready with Count WRONGTYPE",
+			setup: func(postID uint) error {
+				if err := client.LPush(CountKey(postID), "1").Err(); err != nil {
+					return err
+				}
+				return client.Set(VersionKey(postID), "1", 0).Err()
+			},
+			want: ErrLikeRedisType,
+		},
+		{
+			name: "invalid Ready with Version WRONGTYPE",
+			setup: func(postID uint) error {
+				if err := client.HSet(VersionKey(postID), "value", "1").Err(); err != nil {
+					return err
+				}
+				return client.MSet(ReadyKey(postID), "invalid", CountKey(postID), "1").Err()
+			},
+			want: ErrLikeRedisType,
 		},
 		{
 			name: "missing Count",
