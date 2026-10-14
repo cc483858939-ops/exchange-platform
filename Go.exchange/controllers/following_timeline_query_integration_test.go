@@ -18,6 +18,7 @@ func TestFollowingFirstPageMatchesCanonicalActivityOrder(t *testing.T) {
 		`CREATE TEMP TABLE users (id bigint PRIMARY KEY, deleted_at timestamptz)`,
 		`CREATE TEMP TABLE posts (id bigint PRIMARY KEY, author_id bigint, created_at timestamptz, deleted_at timestamptz, visibility text, reply_to_post_id bigint)`,
 		`CREATE TEMP TABLE user_follows (follower_id bigint, following_id bigint, PRIMARY KEY(follower_id, following_id))`,
+		`CREATE TEMP TABLE user_mutes (muter_id bigint, muted_id bigint, PRIMARY KEY(muter_id, muted_id))`,
 		`CREATE TEMP TABLE post_reposts (id bigint PRIMARY KEY, user_id bigint, post_id bigint, created_at timestamptz, UNIQUE(user_id, post_id))`,
 		`CREATE INDEX ON posts (author_id, created_at DESC, id DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX ON post_reposts (user_id, created_at DESC, id DESC)`,
@@ -80,7 +81,7 @@ func TestFollowingFirstPageMatchesCanonicalActivityOrder(t *testing.T) {
 	for _, limit := range []int{1, 2, 20, 100, 500} {
 		t.Run(fmt.Sprintf("limit_%d", limit), func(t *testing.T) {
 			var got []timelineActivityQueryRow
-			if err := tx.Raw(followingTimelineFirstPageSQL(), 9000, limit+1, limit+1, limit+1).Scan(&got).Error; err != nil {
+			if err := tx.Raw(followingTimelineFirstPageSQL(), 9000, 9000, limit+1, limit+1, limit+1).Scan(&got).Error; err != nil {
 				t.Fatal(err)
 			}
 			count := min(limit+1, len(want))
@@ -108,7 +109,7 @@ func TestFollowingFirstPageMatchesCanonicalActivityOrder(t *testing.T) {
 		t.Run(fmt.Sprintf("cursor_%d", position), func(t *testing.T) {
 			cursor := want[position]
 			var got []timelineActivityQueryRow
-			if err := tx.Raw(followingTimelineCursorSQL(), 9000, 9000,
+			if err := tx.Raw(followingTimelineCursorSQL(), 9000, 9000, 9000,
 				cursor.ActivityAt, cursor.ActivityAt, cursor.ActivityRank, cursor.ActivityRank, cursor.SourceID, 21,
 			).Scan(&got).Error; err != nil {
 				t.Fatal(err)
@@ -128,7 +129,7 @@ func TestFollowingFirstPageMatchesCanonicalActivityOrder(t *testing.T) {
 		})
 	}
 	var empty []timelineActivityQueryRow
-	if err := tx.Raw(followingTimelineFirstPageSQL(), 9001, 21, 21, 21).Scan(&empty).Error; err != nil || len(empty) != 0 {
+	if err := tx.Raw(followingTimelineFirstPageSQL(), 9001, 9001, 21, 21, 21).Scan(&empty).Error; err != nil || len(empty) != 0 {
 		t.Fatalf("unfollowed viewer: rows=%v err=%v", empty, err)
 	}
 	if err := tx.Exec(`INSERT INTO posts VALUES
@@ -138,7 +139,7 @@ func TestFollowingFirstPageMatchesCanonicalActivityOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	var older []timelineActivityQueryRow
-	if err := tx.Raw(followingTimelineCursorSQL(), 9000, 9000,
+	if err := tx.Raw(followingTimelineCursorSQL(), 9000, 9000, 9000,
 		base.Add(time.Hour), base.Add(time.Hour), 2, 2, 99999, 500,
 	).Scan(&older).Error; err != nil {
 		t.Fatal(err)

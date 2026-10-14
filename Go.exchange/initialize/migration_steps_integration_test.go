@@ -55,7 +55,7 @@ func TestMigrationStepsSkipRepeatedDDLAndRepairCatalogDriftIntegration(t *testin
 	}
 	firstElapsed, firstDDL := time.Since(firstStart), len(observer.statements)
 	var steps int64
-	if err := tx.Model(&models.MigrationStep{}).Count(&steps).Error; err != nil || steps != 23 {
+	if err := tx.Model(&models.MigrationStep{}).Count(&steps).Error; err != nil || steps != 24 {
 		t.Fatalf("steps=%d err=%v", steps, err)
 	}
 	observer.statements = nil

@@ -191,11 +191,33 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 		t.Fatalf("muted page1 status=%d body=%s response=%#v", status, body, mutedPage1)
 	}
 	mutedPage2, status, body := requestFollowingTimeline(t, muteViewer.ID, "limit=1&cursor="+*mutedPage1.NextCursor)
-	if status != http.StatusOK || len(mutedPage2.Items) != 1 || mutedPage2.NextCursor != nil || mutedPage2.Items[0].Post.ID != muteBobPost.ID {
+	if status != http.StatusOK || len(mutedPage2.Items) != 1 || mutedPage2.NextCursor == nil || mutedPage2.Items[0].Post.ID != muteBobPost.ID {
 		t.Fatalf("muted page2 status=%d body=%s response=%#v", status, body, mutedPage2)
 	}
-	for _, hidden := range []uint{muteAlicePost.ID, muteBobRepostedAlice.ID, muteAliceRepostedBob.ID} {
-		if containsFollowingPostID(mutedPage1.Items, hidden) || containsFollowingPostID(mutedPage2.Items, hidden) {
+	mutedPage3, status, body := requestFollowingTimeline(t, muteViewer.ID, "limit=1&cursor="+*mutedPage2.NextCursor)
+	if status != http.StatusOK || len(mutedPage3.Items) != 1 || mutedPage3.NextCursor != nil ||
+		mutedPage3.Items[0].Post.ID != muteAliceRepostedBob.ID || mutedPage3.Items[0].ActivityType != timelineActivityPost ||
+		mutedPage3.Items[0].Actor.ID != muteBob.ID {
+		t.Fatalf("muted page3 status=%d body=%s response=%#v", status, body, mutedPage3)
+	}
+	mutedIDs := append(followingTimelinePostIDs(mutedPage1.Items), followingTimelinePostIDs(mutedPage2.Items)...)
+	mutedIDs = append(mutedIDs, followingTimelinePostIDs(mutedPage3.Items)...)
+	wantMutedIDs := []uint{muteCarolRepostedByBob.ID, muteBobPost.ID, muteAliceRepostedBob.ID}
+	if len(mutedIDs) != len(wantMutedIDs) {
+		t.Fatalf("muted timeline ids=%v want=%v", mutedIDs, wantMutedIDs)
+	}
+	seenMutedIDs := make(map[uint]struct{}, len(mutedIDs))
+	for index, id := range mutedIDs {
+		if id != wantMutedIDs[index] {
+			t.Fatalf("muted timeline ids=%v want=%v", mutedIDs, wantMutedIDs)
+		}
+		if _, exists := seenMutedIDs[id]; exists {
+			t.Fatalf("muted timeline repeated post %d: %v", id, mutedIDs)
+		}
+		seenMutedIDs[id] = struct{}{}
+	}
+	for _, hidden := range []uint{muteAlicePost.ID, muteBobRepostedAlice.ID} {
+		if containsFollowingPostID(mutedPage1.Items, hidden) || containsFollowingPostID(mutedPage2.Items, hidden) || containsFollowingPostID(mutedPage3.Items, hidden) {
 			t.Fatalf("muted activity post %d appeared in paginated Following", hidden)
 		}
 	}

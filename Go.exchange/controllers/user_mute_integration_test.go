@@ -55,14 +55,14 @@ func TestUserMuteLifecycleIntegration(t *testing.T) {
 	}
 
 	put := func(targetID uint) int {
-		ctx, recorder := newUserMuteControllerContext(http.MethodPut, strconvUint(targetID), "", &viewer.ID)
+		ctx, _ := newUserMuteControllerContext(http.MethodPut, strconvUint(targetID), "", &viewer.ID)
 		MuteUser(ctx)
-		return recorder.Code
+		return ctx.Writer.Status()
 	}
 	deleteMute := func(targetID uint) int {
-		ctx, recorder := newUserMuteControllerContext(http.MethodDelete, strconvUint(targetID), "", &viewer.ID)
+		ctx, _ := newUserMuteControllerContext(http.MethodDelete, strconvUint(targetID), "", &viewer.ID)
 		UnmuteUser(ctx)
-		return recorder.Code
+		return ctx.Writer.Status()
 	}
 	if status := put(target.ID); status != http.StatusNoContent {
 		t.Fatalf("mute status=%d", status)

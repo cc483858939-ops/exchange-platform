@@ -17,7 +17,7 @@ func (routerRecommendationServiceFake) Serve(_ context.Context, _ recommendation
 
 type routerRecommendationResponseMapperFake struct{}
 
-func (routerRecommendationResponseMapperFake) Map(context.Context, []recommendation.SelectedCandidate, time.Time) ([]controllers.RecommendedPostResponse, error) {
+func (routerRecommendationResponseMapperFake) Map(context.Context, uint, []recommendation.SelectedCandidate, time.Time) ([]controllers.RecommendedPostResponse, error) {
 	return []controllers.RecommendedPostResponse{}, nil
 }
 
