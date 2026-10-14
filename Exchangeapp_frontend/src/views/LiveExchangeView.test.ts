@@ -157,6 +157,7 @@ describe('LiveExchangeView', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
+    mocks.get.mockReset();
     vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
     vi.spyOn(ElMessage, 'error').mockImplementation(() => ({ close: vi.fn() }));
     vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({ close: vi.fn() }));

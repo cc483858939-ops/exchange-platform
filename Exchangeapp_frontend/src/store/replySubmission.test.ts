@@ -101,6 +101,7 @@ const drafts = () => useReplyDraftStore();
 
 describe('replySubmission store', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     setActivePinia(createPinia());
     mocks.records.clear();
     mocks.drafts.clear();
