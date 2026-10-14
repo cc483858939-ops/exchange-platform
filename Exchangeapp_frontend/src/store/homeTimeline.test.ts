@@ -1039,6 +1039,7 @@ describe('home timeline session store', () => {
     store.reconcileFollowStateLocal({
       user_id: 8,
       following: false,
+      muted: false,
       follower_count: 0,
       following_count: 0,
     });
@@ -1046,6 +1047,38 @@ describe('home timeline session store', () => {
     expect(store.following.items.map(post => post.id)).toEqual([5]);
     expect(store.following.items[0].author.id).toBe(9);
     expect(store.following.stale).toBe(true);
+  });
+
+  it('removes muted authors and repost actors and ignores an older For You page response', async () => {
+    const oldPage = deferred<ReturnType<typeof recommendationPage>>();
+    mocks.getPostRecommendations
+      .mockReturnValueOnce(oldPage.promise)
+      .mockResolvedValueOnce(recommendationPage([recommendation(10, 0), recommendation(11, 0)]));
+    const store = useHomeTimelineStore();
+    const repostedByMuted = feedPostFixture(1, 9);
+    repostedByMuted.repostContext = { actor: author(8) };
+    const mutedAuthorPost = feedPostFixture(2, 8);
+    const visiblePost = feedPostFixture(3, 10);
+    store.forYou.items = [
+      { recommendation: recommendation(1), post: repostedByMuted },
+      { recommendation: recommendation(2), post: mutedAuthorPost },
+    ];
+    store.forYou.loaded = true;
+    store.following.items = [repostedByMuted, mutedAuthorPost, visiblePost];
+    store.following.loaded = true;
+
+    const oldRequest = store.loadMoreForYou();
+    expect(mocks.getPostRecommendations).toHaveBeenCalledTimes(1);
+    expect(store.applyMutedAuthorStateLocal(8, true)).toBe(true);
+    await settle();
+
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([10, 11]);
+    expect(store.following.items.map(item => item.id)).toEqual([3]);
+
+    oldPage.resolve(recommendationPage([recommendation(8, 0), recommendation(9, 0)]));
+    await oldRequest;
+    expect(store.forYou.items.some(item => item.post.author.id === 8)).toBe(false);
+    expect(store.forYou.items.some(item => item.post.author.id === 9)).toBe(false);
   });
 
   it('external like state invalidates an older local like mutation', async () => {
@@ -1240,6 +1273,7 @@ describe('home timeline session store', () => {
     store.reconcileFollowStateLocal({
       user_id: 8,
       following: false,
+      muted: false,
       follower_count: 0,
       following_count: 0,
     });
@@ -1255,6 +1289,7 @@ describe('home timeline session store', () => {
     store.reconcileFollowStateLocal({
       user_id: 8,
       following: true,
+      muted: false,
       follower_count: 1,
       following_count: 2,
     });
@@ -1384,6 +1419,7 @@ describe('home timeline session store', () => {
     store.reconcileFollowStateLocal({
       user_id: 8,
       following: false,
+      muted: false,
       follower_count: 0,
       following_count: 0,
     });

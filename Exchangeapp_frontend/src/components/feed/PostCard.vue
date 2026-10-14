@@ -50,6 +50,20 @@
             <span>Not interested</span>
           </button>
           <button
+            v-for="target in muteTargets"
+            :key="target.id"
+            :ref="setMenuItemRef"
+            class="post-card__menu-item post-card__menu-item--mute"
+            type="button"
+            role="menuitem"
+            :disabled="userMuteStore.isPending(target.id)"
+            :aria-busy="userMuteStore.isPending(target.id)"
+            @click.stop="handleMuteTarget(target)"
+          >
+            <AppIcon name="eye-off" :size="18" />
+            <span>{{ userMuteStore.isMuted(target.id) ? `Unmute @${target.username}` : `Mute @${target.username}` }}</span>
+          </button>
+          <button
             v-if="showDelete"
             :ref="setMenuItemRef"
             class="post-card__menu-item post-card__menu-item--danger"
@@ -127,6 +141,16 @@
         </span>
         <template v-if="referencePost?.deleted">
           <p class="post-card__reference-deleted">Post unavailable</p>
+        </template>
+        <template v-else-if="referenceMutedByViewer">
+          <p class="post-card__reference-muted">Content from a muted account.</p>
+          <RouterLink
+            v-if="referenceDestination"
+            class="post-card__reference-open-muted"
+            :to="referenceDestination"
+          >
+            Open post
+          </RouterLink>
         </template>
         <template v-else>
           <AuthorIdentity
@@ -250,6 +274,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
+import { useAuthStore } from '../../store/auth';
+import { useUserMuteStore } from '../../store/userMute';
 import type { FeedPost } from '../../types/Feed';
 import type { MediaLoadingPolicy } from '../../types/MediaLoading';
 import AuthorIdentity from '../AuthorIdentity.vue';
@@ -269,6 +295,9 @@ import {
   isPostTranslationAvailable,
   translationLanguageName,
 } from '../../utils/translationLanguage';
+import { showUserMuteError, showUserMuteSuccess, showUserUnmuteSuccess } from '../../utils/userMuteFeedback';
+
+type MuteTarget = { id: number; username: string };
 
 const props = withDefaults(defineProps<{
   post: FeedPost;
@@ -306,6 +335,12 @@ const emit = defineEmits<{
 }>();
 
 const router = useRouter();
+const authStore = useAuthStore();
+const userMuteStore = useUserMuteStore();
+const currentViewerID = computed(() => {
+  const id = Number(authStore.currentIdentity?.id);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+});
 const postViewTelemetry = getPostViewTelemetry();
 const postDetailHandoff = usePostDetailHandoffStore();
 const postCardRef = ref<HTMLElement | null>(null);
@@ -370,6 +405,14 @@ const referenceAuthor = computed(() => (
     ? referencePost.value.author
     : null
 ));
+const referenceMutedByViewer = computed(() => Boolean(
+  referencePost.value
+  && !referencePost.value.deleted
+  && (
+    referencePost.value.muted_by_viewer
+    || userMuteStore.isMuted(referencePost.value.author.id)
+  )
+));
 const referenceContent = computed(() => {
   const reference = referencePost.value;
   if (!reference || reference.deleted) {
@@ -430,6 +473,28 @@ const actorLabel = (author: FeedPost['author']) => (
 const repostContextLabel = computed(() => (
   `${actorLabel(props.post.repostContext?.actor ?? props.post.author)} reposted`
 ));
+
+const muteTargets = computed<MuteTarget[]>(() => {
+  if (currentViewerID.value === props.post.author.id) return [];
+
+  const candidates = [props.post.author];
+  const repostActor = props.post.repostContext?.actor;
+  if (repostActor && repostActor.id !== props.post.author.id) {
+    candidates.push(repostActor);
+  }
+
+  const seen = new Set<number>();
+  return candidates.flatMap((author) => {
+    if (
+      !Number.isSafeInteger(author.id)
+      || author.id <= 0
+      || author.id === currentViewerID.value
+      || seen.has(author.id)
+    ) return [];
+    seen.add(author.id);
+    return [{ id: author.id, username: author.username?.trim() || `user-${author.id}` }];
+  });
+});
 
 const isNormalSameTabNavigation = (event: MouseEvent) => (
   event.button === 0
@@ -679,6 +744,44 @@ const handleNotInterested = () => {
     return;
   }
   emit('notInterested', props.post.id);
+};
+
+const undoMuteTarget = async (target: MuteTarget) => {
+  const result = await userMuteStore.unmuteAuthor(target.id);
+  if (result === 'updated') {
+    showUserUnmuteSuccess(target.username);
+  } else if (result === 'failed') {
+    showUserMuteError();
+  }
+};
+
+const handleMuteTarget = async (target: MuteTarget) => {
+  closeMore();
+  if (props.requiresAuthForActions || !authStore.isAuthenticated) {
+    navigateToLogin();
+    return;
+  }
+  if (target.id === currentViewerID.value || userMuteStore.isPending(target.id)) {
+    return;
+  }
+
+  const wasMuted = userMuteStore.isMuted(target.id);
+  const result = wasMuted
+    ? await userMuteStore.unmuteAuthor(target.id)
+    : await userMuteStore.muteAuthor(target.id);
+  if (result === 'failed') {
+    showUserMuteError();
+    return;
+  }
+  if (result !== 'updated') return;
+
+  if (wasMuted) {
+    showUserUnmuteSuccess(target.username);
+  } else {
+    showUserMuteSuccess(target.username, () => {
+      void undoMuteTarget(target);
+    });
+  }
 };
 
 const requestDeletePost = () => {
@@ -1068,6 +1171,29 @@ const repostLabel = computed(() => {
 
 .post-card__reference-media-link {
   margin-top: var(--space-2);
+}
+
+.post-card__reference-muted {
+  margin: var(--space-2) 0 0;
+  color: var(--color-text-tertiary);
+  font-size: 14px;
+}
+
+.post-card__reference-open-muted {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  margin-top: var(--space-1);
+  color: var(--color-accent);
+  font-size: 13px;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.post-card__reference-open-muted:focus-visible {
+  border-radius: var(--radius-xs);
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 .post-card__engagement {

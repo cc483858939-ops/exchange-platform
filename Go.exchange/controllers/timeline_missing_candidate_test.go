@@ -143,7 +143,7 @@ func (fixture *timelineMissingFixture) install(t *testing.T) {
 	global.APIDb = visibilityRefreshDB(t, func(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 		var stage string
 		switch {
-		case strings.Contains(query, "activities AS (") || strings.Contains(query, "WITH reposts AS ("):
+		case strings.Contains(query, "activities AS (") || strings.Contains(query, "WITH reposts AS (") || strings.Contains(query, "WITH muted AS ("):
 			stage = "candidates"
 		case strings.Contains(query, `FROM "posts"`):
 			stage = "posts"
@@ -170,7 +170,11 @@ func (fixture *timelineMissingFixture) install(t *testing.T) {
 			}
 			rows := &visibilityRefreshRows{columns: []string{"activity_type", "activity_at", "source_id", "post_id", "actor_id", "activity_rank"}}
 			for sourceID := int64(206); sourceID >= 201 && len(rows.values) < 3; sourceID-- {
-				if len(args) == 8 && sourceID >= args[6].Value.(int64) {
+				cursorIndex := 6
+				if len(args) == 9 {
+					cursorIndex = 7
+				}
+				if (len(args) == 8 || len(args) == 9) && sourceID >= args[cursorIndex].Value.(int64) {
 					continue
 				}
 				rows.values = append(rows.values, []driver.Value{"repost", at, sourceID, sourceID - 100, int64(7), int64(2)})

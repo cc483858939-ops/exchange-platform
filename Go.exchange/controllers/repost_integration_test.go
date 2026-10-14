@@ -330,7 +330,7 @@ func TestPublicPostRepostCountsHydrateTimelineRecommendationsAndRepliesIntegrati
 	if err != nil {
 		t.Fatal(err)
 	}
-	recommendations, err := responseMapper.Map(context.Background(), []recommendation.SelectedCandidate{{Post: rootWithAuthor}}, time.Now().UTC())
+	recommendations, err := responseMapper.Map(context.Background(), 0, []recommendation.SelectedCandidate{{Post: rootWithAuthor}}, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}

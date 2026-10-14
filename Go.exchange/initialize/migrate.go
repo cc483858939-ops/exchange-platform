@@ -37,6 +37,7 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 			&models.MigrationStep{},
 			&models.User{},
 			&models.UserFollow{},
+			&models.UserMute{},
 			&models.Post{},
 			&models.PostMedia{},
 			&models.PostMediaUpload{},
@@ -93,6 +94,9 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 			return err
 		}
 		if err := applyUserFollowConstraints(tx); err != nil {
+			return err
+		}
+		if err := applyUserMuteConstraints(tx); err != nil {
 			return err
 		}
 		if err := applyPostRepostConstraints(tx); err != nil {
@@ -384,6 +388,23 @@ func applyUserFollowConstraints(tx *gorm.DB) error {
 	}
 	if err := applyMigrationStatements(tx, "apply user follow constraint", statements); err != nil {
 		return fmt.Errorf("apply user follow constraint: %w", err)
+	}
+	return nil
+}
+
+func applyUserMuteConstraints(tx *gorm.DB) error {
+	statements := []string{
+		"CREATE UNIQUE INDEX IF NOT EXISTS uidx_user_mutes_pair ON user_mutes (muter_id, muted_id)",
+		"CREATE INDEX IF NOT EXISTS idx_user_mutes_muted_id ON user_mutes (muted_id)",
+		"ALTER TABLE user_mutes DROP CONSTRAINT IF EXISTS fk_user_mutes_muter",
+		"ALTER TABLE user_mutes ADD CONSTRAINT fk_user_mutes_muter FOREIGN KEY (muter_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE user_mutes DROP CONSTRAINT IF EXISTS fk_user_mutes_muted",
+		"ALTER TABLE user_mutes ADD CONSTRAINT fk_user_mutes_muted FOREIGN KEY (muted_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE user_mutes DROP CONSTRAINT IF EXISTS chk_user_mutes_not_self",
+		"ALTER TABLE user_mutes ADD CONSTRAINT chk_user_mutes_not_self CHECK (muter_id <> muted_id)",
+	}
+	if err := applyMigrationStatements(tx, "apply user mute constraint", statements); err != nil {
+		return fmt.Errorf("apply user mute constraint: %w", err)
 	}
 	return nil
 }

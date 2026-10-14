@@ -230,6 +230,39 @@ describe('notification store', () => {
     expect(store.revalidating).toBe(false);
   });
 
+  it('removes muted actors and ignores stale list and unread responses during revalidation', async () => {
+    const stalePage = deferred<{ items: Notification[]; next_cursor: string | null }>();
+    const staleUnread = deferred<number>();
+    mocks.getNotifications
+      .mockResolvedValueOnce({ items: [notification(1)], next_cursor: 'cursor-1' })
+      .mockReturnValueOnce(stalePage.promise);
+    mocks.getUnreadNotificationCount
+      .mockReturnValueOnce(staleUnread.promise)
+      .mockResolvedValueOnce(1);
+    const store = useNotificationStore();
+    store.setViewer(7);
+    await store.loadInitial();
+    const oldUnreadRequest = store.refreshUnreadCount();
+    const oldPageRequest = store.loadMore();
+
+    store.applyMutedActorStateLocal(9, true);
+    expect(store.items).toEqual([]);
+    expect(store.listStale).toBe(true);
+    await vi.waitFor(() => expect(mocks.getUnreadNotificationCount).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+    expect(store.unreadCount).toBe(1);
+
+    staleUnread.resolve(8);
+    stalePage.resolve({ items: [notification(2)], next_cursor: null });
+    await Promise.all([oldUnreadRequest, oldPageRequest]);
+    await vi.waitFor(() => expect(mocks.getNotifications).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(store.revalidating).toBe(false));
+
+    expect(store.unreadCount).toBe(1);
+    expect(store.items.map(item => item.id)).toEqual([]);
+    expect(store.listStale).toBe(false);
+  });
+
   it('keeps cached items and cursor when revalidation fails, then replaces them on retry', async () => {
     mocks.getNotifications.mockResolvedValueOnce({ items: [notification(1), notification(2)], next_cursor: 'cursor-old' });
     mocks.getUnreadNotificationCount.mockResolvedValueOnce(2);

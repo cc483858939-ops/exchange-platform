@@ -104,6 +104,30 @@
               >
                 {{ authStore.isAuthenticated && followState?.following ? 'Following' : 'Follow' }}
               </button>
+              <details
+                v-if="showMuteControl"
+                ref="profileMuteMenuRef"
+                class="profile-mute-menu"
+              >
+                <summary
+                  class="profile-action profile-action--compact profile-mute-menu__trigger"
+                  aria-label="More account actions"
+                >
+                  More
+                </summary>
+                <div class="profile-mute-menu__popover" role="menu">
+                  <button
+                    class="profile-mute-menu__item"
+                    type="button"
+                    role="menuitem"
+                    :disabled="profileMutePending"
+                    :aria-busy="profileMutePending"
+                    @click="handleMuteToggle"
+                  >
+                    {{ profileMuted ? `Unmute @${user.username}` : `Mute @${user.username}` }}
+                  </button>
+                </div>
+              </details>
               <p v-if="followActionError" class="profile-action-error" aria-live="polite">
                 {{ followActionError }}
               </p>
@@ -468,7 +492,9 @@ import { updateUserProfile, uploadProfileAvatar, uploadProfileCover } from '../s
 import type { UpdateUserProfilePayload, UserFollowState } from '../services/userService';
 import { useAuthStore } from '../store/auth';
 import { useProfileSessionStore, type ProfileSessionCapture } from '../store/profileSession';
+import { useUserMuteStore } from '../store/userMute';
 import type { PublicUser } from '../types/User';
+import { showUserMuteError, showUserMuteSuccess, showUserUnmuteSuccess } from '../utils/userMuteFeedback';
 
 defineOptions({
   name: 'UserProfileView',
@@ -488,6 +514,7 @@ const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 const profileStore = useProfileSessionStore();
+const userMuteStore = useUserMuteStore();
 
 const readProfileRouteID = () => (
   route.name === 'UserProfile'
@@ -533,10 +560,17 @@ const timelineInitialError = computed(() => activeSession.value?.timelineInitial
 const timelineLoadMoreError = computed(() => activeSession.value?.timelineLoadMoreError ?? '');
 const hasMore = computed(() => activeSession.value?.hasMore ?? false);
 const followState = computed<UserFollowState | null>(() => activeSession.value?.followState ?? null);
+const profileMuted = computed(() => Boolean(followState.value?.muted ?? (
+  numericUserID.value !== null && userMuteStore.isMuted(numericUserID.value)
+)));
 const followLoading = computed(() => activeSession.value?.followLoading ?? false);
 const followError = computed(() => activeSession.value?.followError ?? '');
 const followActionError = computed(() => activeSession.value?.followActionError ?? '');
 const followPending = computed(() => activeSession.value?.followPending ?? false);
+const profileMutePending = computed(() => (
+  numericUserID.value !== null && userMuteStore.isPending(numericUserID.value)
+));
+const profileMuteMenuRef = ref<HTMLDetailsElement | null>(null);
 const displayedFollowerCount = computed(() => (
   followState.value?.follower_count
   ?? user.value?.follower_count
@@ -698,6 +732,20 @@ const showFollowControl = computed(() => Boolean(
   && (currentViewerID.value === null || user.value.id !== currentViewerID.value)
   && (!authStore.isAuthenticated || socialReady.value),
 ));
+const showMuteControl = computed(() => Boolean(
+  user.value
+  && (currentViewerID.value === null || user.value.id !== currentViewerID.value)
+));
+
+watch(
+  [currentViewerID, numericUserID, () => followState.value?.muted],
+  ([viewer, target, muted]) => {
+    if (viewer !== null && target !== null && typeof muted === 'boolean') {
+      userMuteStore.syncServerMuteState(viewer, target, muted);
+    }
+  },
+  { immediate: true },
+);
 const canDeletePost = (post: { author: { id: number } }) =>
   authStore.isAuthenticated
   && currentViewerID.value !== null
@@ -777,6 +825,52 @@ const handleFollowToggle = () => {
   }
   if (numericUserID.value !== null) {
     void profileStore.toggleFollow(numericUserID.value);
+  }
+};
+
+const setProfileMutedState = (muted: boolean) => {
+  if (activeSession.value?.followState) {
+    activeSession.value.followState.muted = muted;
+  }
+};
+
+const handleMuteToggle = async () => {
+  profileMuteMenuRef.value?.removeAttribute('open');
+  const targetID = numericUserID.value;
+  if (!authStore.isAuthenticated || currentViewerID.value === null) {
+    navigateToLogin();
+    return;
+  }
+  if (targetID === null || profileMutePending.value) return;
+
+  const username = user.value?.username || 'user';
+  const wasMuted = profileMuted.value;
+  const result = wasMuted
+    ? await userMuteStore.unmuteAuthor(targetID)
+    : await userMuteStore.muteAuthor(targetID);
+  if (result === 'failed') {
+    showUserMuteError();
+    return;
+  }
+  if (result !== 'updated') return;
+
+  setProfileMutedState(!wasMuted);
+  if (wasMuted) {
+    showUserUnmuteSuccess(username);
+  } else {
+    showUserMuteSuccess(username, () => {
+      void undoProfileMute(targetID, username);
+    });
+  }
+};
+
+const undoProfileMute = async (targetID: number, username: string) => {
+  const result = await userMuteStore.unmuteAuthor(targetID);
+  if (result === 'failed') {
+    showUserMuteError();
+  } else if (result === 'updated') {
+    setProfileMutedState(false);
+    showUserUnmuteSuccess(username);
   }
 };
 
@@ -2421,5 +2515,60 @@ onBeforeUnmount(() => {
   .profile-edit-avatar {
     gap: var(--space-3);
   }
+}
+
+.profile-mute-menu {
+  position: relative;
+}
+
+.profile-mute-menu__trigger {
+  list-style: none;
+  cursor: pointer;
+}
+
+.profile-mute-menu__trigger::-webkit-details-marker {
+  display: none;
+}
+
+.profile-mute-menu__trigger:focus-visible,
+.profile-mute-menu__item:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.profile-mute-menu__popover {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 15;
+  min-width: 180px;
+  padding: var(--space-1);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+}
+
+.profile-mute-menu__item {
+  width: 100%;
+  min-height: 44px;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+  padding: 0 var(--space-3);
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.profile-mute-menu__item:hover,
+.profile-mute-menu__item:focus-visible {
+  background: var(--color-surface-subtle);
+}
+
+.profile-mute-menu__item:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 </style>

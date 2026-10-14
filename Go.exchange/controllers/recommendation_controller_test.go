@@ -39,7 +39,7 @@ type fakeRecommendationResponseMapper struct {
 	err           error
 }
 
-func (fake *fakeRecommendationResponseMapper) Map(ctx context.Context, selected []recommendation.SelectedCandidate, _ time.Time) ([]RecommendedPostResponse, error) {
+func (fake *fakeRecommendationResponseMapper) Map(ctx context.Context, _ uint, selected []recommendation.SelectedCandidate, _ time.Time) ([]RecommendedPostResponse, error) {
 	fake.contexts = append(fake.contexts, ctx)
 	fake.selectedCalls = append(fake.selectedCalls, append([]recommendation.SelectedCandidate(nil), selected...))
 	return fake.result, fake.err

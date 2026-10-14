@@ -18,7 +18,7 @@ func TestGormRecommendationResponseMapperReturnsEmptyWithoutDatabaseAccess(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	responses, err := mapper.Map(context.Background(), nil, time.Now().UTC())
+	responses, err := mapper.Map(context.Background(), 0, nil, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestGormRecommendationResponseMapperPropagatesCanceledContext(t *testing.T)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = mapper.Map(ctx, []recommendation.SelectedCandidate{{Post: responseMapperTestPostWithAuthor(7, time.Now().UTC())}}, time.Now().UTC())
+	_, err = mapper.Map(ctx, 0, []recommendation.SelectedCandidate{{Post: responseMapperTestPostWithAuthor(7, time.Now().UTC())}}, time.Now().UTC())
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error=%v want context.Canceled", err)
 	}
@@ -63,7 +63,7 @@ func TestGormRecommendationResponseMapperPreservesSelectedOrderAndScoresIntegrat
 		{Post: posts[1], Breakdown: recommendation.ScoreBreakdown{FinalScore: 0.72}},
 		{Post: posts[0], Breakdown: recommendation.ScoreBreakdown{FinalScore: 0.31}},
 	}
-	responses, err := mapper.Map(context.Background(), selected, time.Now().UTC())
+	responses, err := mapper.Map(context.Background(), 0, selected, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestGormRecommendationResponseMapperSkipsPostWithoutValidAuthor(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	responses, err := mapper.Map(context.Background(), []recommendation.SelectedCandidate{{Post: responseMapperTestPostWithAuthor(0, time.Now().UTC())}}, time.Now().UTC())
+	responses, err := mapper.Map(context.Background(), 0, []recommendation.SelectedCandidate{{Post: responseMapperTestPostWithAuthor(0, time.Now().UTC())}}, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestGormRecommendationResponseMapperPropagatesDatabaseErrorIntegration(t *t
 	if err := sqlDB.Close(); err != nil {
 		t.Fatal(err)
 	}
-	_, err = mapper.Map(context.Background(), []recommendation.SelectedCandidate{{Post: responseMapperTestPostWithAuthor(42, time.Now().UTC())}}, time.Now().UTC())
+	_, err = mapper.Map(context.Background(), 0, []recommendation.SelectedCandidate{{Post: responseMapperTestPostWithAuthor(42, time.Now().UTC())}}, time.Now().UTC())
 	if err == nil {
 		t.Fatal("expected closed database error")
 	}

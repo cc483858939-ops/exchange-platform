@@ -97,6 +97,10 @@ WITH post_candidates AS MATERIALIZED (
 	SELECT p.author_id, p.created_at, p.id
 	FROM posts AS p
 	WHERE p.deleted_at IS NULL
+	  AND NOT EXISTS (
+		SELECT 1 FROM user_mutes AS um
+		WHERE um.muter_id = ? AND um.muted_id = p.author_id
+	  )
 	  AND p.visibility = 'public'
 	  AND p.reply_to_post_id IS NULL
 	  AND p.created_at >= ?
@@ -135,6 +139,7 @@ WHERE candidate.id <> ?
 	var rows []suggestedUserQueryRow
 	if err := global.APIDb.WithContext(ctx).Raw(
 		query,
+		viewerID,
 		cutoff,
 		now,
 		suggestedUserPostCandidateLimit,

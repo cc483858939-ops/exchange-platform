@@ -17,6 +17,18 @@ const mocks = vi.hoisted(() => ({
   remember: vi.fn(),
   translatePost: vi.fn(),
   push: vi.fn(),
+  authStore: { isAuthenticated: true, currentIdentity: { id: 99 } },
+  userMuteStore: {
+    mutedIDs: new Set<number>(),
+    pendingIDs: new Set<number>(),
+    isMuted: vi.fn((id: number) => false),
+    isPending: vi.fn((id: number) => false),
+    muteAuthor: vi.fn(async (_id: number) => 'updated'),
+    unmuteAuthor: vi.fn(async (_id: number) => 'updated'),
+  },
+  showUserMuteSuccess: vi.fn(),
+  showUserUnmuteSuccess: vi.fn(),
+  showUserMuteError: vi.fn(),
 }));
 
 type ResizeObserverTestInstance = {
@@ -32,6 +44,20 @@ vi.mock('../../services/postViewTelemetry', () => ({
 
 vi.mock('../../store/postDetailHandoff', () => ({
   usePostDetailHandoffStore: () => ({ remember: mocks.remember }),
+}));
+
+vi.mock('../../store/auth', () => ({
+  useAuthStore: () => mocks.authStore,
+}));
+
+vi.mock('../../store/userMute', () => ({
+  useUserMuteStore: () => mocks.userMuteStore,
+}));
+
+vi.mock('../../utils/userMuteFeedback', () => ({
+  showUserMuteSuccess: mocks.showUserMuteSuccess,
+  showUserUnmuteSuccess: mocks.showUserUnmuteSuccess,
+  showUserMuteError: mocks.showUserMuteError,
 }));
 
 vi.mock('../../services/translationService', () => ({
@@ -78,6 +104,20 @@ const basePost = (): FeedPost => ({
 describe('PostCard View metric and telemetry lifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.authStore.isAuthenticated = true;
+    mocks.authStore.currentIdentity = { id: 99 };
+    mocks.userMuteStore.mutedIDs.clear();
+    mocks.userMuteStore.pendingIDs.clear();
+    mocks.userMuteStore.isMuted.mockImplementation((id: number) => mocks.userMuteStore.mutedIDs.has(id));
+    mocks.userMuteStore.isPending.mockImplementation((id: number) => mocks.userMuteStore.pendingIDs.has(id));
+    mocks.userMuteStore.muteAuthor.mockImplementation(async (id: number) => {
+      mocks.userMuteStore.mutedIDs.add(id);
+      return 'updated';
+    });
+    mocks.userMuteStore.unmuteAuthor.mockImplementation(async (id: number) => {
+      mocks.userMuteStore.mutedIDs.delete(id);
+      return 'updated';
+    });
     mocks.translatePost.mockReset();
     mocks.push.mockReset();
     resizeObserverInstances.length = 0;
@@ -990,6 +1030,88 @@ describe('PostCard View metric and telemetry lifecycle', () => {
     expect(wrapper.get('.test-confirm-error').text()).toBe('Could not delete post.');
     expect(wrapper.find('.post-card__delete-status').exists()).toBe(false);
     expect(wrapper.find('.post-card').exists()).toBe(true);
+  });
+
+  it('hides mute actions for the current user and names both repost targets', async () => {
+    mocks.authStore.currentIdentity = { id: 7 };
+    const ownPost = mountPostCard(basePost());
+    await ownPost.get('.post-card__more-button').trigger('click');
+    expect(ownPost.find('.post-card__menu-item--mute').exists()).toBe(false);
+    ownPost.unmount();
+
+    mocks.authStore.currentIdentity = { id: 99 };
+    const repost = mountPostCard({
+      ...basePost(),
+      repostContext: {
+        actor: { id: 11, username: 'alice', display_name: 'Alice', avatar_url: '' },
+      },
+    });
+    await repost.get('.post-card__more-button').trigger('click');
+    expect(repost.findAll('.post-card__menu-item--mute').map(item => item.text())).toEqual([
+      'Mute @reader',
+      'Mute @alice',
+    ]);
+  });
+
+  it('mutes a selected repost author and lets Undo restore the account', async () => {
+    const wrapper = mountPostCard({
+      ...basePost(),
+      repostContext: {
+        actor: { id: 11, username: 'alice', display_name: 'Alice', avatar_url: '' },
+      },
+    });
+    await wrapper.get('.post-card__more-button').trigger('click');
+    await wrapper.findAll('.post-card__menu-item--mute')[1]!.trigger('click');
+    await flushPromises();
+
+    expect(mocks.userMuteStore.muteAuthor).toHaveBeenCalledExactlyOnceWith(11);
+    expect(mocks.showUserMuteSuccess).toHaveBeenCalledTimes(1);
+    expect(mocks.showUserMuteSuccess.mock.calls[0]?.[0]).toBe('alice');
+    expect(wrapper.find('.post-card__menu').exists()).toBe(false);
+
+    const undo = mocks.showUserMuteSuccess.mock.calls[0]?.[1] as (() => void) | undefined;
+    undo?.();
+    await flushPromises();
+    expect(mocks.userMuteStore.unmuteAuthor).toHaveBeenCalledExactlyOnceWith(11);
+    expect(mocks.showUserUnmuteSuccess).toHaveBeenCalledExactlyOnceWith('alice');
+  });
+
+  it('does not show a muted quoted post body or media but keeps an explicit open link', () => {
+    const wrapper = mountPostCard({
+      ...basePost(),
+      quotePost: {
+        id: 9,
+        deleted: false,
+        muted_by_viewer: true,
+        author: { id: 8, username: 'alice', display_name: 'Alice', avatar_url: '' },
+        content: 'private quoted text',
+        published_at: '2026-08-17T00:00:00.000Z',
+        media: [{ type: 'image', url: '/quote.png', large_url: '/quote-large.png', width: 800, height: 600, position: 0 }],
+      },
+    });
+
+    expect(wrapper.get('.post-card__reference-muted').text()).toBe('Content from a muted account.');
+    expect(wrapper.text()).not.toContain('private quoted text');
+    expect(wrapper.find('.post-card__reference-media-link').exists()).toBe(false);
+    expect(wrapper.find('.post-card__reference .author-identity').exists()).toBe(false);
+    const openMutedPost = wrapper.findAllComponents(RouterLinkStub)
+      .find(link => link.classes().includes('post-card__reference-open-muted'));
+    expect(openMutedPost?.props('to')).toEqual({
+      name: 'PostDetail',
+      params: { id: '9' },
+    });
+  });
+
+  it('does not change local mute state when the server mutation fails', async () => {
+    mocks.userMuteStore.muteAuthor.mockResolvedValueOnce('failed');
+    const wrapper = mountPostCard(basePost());
+    await wrapper.get('.post-card__more-button').trigger('click');
+    await wrapper.get('.post-card__menu-item--mute').trigger('click');
+    await flushPromises();
+
+    expect(mocks.userMuteStore.mutedIDs.has(7)).toBe(false);
+    expect(mocks.showUserMuteError).toHaveBeenCalledTimes(1);
+    expect(mocks.showUserMuteSuccess).not.toHaveBeenCalled();
   });
 
   it('closes the confirmation when the Post identity changes', async () => {

@@ -140,6 +140,10 @@ func hydratePostResponseReferencesFromDB(db *gorm.DB, response *postResponse, no
 }
 
 func hydratePostResponsesReferencesFromDB(db *gorm.DB, responses []postResponse, now time.Time) error {
+	return hydratePostResponsesReferencesForViewerFromDB(db, responses, now, 0)
+}
+
+func hydratePostResponsesReferencesForViewerFromDB(db *gorm.DB, responses []postResponse, now time.Time, viewerID uint) error {
 	if len(responses) == 0 {
 		return nil
 	}
@@ -155,6 +159,39 @@ func hydratePostResponsesReferencesFromDB(db *gorm.DB, responses []postResponse,
 	references, err := loadPostReferencesByIDsFromDB(db, ids, now)
 	if err != nil {
 		return err
+	}
+	if viewerID > 0 {
+		mutedAuthorIDs := make([]uint, 0)
+		authorIDs := make([]uint, 0, len(references))
+		seenAuthors := make(map[uint]struct{}, len(references))
+		for _, reference := range references {
+			if reference.Author == nil {
+				continue
+			}
+			if _, exists := seenAuthors[reference.Author.ID]; exists {
+				continue
+			}
+			seenAuthors[reference.Author.ID] = struct{}{}
+			authorIDs = append(authorIDs, reference.Author.ID)
+		}
+		if len(authorIDs) > 0 {
+			if err := db.Model(&models.UserMute{}).
+				Where("muter_id = ? AND muted_id IN ?", viewerID, authorIDs).
+				Pluck("muted_id", &mutedAuthorIDs).Error; err != nil {
+				return err
+			}
+		}
+		mutedSet := make(map[uint]struct{}, len(mutedAuthorIDs))
+		for _, authorID := range mutedAuthorIDs {
+			mutedSet[authorID] = struct{}{}
+		}
+		for postID, reference := range references {
+			if reference.Author == nil {
+				continue
+			}
+			_, reference.MutedByViewer = mutedSet[reference.Author.ID]
+			references[postID] = reference
+		}
 	}
 	for index := range responses {
 		responses[index].ReplyToPost = copyPostReference(references, responses[index].ReplyToPostID)

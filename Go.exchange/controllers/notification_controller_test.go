@@ -33,7 +33,7 @@ func TestNotificationReadIdempotencyAndIsolationIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Notification{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserMute{}, &models.Notification{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB := global.APIDb
@@ -146,7 +146,7 @@ func TestQuotedNotificationVisibilityTracksQuotePostIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.Notification{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserMute{}, &models.Post{}, &models.Notification{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, statement := range []string{
@@ -231,5 +231,97 @@ func TestQuotedNotificationVisibilityTracksQuotePostIntegration(t *testing.T) {
 	GetMyUnreadNotificationCount(ctx)
 	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &count) != nil || count.UnreadCount != 0 {
 		t.Fatalf("unread after quote deletion status=%d body=%s decoded=%d", recorder.Code, recorder.Body.String(), count.UnreadCount)
+	}
+}
+
+func TestMutedActorNotificationsFilterListAndUnreadCountIntegration(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
+	}
+	db, err := testdb.Open(t, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.User{}, &models.UserMute{}, &models.Notification{}); err != nil {
+		t.Fatal(err)
+	}
+	tx := db.Begin()
+	if tx.Error != nil {
+		t.Fatal(tx.Error)
+	}
+	originalDB := global.APIDb
+	global.APIDb = tx
+	t.Cleanup(func() {
+		if err := tx.Rollback().Error; err != nil {
+			t.Errorf("rollback muted notification integration transaction: %v", err)
+		}
+		global.APIDb = originalDB
+	})
+
+	newUser := func(name string) models.User {
+		t.Helper()
+		user := models.User{Username: "muted-notification-" + name + "-" + uuid.NewString(), Password: "test"}
+		if err := tx.Create(&user).Error; err != nil {
+			t.Fatal(err)
+		}
+		return user
+	}
+	viewer, otherViewer := newUser("viewer"), newUser("other-viewer")
+	mutedActor, visibleActor := newUser("muted-actor"), newUser("visible-actor")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	readAt := now
+	notifications := []models.Notification{
+		{RecipientID: viewer.ID, ActorID: mutedActor.ID, Type: models.NotificationTypeUserFollowed, DedupeKey: "muted-read:" + uuid.NewString(), SourceVersion: 1, ActivityAt: now, ReadAt: &readAt, CreatedAt: now, UpdatedAt: now},
+		{RecipientID: viewer.ID, ActorID: mutedActor.ID, Type: models.NotificationTypeUserFollowed, DedupeKey: "muted-unread:" + uuid.NewString(), SourceVersion: 1, ActivityAt: now.Add(time.Second), CreatedAt: now, UpdatedAt: now},
+		{RecipientID: viewer.ID, ActorID: visibleActor.ID, Type: models.NotificationTypeUserFollowed, DedupeKey: "visible:" + uuid.NewString(), SourceVersion: 1, ActivityAt: now.Add(2 * time.Second), CreatedAt: now, UpdatedAt: now},
+		{RecipientID: otherViewer.ID, ActorID: mutedActor.ID, Type: models.NotificationTypeUserFollowed, DedupeKey: "other-viewer:" + uuid.NewString(), SourceVersion: 1, ActivityAt: now, CreatedAt: now, UpdatedAt: now},
+	}
+	if err := tx.Create(&notifications).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Create(&models.UserMute{MuterID: viewer.ID, MutedID: mutedActor.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	readPage := func(recipientID uint) notificationPageResponse {
+		t.Helper()
+		ctx, recorder := notificationIntegrationContext(http.MethodGet, "/api/me/notifications", recipientID)
+		GetMyNotifications(ctx)
+		var page notificationPageResponse
+		if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &page) != nil {
+			t.Fatalf("list status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		return page
+	}
+	readUnread := func(recipientID uint) int64 {
+		t.Helper()
+		ctx, recorder := notificationIntegrationContext(http.MethodGet, "/api/me/notifications/unread-count", recipientID)
+		GetMyUnreadNotificationCount(ctx)
+		var count struct {
+			UnreadCount int64 `json:"unread_count"`
+		}
+		if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &count) != nil {
+			t.Fatalf("unread status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		return count.UnreadCount
+	}
+
+	mutedPage := readPage(viewer.ID)
+	mutedUnread := readUnread(viewer.ID)
+	if len(mutedPage.Items) != 1 || mutedPage.Items[0].Actor.ID != visibleActor.ID || mutedUnread != 1 {
+		t.Fatalf("muted list=%#v unread=%d, want visible actor only and count 1", mutedPage.Items, mutedUnread)
+	}
+	otherPage := readPage(otherViewer.ID)
+	if len(otherPage.Items) != 1 || otherPage.Items[0].Actor.ID != mutedActor.ID {
+		t.Fatalf("other viewer inherited filter: %#v", otherPage.Items)
+	}
+	if err := tx.Where("muter_id = ? AND muted_id = ?", viewer.ID, mutedActor.ID).Delete(&models.UserMute{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	unmutedPage := readPage(viewer.ID)
+	unmutedUnread := readUnread(viewer.ID)
+	if len(unmutedPage.Items) != 3 || unmutedUnread != 2 {
+		t.Fatalf("unmuted list=%#v unread=%d, want all viewer notifications and count 2", unmutedPage.Items, unmutedUnread)
 	}
 }

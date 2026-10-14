@@ -65,12 +65,13 @@ type postResponse struct {
 }
 
 type postReferenceResponse struct {
-	ID          uint                  `json:"id"`
-	Deleted     bool                  `json:"deleted"`
-	Author      *publicAuthorResponse `json:"author,omitempty"`
-	Content     string                `json:"content,omitempty"`
-	PublishedAt *time.Time            `json:"published_at,omitempty"`
-	Media       []postMediaResponse   `json:"media,omitempty"`
+	ID            uint                  `json:"id"`
+	Deleted       bool                  `json:"deleted"`
+	MutedByViewer bool                  `json:"muted_by_viewer,omitempty"`
+	Author        *publicAuthorResponse `json:"author,omitempty"`
+	Content       string                `json:"content,omitempty"`
+	PublishedAt   *time.Time            `json:"published_at,omitempty"`
+	Media         []postMediaResponse   `json:"media,omitempty"`
 }
 
 func (reference postReferenceResponse) MarshalJSON() ([]byte, error) {
@@ -88,15 +89,17 @@ func (reference postReferenceResponse) MarshalJSON() ([]byte, error) {
 		media = make([]postMediaResponse, 0)
 	}
 	return json.Marshal(struct {
-		ID          uint                 `json:"id"`
-		Author      publicAuthorResponse `json:"author"`
-		Content     string               `json:"content"`
-		PublishedAt time.Time            `json:"published_at"`
-		Media       []postMediaResponse  `json:"media"`
-		Deleted     bool                 `json:"deleted"`
+		ID            uint                 `json:"id"`
+		Author        publicAuthorResponse `json:"author"`
+		Content       string               `json:"content"`
+		PublishedAt   time.Time            `json:"published_at"`
+		Media         []postMediaResponse  `json:"media"`
+		Deleted       bool                 `json:"deleted"`
+		MutedByViewer bool                 `json:"muted_by_viewer,omitempty"`
 	}{
 		ID: reference.ID, Author: *reference.Author, Content: reference.Content,
 		PublishedAt: reference.PublishedAt.UTC(), Media: media, Deleted: false,
+		MutedByViewer: reference.MutedByViewer,
 	})
 }
 
@@ -309,14 +312,18 @@ func preloadPostAuthor(query *gorm.DB) *gorm.DB {
 }
 
 func loadPostResponses(query *gorm.DB) ([]postResponse, error) {
-	return loadPostResponsesWithAuthorPolicy(query, false)
+	return loadPostResponsesWithAuthorPolicy(query, false, 0)
 }
 
 func loadTimelinePostResponses(query *gorm.DB) ([]postResponse, error) {
-	return loadPostResponsesWithAuthorPolicy(query, true)
+	return loadPostResponsesWithAuthorPolicy(query, true, 0)
 }
 
-func loadPostResponsesWithAuthorPolicy(query *gorm.DB, skipMissingAuthors bool) ([]postResponse, error) {
+func loadTimelinePostResponsesForViewer(query *gorm.DB, viewerID uint) ([]postResponse, error) {
+	return loadPostResponsesWithAuthorPolicy(query, true, viewerID)
+}
+
+func loadPostResponsesWithAuthorPolicy(query *gorm.DB, skipMissingAuthors bool, viewerID uint) ([]postResponse, error) {
 	if query == nil {
 		return nil, errors.New("database query is nil")
 	}
@@ -348,7 +355,7 @@ func loadPostResponsesWithAuthorPolicy(query *gorm.DB, skipMissingAuthors bool) 
 		return nil, err
 	}
 	referenceNow := time.Now().UTC()
-	if err := hydratePostResponsesReferencesFromDB(referenceDB, responses, referenceNow); err != nil {
+	if err := hydratePostResponsesReferencesForViewerFromDB(referenceDB, responses, referenceNow, viewerID); err != nil {
 		return nil, err
 	}
 	return responses, nil

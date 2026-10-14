@@ -88,7 +88,8 @@ func visibleNotificationsForViewer(db *gorm.DB, viewerID uint, now time.Time) *g
 	  n.notification_type = ? AND n.post_id IS NOT NULL AND n.source_version = 0 AND visible_post.id IS NOT NULL
 ) OR (
 	  n.notification_type = ? AND n.post_id IS NOT NULL AND n.source_version = 0 AND visible_post.id IS NOT NULL
-)`, models.NotificationTypeUserFollowed, models.NotificationTypePostLiked, models.NotificationTypePostReplied, models.NotificationTypePostQuoted)
+)`, models.NotificationTypeUserFollowed, models.NotificationTypePostLiked, models.NotificationTypePostReplied, models.NotificationTypePostQuoted).
+		Where("NOT EXISTS (SELECT 1 FROM user_mutes AS um WHERE um.muter_id = ? AND um.muted_id = n.actor_id)", viewerID)
 }
 
 func parseNotificationQuery(ctx *gin.Context) (int, *notificationCursor, error) {

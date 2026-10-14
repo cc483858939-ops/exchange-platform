@@ -23,6 +23,7 @@ export type PostReference =
       content: string;
       published_at: string;
       media: PostMedia[];
+      muted_by_viewer?: boolean;
     };
 
 export interface Post {

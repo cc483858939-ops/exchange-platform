@@ -73,7 +73,7 @@ func TestGetUserFollowStateReturnsCanonicalJSON(t *testing.T) {
 		FollowerCount:  12,
 		FollowingCount: 7,
 	})
-	if got := strings.TrimSpace(recorder.Body.String()); got != "{\"user_id\":42,\"following\":true,\"follower_count\":12,\"following_count\":7}" {
+	if got := strings.TrimSpace(recorder.Body.String()); got != "{\"user_id\":42,\"following\":true,\"muted\":false,\"follower_count\":12,\"following_count\":7}" {
 		t.Fatalf("canonical JSON=%s", got)
 	}
 }

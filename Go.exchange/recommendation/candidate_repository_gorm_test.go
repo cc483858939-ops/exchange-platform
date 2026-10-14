@@ -73,3 +73,63 @@ func TestRecommendationPublicPostProjectionIncludesQuoteCount(t *testing.T) {
 		t.Fatalf("recommendation public Post projection is missing quote_count: %s", recommendationPublicPostColumns)
 	}
 }
+
+func TestAuthenticatedCandidateEligibilityFiltersMutedAuthorsBeforeLimit(t *testing.T) {
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: &sql.DB{}}), &gorm.Config{
+		DryRun:                 true,
+		DisableAutomaticPing:   true,
+		SkipDefaultTransaction: true,
+	})
+	if err != nil {
+		t.Fatalf("open dry-run PostgreSQL database: %v", err)
+	}
+	repository, err := NewGormCandidateRepository(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := CandidateQuery{
+		UserID:   73,
+		Limit:    20,
+		SoftOnly: true,
+		Served:   map[uint]ServedItem{101: {Soft: true}},
+	}
+	query := repository.eligibilityQuery(db, db.Table("posts").Select("posts.id"), input).
+		Order("posts.created_at DESC, posts.id DESC").Limit(input.Limit)
+	var rows []uint
+	result := query.Find(&rows)
+	if result.Error != nil {
+		t.Fatalf("build dry-run authenticated query: %v", result.Error)
+	}
+	sqlText := strings.Join(strings.Fields(result.Statement.SQL.String()), " ")
+	muteIndex := strings.Index(sqlText, "user_mutes AS um")
+	limitIndex := strings.Index(sqlText, "LIMIT")
+	if muteIndex < 0 || limitIndex < 0 || muteIndex >= limitIndex {
+		t.Fatalf("mute exclusion is missing or occurs after the limit: %s", sqlText)
+	}
+	if !strings.Contains(sqlText, "user_mutes AS um") || !strings.Contains(sqlText, "posts.author_id") {
+		t.Fatalf("authenticated query is missing author mute anti-join: %s", sqlText)
+	}
+	if !strings.Contains(sqlText, "posts.id IN") {
+		t.Fatalf("soft-served fallback restriction was not retained: %s", sqlText)
+	}
+}
+
+func TestPublicCandidateQueriesRemainUnaffectedByMuteRelationships(t *testing.T) {
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: &sql.DB{}}), &gorm.Config{
+		DryRun:                 true,
+		DisableAutomaticPing:   true,
+		SkipDefaultTransaction: true,
+	})
+	if err != nil {
+		t.Fatalf("open dry-run PostgreSQL database: %v", err)
+	}
+	query := publicCandidateQuery(db, PublicCandidateQuery{}).Order("posts.created_at DESC").Limit(10)
+	var rows []uint
+	result := query.Find(&rows)
+	if result.Error != nil {
+		t.Fatalf("build dry-run public candidate query: %v", result.Error)
+	}
+	if strings.Contains(strings.ToLower(result.Statement.SQL.String()), "user_mutes") {
+		t.Fatalf("guest public query was modified by mute filtering: %s", result.Statement.SQL.String())
+	}
+}

@@ -22,6 +22,15 @@
         <AppIcon name="history" :size="18" />
         <span>History</span>
       </RouterLink>
+      <RouterLink
+        class="mobile-account-menu__item"
+        role="menuitem"
+        :to="{ name: 'MutedAccounts' }"
+        @click="closeMenu()"
+      >
+        <AppIcon name="eye-off" :size="18" />
+        <span>Muted accounts</span>
+      </RouterLink>
       <button
         class="mobile-account-menu__item mobile-account-menu__item--logout"
         type="button"

@@ -9,6 +9,8 @@ func followingTimelineFirstPageSQL() string {
 	return `
 WITH follows AS (
     SELECT following_id FROM user_follows WHERE follower_id = ?
+), muted AS (
+    SELECT muted_id FROM user_mutes WHERE muter_id = ?
 ), activities AS (
     SELECT 'post'::text AS activity_type,
            posts.created_at AS activity_at,
@@ -23,6 +25,7 @@ WITH follows AS (
         WHERE posts.author_id = follows.following_id
           AND posts.reply_to_post_id IS NULL
           AND ` + publicPostEligibilitySQL("posts") + `
+          AND NOT EXISTS (SELECT 1 FROM muted WHERE muted.muted_id = posts.author_id)
         ORDER BY posts.created_at DESC, posts.id DESC
         LIMIT ?
     ) AS posts
@@ -46,6 +49,8 @@ WITH follows AS (
         JOIN posts ON posts.id = post_reposts.post_id
         WHERE post_reposts.user_id = follows.following_id
           AND ` + publicPostEligibilitySQL("posts") + `
+          AND NOT EXISTS (SELECT 1 FROM muted WHERE muted.muted_id = posts.author_id)
+          AND NOT EXISTS (SELECT 1 FROM muted WHERE muted.muted_id = post_reposts.user_id)
         ORDER BY post_reposts.created_at DESC, post_reposts.id DESC
         LIMIT ?
     ) AS reposts
@@ -67,7 +72,9 @@ LIMIT ?
 // historical activity sort. The cursor still filters the global winner.
 func followingTimelineCursorSQL() string {
 	return `
-WITH reposts AS (
+WITH muted AS (
+    SELECT muted_id FROM user_mutes WHERE muter_id = ?
+), reposts AS (
     SELECT DISTINCT ON (post_reposts.post_id)
            post_reposts.id, post_reposts.post_id,
            post_reposts.user_id, post_reposts.created_at
@@ -80,6 +87,8 @@ WITH reposts AS (
      AND reposter.deleted_at IS NULL
     JOIN posts ON posts.id = post_reposts.post_id
     WHERE ` + publicPostEligibilitySQL("posts") + `
+      AND NOT EXISTS (SELECT 1 FROM muted WHERE muted.muted_id = posts.author_id)
+      AND NOT EXISTS (SELECT 1 FROM muted WHERE muted.muted_id = post_reposts.user_id)
     ORDER BY post_reposts.post_id, post_reposts.created_at DESC, post_reposts.id DESC
 ), originals AS (
     SELECT posts.id, posts.author_id, posts.created_at
@@ -89,6 +98,7 @@ WITH reposts AS (
      AND direct_follow.follower_id = ?
     WHERE posts.reply_to_post_id IS NULL
       AND ` + publicPostEligibilitySQL("posts") + `
+      AND NOT EXISTS (SELECT 1 FROM muted WHERE muted.muted_id = posts.author_id)
 ), matched AS (
     SELECT originals.id AS original_id, originals.author_id,
            originals.created_at AS original_at,

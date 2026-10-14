@@ -73,7 +73,7 @@ func loadFollowingTimelinePageFromDB(ctx context.Context, viewerID uint, limit i
 	var args []interface{}
 	if cursor == nil {
 		query = followingTimelineFirstPageSQL()
-		args = []interface{}{viewerID, limit + 1, limit + 1, limit + 1}
+		args = []interface{}{viewerID, viewerID, limit + 1, limit + 1, limit + 1}
 	} else {
 		rank := timelineActivityRank(cursor.ActivityType)
 		if rank == 0 {
@@ -81,7 +81,7 @@ func loadFollowingTimelinePageFromDB(ctx context.Context, viewerID uint, limit i
 		}
 		query = followingTimelineCursorSQL()
 		args = []interface{}{
-			viewerID, viewerID,
+			viewerID, viewerID, viewerID,
 			cursor.ActivityAt, cursor.ActivityAt, rank, rank, cursor.SourceID,
 			limit + 1,
 		}
@@ -109,12 +109,12 @@ func loadFollowingTimelinePageFromDB(ctx context.Context, viewerID uint, limit i
 
 	postsByID := make(map[uint]postResponse, len(postIDs))
 	if len(postIDs) > 0 {
-		postResponses, err := loadTimelinePostResponses(publicPostScope(
+		postResponses, err := loadTimelinePostResponsesForViewer(publicPostScope(
 			db.Model(&models.Post{}).
 				Select(publicPostSelectColumns).
 				Where("posts.id IN ?", postIDs),
 			now,
-		))
+		), viewerID)
 		if err != nil {
 			return timelinePageResponse{}, err
 		}

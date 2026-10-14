@@ -110,6 +110,7 @@ const profile = (id: number) => ({
 const followState = (id: number, following: boolean) => ({
   user_id: id,
   following,
+  muted: false,
   follower_count: following ? 1 : 0,
   following_count: 0,
 });

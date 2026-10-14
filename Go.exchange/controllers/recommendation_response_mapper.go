@@ -10,7 +10,7 @@ import (
 )
 
 type RecommendationResponseMapper interface {
-	Map(ctx context.Context, selected []recommendation.SelectedCandidate, now time.Time) ([]RecommendedPostResponse, error)
+	Map(ctx context.Context, viewerID uint, selected []recommendation.SelectedCandidate, now time.Time) ([]RecommendedPostResponse, error)
 }
 
 type GormRecommendationResponseMapper struct {
@@ -24,7 +24,7 @@ func NewGormRecommendationResponseMapper(db *gorm.DB) (*GormRecommendationRespon
 	return &GormRecommendationResponseMapper{db: db}, nil
 }
 
-func (mapper *GormRecommendationResponseMapper) Map(ctx context.Context, selected []recommendation.SelectedCandidate, now time.Time) ([]RecommendedPostResponse, error) {
+func (mapper *GormRecommendationResponseMapper) Map(ctx context.Context, viewerID uint, selected []recommendation.SelectedCandidate, now time.Time) ([]RecommendedPostResponse, error) {
 	if len(selected) == 0 {
 		return []RecommendedPostResponse{}, nil
 	}
@@ -63,7 +63,7 @@ func (mapper *GormRecommendationResponseMapper) Map(ctx context.Context, selecte
 	if err := hydratePostResponseRepostCountsFromDB(db, posts); err != nil {
 		return nil, err
 	}
-	if err := hydratePostResponsesReferencesFromDB(db, posts, now); err != nil {
+	if err := hydratePostResponsesReferencesForViewerFromDB(db, posts, now, viewerID); err != nil {
 		return nil, err
 	}
 	result := make([]RecommendedPostResponse, 0, len(prepared))

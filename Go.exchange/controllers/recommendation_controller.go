@@ -109,14 +109,14 @@ func (handler *RecommendationHandler) serve(ctx *gin.Context, viewer recommendat
 	}
 	recommendations, err := func() ([]RecommendedPostResponse, error) {
 		if !recommendation.TracingEnabled() {
-			return handler.responseMapper.Map(servingCtx, result.Selected, result.Now)
+			return handler.responseMapper.Map(servingCtx, viewer.UserID, result.Selected, result.Now)
 		}
 		mapCtx, mapSpan := trace.SpanFromContext(requestCtx).TracerProvider().Tracer("Go.exchange/controllers/recommendation").Start(
 			servingCtx,
 			"recommendation.response.map",
 		)
 		defer mapSpan.End()
-		mapped, mapErr := handler.responseMapper.Map(mapCtx, result.Selected, result.Now)
+		mapped, mapErr := handler.responseMapper.Map(mapCtx, viewer.UserID, result.Selected, result.Now)
 		if mapErr != nil {
 			recordRecommendationControllerSpanError(mapSpan, mapErr)
 		}

@@ -36,6 +36,7 @@ func openRecommendationCandidateIntegrationDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(
 		&models.User{},
 		&models.UserFollow{},
+		&models.UserMute{},
 		&models.Post{},
 		&models.PostEmbedding{},
 		&models.PostBehavior{},

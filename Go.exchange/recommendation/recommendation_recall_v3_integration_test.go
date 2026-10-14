@@ -116,10 +116,12 @@ func TestSemanticRecallPreservesRecommendationEligibilityIntegration(t *testing.
 	db := openRecommendationRecallV3IntegrationDB(t)
 	viewer := newRecommendationCandidateIntegrationUser(t, db, "semantic-eligibility-viewer")
 	validAuthor := newRecommendationCandidateIntegrationUser(t, db, "semantic-eligibility-valid-author")
+	mutedAuthor := newRecommendationCandidateIntegrationUser(t, db, "semantic-eligibility-muted-author")
 	deletedAuthor := newRecommendationCandidateIntegrationUser(t, db, "semantic-eligibility-deleted-author")
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	vector := []float32{1, 0}
 	valid := newRecommendationSemanticPost(t, db, validAuthor, "semantic-valid", now.Add(-time.Hour), vector)
+	muted := newRecommendationSemanticPost(t, db, mutedAuthor, "semantic-muted-author", now.Add(-90*time.Minute), vector)
 	self := newRecommendationSemanticPost(t, db, viewer, "semantic-self", now.Add(-2*time.Hour), vector)
 	interacted := newRecommendationSemanticPost(t, db, validAuthor, "semantic-interacted", now.Add(-3*time.Hour), vector)
 	notInterested := newRecommendationSemanticPost(t, db, validAuthor, "semantic-not-interested", now.Add(-4*time.Hour), vector)
@@ -141,14 +143,17 @@ func TestSemanticRecallPreservesRecommendationEligibilityIntegration(t *testing.
 	if servingEmbeddingCount != 0 {
 		t.Fatalf("wrong-version fixture has %d serving embeddings, want none", servingEmbeddingCount)
 	}
-	postIDs := []uint{valid.ID, self.ID, interacted.ID, notInterested.ID, served.ID, deleted.ID, wrongVersion.ID}
-	userIDs := []uint{viewer.ID, validAuthor.ID, deletedAuthor.ID}
+	postIDs := []uint{valid.ID, muted.ID, self.ID, interacted.ID, notInterested.ID, served.ID, deleted.ID, wrongVersion.ID}
+	userIDs := []uint{viewer.ID, validAuthor.ID, mutedAuthor.ID, deletedAuthor.ID}
 	t.Cleanup(func() { cleanupRecommendationRecallV3Data(db, postIDs, userIDs) })
 
 	if err := db.Create(&models.PostBehavior{
 		UserID: viewer.ID, PostID: notInterested.ID,
 		Action: eventing.RecommendationBehaviorActionNotInterested, Active: true, LastSeenAt: now,
 	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.UserMute{MuterID: viewer.ID, MutedID: mutedAuthor.ID}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Delete(&deletedAuthor).Error; err != nil {
@@ -166,7 +171,7 @@ func TestSemanticRecallPreservesRecommendationEligibilityIntegration(t *testing.
 		t.Fatal(err)
 	}
 	if len(candidates) != 1 || candidates[0].PostID != valid.ID {
-		t.Fatalf("candidates=%#v, want only valid post %d", candidates, valid.ID)
+		t.Fatalf("candidates=%#v, want only valid post %d; muted post=%d", candidates, valid.ID, muted.ID)
 	}
 }
 

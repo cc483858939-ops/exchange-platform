@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   unfollowUser: vi.fn(),
   updateUserProfile: vi.fn(),
   uploadProfileAvatar: vi.fn(),
+  uploadProfileCover: vi.fn(),
   deletePost: vi.fn(),
   getPostLikeStates: vi.fn(),
   likePost: vi.fn(),
@@ -36,6 +37,16 @@ const mocks = vi.hoisted(() => ({
     replaceAuthorIdentity: vi.fn(),
     applyLikeStateUpdate: vi.fn(),
   },
+  userMuteStore: {
+    isMuted: vi.fn().mockReturnValue(false),
+    isPending: vi.fn().mockReturnValue(false),
+    syncServerMuteState: vi.fn(),
+    muteAuthor: vi.fn(),
+    unmuteAuthor: vi.fn(),
+  },
+  showUserMuteError: vi.fn(),
+  showUserMuteSuccess: vi.fn(),
+  showUserUnmuteSuccess: vi.fn(),
 }));
 
 vi.mock('vue-router', () => ({
@@ -50,6 +61,16 @@ vi.mock('../store/auth', () => ({
 
 vi.mock('../store/feed', () => ({
   useFeedStore: () => mocks.feedStore,
+}));
+
+vi.mock('../store/userMute', () => ({
+  useUserMuteStore: () => mocks.userMuteStore,
+}));
+
+vi.mock('../utils/userMuteFeedback', () => ({
+  showUserMuteError: mocks.showUserMuteError,
+  showUserMuteSuccess: mocks.showUserMuteSuccess,
+  showUserUnmuteSuccess: mocks.showUserUnmuteSuccess,
 }));
 
 vi.mock('../services/userService', () => ({
@@ -198,13 +219,19 @@ describe('UserProfileView public read surface', () => {
     mocks.getUser.mockResolvedValue(profile(7));
     mocks.getUserTimeline.mockResolvedValue({ items: [], next_cursor: null });
     mocks.getUserFollowState.mockResolvedValue({
+      user_id: 7,
       following: false,
+      muted: false,
       follower_count: 0,
       following_count: 0,
     });
     mocks.getPostLikeStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.getPostRepostStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.feedStore.isPostDeleted.mockReturnValue(false);
+    mocks.userMuteStore.isMuted.mockReturnValue(false);
+    mocks.userMuteStore.isPending.mockReturnValue(false);
+    mocks.userMuteStore.muteAuthor.mockResolvedValue('updated');
+    mocks.userMuteStore.unmuteAuthor.mockResolvedValue('updated');
   });
 
   it('renders the anonymous profile without making protected requests', async () => {
@@ -250,6 +277,38 @@ describe('UserProfileView public read surface', () => {
     expect(wrapper.text()).toContain('0 Followers');
     expect(mocks.getUserFollowState).not.toHaveBeenCalled();
     wrapper.unmount();
+  });
+
+  it('keeps follow independent from the loaded mute state and supports unmuting', async () => {
+    setAuth(true, 99);
+    mocks.getUserFollowState.mockResolvedValue({
+      user_id: 7,
+      following: false,
+      muted: true,
+      follower_count: 4,
+      following_count: 2,
+    });
+    const wrapper = mountProfile();
+    await settle();
+
+    expect(wrapper.get('.profile-follow-button').text()).toBe('Follow');
+    expect(wrapper.get('.profile-mute-menu__item').text()).toBe('Unmute @user-7');
+    expect(mocks.userMuteStore.syncServerMuteState).toHaveBeenCalledWith(99, 7, true);
+
+    await wrapper.get('.profile-mute-menu__item').trigger('click');
+    await settle();
+    expect(mocks.userMuteStore.unmuteAuthor).toHaveBeenCalledExactlyOnceWith(7);
+    expect(wrapper.get('.profile-follow-button').text()).toBe('Follow');
+    expect(wrapper.get('.profile-mute-menu__item').text()).toBe('Mute @user-7');
+    expect(mocks.showUserUnmuteSuccess).toHaveBeenCalledExactlyOnceWith('user-7');
+  });
+
+  it('hides mute controls on the viewer own profile', async () => {
+    setAuth(true, 7);
+    const wrapper = mountProfile();
+    await settle();
+
+    expect(wrapper.find('.profile-mute-menu').exists()).toBe(false);
   });
 
   it('hides a broken cover without mutating the profile and retries after a profile switch', async () => {

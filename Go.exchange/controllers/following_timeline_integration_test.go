@@ -78,7 +78,7 @@ func findFollowingTimelineItem(items []timelineItem, postID uint) *timelineItem 
 
 func TestFollowingTimelineIntegration(t *testing.T) {
 	db := openFollowingTimelineIntegrationDatabase(t)
-	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Post{}, &models.PostMedia{}, &models.PostRepost{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.UserMute{}, &models.Post{}, &models.PostMedia{}, &models.PostRepost{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS uidx_post_reposts_user_post ON post_reposts (user_id, post_id)").Error; err != nil {
@@ -96,6 +96,10 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 		{Username: "timeline-unfollowed-" + uuid.NewString(), Password: "secret"},
 		{Username: "timeline-soft-followed-" + uuid.NewString(), Password: "secret"},
 		{Username: "timeline-no-follows-" + uuid.NewString(), Password: "secret"},
+		{Username: "timeline-mute-viewer-" + uuid.NewString(), Password: "secret"},
+		{Username: "timeline-mute-alice-" + uuid.NewString(), Password: "secret"},
+		{Username: "timeline-mute-bob-" + uuid.NewString(), Password: "secret"},
+		{Username: "timeline-mute-carol-" + uuid.NewString(), Password: "secret"},
 	}
 	t.Cleanup(func() {
 		userIDs := make([]uint, 0, len(users))
@@ -121,6 +125,7 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 	}
 	viewer, followedA, followedB := users[0], users[1], users[2]
 	unfollowed, softFollowed, noFollowsViewer := users[3], users[4], users[5]
+	muteViewer, muteAlice, muteBob, muteCarol := users[6], users[7], users[8], users[9]
 
 	follows := []models.UserFollow{
 		{FollowerID: viewer.ID, FollowingID: followedA.ID},
@@ -128,6 +133,15 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 		{FollowerID: viewer.ID, FollowingID: softFollowed.ID},
 	}
 	if err := db.Create(&follows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&[]models.UserFollow{
+		{FollowerID: muteViewer.ID, FollowingID: muteAlice.ID},
+		{FollowerID: muteViewer.ID, FollowingID: muteBob.ID},
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.UserMute{MuterID: muteViewer.ID, MutedID: muteAlice.ID}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Delete(&softFollowed).Error; err != nil {
@@ -159,6 +173,32 @@ func TestFollowingTimelineIntegration(t *testing.T) {
 	unfollowedPost := createPost(unfollowed.ID, "unfollowed body", baseTime.Add(13*time.Minute))
 	viewerPost := createPost(viewer.ID, "viewer own body", baseTime.Add(14*time.Minute))
 	noFollowsPost := createPost(noFollowsViewer.ID, "no follows own body", baseTime.Add(15*time.Minute))
+	muteAlicePost := createPost(muteAlice.ID, "muted author post", baseTime.Add(45*time.Minute))
+	muteBobPost := createPost(muteBob.ID, "unmuted author post", baseTime.Add(40*time.Minute))
+	muteBobRepostedAlice := createPost(muteAlice.ID, "muted original repost", baseTime.Add(35*time.Minute))
+	muteAliceRepostedBob := createPost(muteBob.ID, "muted actor repost", baseTime.Add(30*time.Minute))
+	muteCarolRepostedByBob := createPost(muteCarol.ID, "visible Bob repost", baseTime.Add(25*time.Minute))
+	if err := db.Create(&[]models.PostRepost{
+		{UserID: muteAlice.ID, PostID: muteBobPost.ID, CreatedAt: baseTime.Add(50 * time.Minute)},
+		{UserID: muteBob.ID, PostID: muteBobRepostedAlice.ID, CreatedAt: baseTime.Add(49 * time.Minute)},
+		{UserID: muteAlice.ID, PostID: muteAliceRepostedBob.ID, CreatedAt: baseTime.Add(48 * time.Minute)},
+		{UserID: muteBob.ID, PostID: muteCarolRepostedByBob.ID, CreatedAt: baseTime.Add(47 * time.Minute)},
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	mutedPage1, status, body := requestFollowingTimeline(t, muteViewer.ID, "limit=1")
+	if status != http.StatusOK || len(mutedPage1.Items) != 1 || mutedPage1.NextCursor == nil || mutedPage1.Items[0].Post.ID != muteCarolRepostedByBob.ID || mutedPage1.Items[0].Actor.ID != muteBob.ID {
+		t.Fatalf("muted page1 status=%d body=%s response=%#v", status, body, mutedPage1)
+	}
+	mutedPage2, status, body := requestFollowingTimeline(t, muteViewer.ID, "limit=1&cursor="+*mutedPage1.NextCursor)
+	if status != http.StatusOK || len(mutedPage2.Items) != 1 || mutedPage2.NextCursor != nil || mutedPage2.Items[0].Post.ID != muteBobPost.ID {
+		t.Fatalf("muted page2 status=%d body=%s response=%#v", status, body, mutedPage2)
+	}
+	for _, hidden := range []uint{muteAlicePost.ID, muteBobRepostedAlice.ID, muteAliceRepostedBob.ID} {
+		if containsFollowingPostID(mutedPage1.Items, hidden) || containsFollowingPostID(mutedPage2.Items, hidden) {
+			t.Fatalf("muted activity post %d appeared in paginated Following", hidden)
+		}
+	}
 
 	page1, status, body := requestFollowingTimeline(t, viewer.ID, "limit=2")
 	if status != http.StatusOK || len(page1.Items) != 2 || page1.NextCursor == nil {

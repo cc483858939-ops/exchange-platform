@@ -75,6 +75,7 @@ describe('History route', () => {
       ['UserFollowers', '/users/:id/followers', 'app', 'Followers'],
       ['UserSearch', '/search', 'app', 'Search'],
       ['History', '/history', 'app', 'History'],
+      ['MutedAccounts', '/settings/muted', 'app', 'Muted accounts'],
       ['TopicDirectory', '/topics', 'app', 'Topics'],
       ['Topic', '/topics/:slug', 'app', 'Topic'],
       ['Notifications', '/notifications', 'app', 'Notifications'],

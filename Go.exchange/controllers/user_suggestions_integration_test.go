@@ -26,7 +26,7 @@ func TestSuggestedUsersQueryIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.Post{}, &models.UserAuthorAffinity{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.UserMute{}, &models.Post{}, &models.UserAuthorAffinity{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB := global.APIDb
@@ -57,6 +57,7 @@ func TestSuggestedUsersQueryIntegration(t *testing.T) {
 	authorA := makeUser("author-a")
 	authorB := makeUser("author-b")
 	authorC := makeUser("author-c")
+	replacementAuthor := makeUser("replacement")
 	alreadyFollowed := makeUser("followed")
 	deletedAuthor := makeUser("deleted-author")
 	beyondSample := makeUser("beyond-sample")
@@ -66,6 +67,12 @@ func TestSuggestedUsersQueryIntegration(t *testing.T) {
 	affinityAuthor := makeUser("affinity")
 	otherViewer := makeUser("other-viewer")
 	if err := tx.Create(&models.UserFollow{FollowerID: viewer.ID, FollowingID: alreadyFollowed.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Create(&[]models.UserMute{
+		{MuterID: viewer.ID, MutedID: authorC.ID},
+		{MuterID: otherViewer.ID, MutedID: authorA.ID},
+	}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Delete(deletedAuthor).Error; err != nil {
@@ -107,7 +114,8 @@ func TestSuggestedUsersQueryIntegration(t *testing.T) {
 	for minute := 11; minute <= 12; minute++ {
 		addPostAt(authorB, minute, "public", 0)
 	}
-	addPostAt(authorC, 13, "public", 0)
+	addPostAt(replacementAuthor, 13, "public", 0)
+	addPostAt(authorC, 14, "public", 0)
 	addPostAt(viewer, 14, "public", 0)
 	addPostAt(alreadyFollowed, 15, "public", 0)
 	addPostAt(deletedAuthor, 16, "public", 0)
@@ -148,7 +156,7 @@ func TestSuggestedUsersQueryIntegration(t *testing.T) {
 	}
 
 	page := request()
-	expected := []uint{popular.ID, filler.ID, authorA.ID, authorB.ID, authorC.ID}
+	expected := []uint{popular.ID, filler.ID, authorA.ID, authorB.ID, replacementAuthor.ID}
 	if page.HasMore || len(page.Items) != len(expected) {
 		t.Fatalf("page=%#v", page)
 	}

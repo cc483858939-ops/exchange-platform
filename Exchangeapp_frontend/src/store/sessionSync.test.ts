@@ -73,6 +73,7 @@ const bookmarkUpdate: FeedBookmarkStateUpdate = {
 const followState: UserFollowState = {
   user_id: 8,
   following: false,
+  muted: false,
   follower_count: 3,
   following_count: 4,
 };

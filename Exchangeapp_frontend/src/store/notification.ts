@@ -56,6 +56,7 @@ export const useNotificationStore = defineStore('notification', () => {
   const notificationReselectVersion = ref(0);
   const listRequestVersion = ref(0);
   const pagingRequestVersion = ref(0);
+  let unreadRequestVersion = 0;
 
   const pagingRequestsInFlight = new Map<number, number>();
   let unreadInFlight: { key: string; promise: Promise<number | null> } | null = null;
@@ -123,6 +124,7 @@ export const useNotificationStore = defineStore('notification', () => {
 
     viewerID.value = normalized;
     viewerGeneration.value += 1;
+    unreadRequestVersion += 1;
     unreadInFlight = null;
     unreadLoading.value = false;
     unreadCount.value = 0;
@@ -148,22 +150,54 @@ export const useNotificationStore = defineStore('notification', () => {
     loadMoreError.value = null;
   };
 
-  const refreshUnreadCount = async (capture: NotificationViewerCapture | null = captureViewer()) => {
+  const applyMutedActorStateLocal = (actorID: number, muted: boolean) => {
+    if (!Number.isSafeInteger(actorID) || actorID <= 0 || viewerID.value === null) {
+      return false;
+    }
+    if (muted) {
+      items.value = items.value.filter(item => item.actor.id !== actorID);
+    }
+    if (loaded.value) {
+      markListStale();
+    } else {
+      const hadInitialLoad = loading.value;
+      listRequestVersion.value += 1;
+      pagingRequestVersion.value += 1;
+      loading.value = false;
+      loadingMore.value = false;
+      revalidating.value = false;
+      if (hadInitialLoad) {
+        revalidateAfterInitialLoad = true;
+      }
+    }
+    void refreshUnreadCount(captureViewer(), true).catch(() => undefined);
+    return true;
+  };
+
+  const refreshUnreadCount = async (
+    capture: NotificationViewerCapture | null = captureViewer(),
+    force = false,
+  ) => {
     if (!capture || !isCurrentViewer(capture)) {
       return null;
     }
     const key = `${capture.viewerID}:${capture.generation}`;
-    if (unreadInFlight?.key === key) {
+    if (force) {
+      unreadRequestVersion += 1;
+      unreadInFlight = null;
+      unreadLoading.value = false;
+    } else if (unreadInFlight?.key === key) {
       return unreadInFlight.promise;
     }
 
+    const requestVersion = ++unreadRequestVersion;
     let request!: Promise<number | null>;
     request = (async () => {
       unreadLoading.value = true;
       unreadError.value = null;
       try {
         const count = await getUnreadNotificationCount();
-        if (isCurrentViewer(capture)) {
+        if (isCurrentViewer(capture) && requestVersion === unreadRequestVersion) {
           const previous = unreadCount.value;
           setUnreadCount(count);
           if (loaded.value && unreadCount.value !== previous) {
@@ -172,12 +206,12 @@ export const useNotificationStore = defineStore('notification', () => {
         }
         return count;
       } catch (refreshError) {
-        if (isCurrentViewer(capture)) {
+        if (isCurrentViewer(capture) && requestVersion === unreadRequestVersion) {
           unreadError.value = refreshError;
         }
         throw refreshError;
       } finally {
-        if (isCurrentViewer(capture)) {
+        if (isCurrentViewer(capture) && requestVersion === unreadRequestVersion) {
           unreadLoading.value = false;
         }
         if (unreadInFlight?.promise === request) {
@@ -491,6 +525,7 @@ export const useNotificationStore = defineStore('notification', () => {
     markAllPending,
     scrollTop,
     notificationReselectVersion,
+    applyMutedActorStateLocal,
     listRequestVersion,
     pagingRequestVersion,
     setViewer,

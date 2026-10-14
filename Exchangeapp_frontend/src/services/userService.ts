@@ -85,6 +85,7 @@ export async function uploadProfileCover(file: File): Promise<string> {
 export type UserFollowState = {
   user_id: number;
   following: boolean;
+  muted: boolean;
   follower_count: number;
   following_count: number;
 };

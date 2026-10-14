@@ -153,6 +153,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   const bookmarkPendingPostIds = engagementMutations.bookmarkPendingPostIDs;
   const pendingDeletePostIds = reactive(new Set<number>());
   const deleteErrors = reactive(new Map<number, string>());
+  const mutedAuthorIDs = reactive(new Set<number>());
 
   const followingLoadedPostIds = new Set<number>();
   const forYouLoadedPostIds = new Set<number>();
@@ -194,6 +195,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
 
   const clearForViewer = () => {
     authGeneration += 1;
+    mutedAuthorIDs.clear();
     engagementMutations.resetAll();
     pendingDeletePostIds.clear();
     deleteErrors.clear();
@@ -243,6 +245,11 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       if (post.id === postId) callback(post);
     });
   };
+
+  const isMutedFeedPost = (post: FeedPost) => (
+    mutedAuthorIDs.has(post.author.id)
+    || (post.repostContext !== undefined && mutedAuthorIDs.has(post.repostContext.actor.id))
+  );
 
   const findPost = (postId: number): FeedPost | undefined => {
     let found: FeedPost | undefined;
@@ -591,9 +598,14 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     const newPosts = activities
       .filter((activity) => {
         const postID = activity.post.id;
-        if (followingLoadedPostIds.has(postID)) return false;
+        if (
+          followingLoadedPostIds.has(postID)
+          || feedStore.isPostDeleted(postID)
+          || mutedAuthorIDs.has(activity.post.author.id)
+          || mutedAuthorIDs.has(activity.actor.id)
+        ) return false;
         followingLoadedPostIds.add(postID);
-        return !feedStore.isPostDeleted(postID);
+        return true;
       })
       .map((activity) => postToFeedPost(
         activity.post,
@@ -616,6 +628,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         postID === null
         || forYouLoadedPostIds.has(postID)
         || feedStore.isPostDeleted(postID)
+        || mutedAuthorIDs.has(recommendation.post.author.id)
       ) {
         return;
       }
@@ -919,6 +932,8 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         if (
           freshIDs.has(post.id)
           || feedStore.isPostDeleted(post.id)
+          || mutedAuthorIDs.has(post.author.id)
+          || mutedAuthorIDs.has(activity.actor.id)
         ) return;
         freshIDs.add(post.id);
         const freshPost = postToFeedPost(
@@ -1249,6 +1264,46 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     syncHomeAuthorIdentity(author);
   };
 
+  const applyMutedAuthorStateLocal = (authorID: number, muted: boolean) => {
+    if (!Number.isSafeInteger(authorID) || authorID <= 0) return false;
+    const wasMuted = mutedAuthorIDs.has(authorID);
+    if (wasMuted === muted) return false;
+    if (muted) mutedAuthorIDs.add(authorID);
+    else mutedAuthorIDs.delete(authorID);
+
+    forYouRequestVersion += 1;
+    forYouPagingVersion += 1;
+    forYou.loading = false;
+    forYou.loadingMore = false;
+    forYou.loadMoreError = false;
+    forYou.error = false;
+    forYou.loaded = false;
+    forYou.depleted = false;
+    forYou.items = forYou.items.filter(({ post }) => !isMutedFeedPost(post));
+    forYouLoadedPostIds.clear();
+    forYou.items.forEach(({ post }) => forYouLoadedPostIds.add(post.id));
+
+    followingRequestVersion += 1;
+    followingPagingVersion += 1;
+    following.loading = false;
+    following.loadingMore = false;
+    following.revalidating = false;
+    following.error = false;
+    following.loadMoreError = false;
+    following.revalidateError = false;
+    following.items = following.items.filter(post => !isMutedFeedPost(post));
+    followingLoadedPostIds.clear();
+    following.items.forEach(post => followingLoadedPostIds.add(post.id));
+    following.stale = following.loaded;
+
+    if (activeTab.value === 'for-you' && authStore.isAuthenticated) {
+      void loadForYou();
+    } else if (activeTab.value === 'following' && authStore.isAuthenticated) {
+      void revalidateFollowing();
+    }
+    return true;
+  };
+
   const retryFollowingLoadMore = () => {
     following.loadMoreError = false;
     void loadMoreFollowing();
@@ -1345,6 +1400,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     applyReplyCountUpdateLocal,
     applyQuoteCountUpdateLocal,
     reconcileFollowStateLocal,
+    applyMutedAuthorStateLocal,
     dismissRecommendation,
     removePost,
     removePostLocal,

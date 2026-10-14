@@ -20,12 +20,14 @@ import (
 type userFollowStateResponse struct {
 	UserID         uint  `json:"user_id"`
 	Following      bool  `json:"following"`
+	Muted          bool  `json:"muted"`
 	FollowerCount  int64 `json:"follower_count"`
 	FollowingCount int64 `json:"following_count"`
 }
 
 type userFollowState struct {
 	Following      bool
+	Muted          bool
 	FollowerCount  int64
 	FollowingCount int64
 }
@@ -96,6 +98,13 @@ func readFollowState(db *gorm.DB, viewerID, targetID uint) (userFollowState, err
 			return userFollowState{}, err
 		}
 		state.Following = relationCount > 0
+		var muteCount int64
+		if err := db.Model(&models.UserMute{}).
+			Where("muter_id = ? AND muted_id = ?", viewerID, targetID).
+			Count(&muteCount).Error; err != nil {
+			return userFollowState{}, err
+		}
+		state.Muted = muteCount > 0
 	}
 
 	counts, err := readUserFollowCounts(db, targetID)
@@ -304,6 +313,7 @@ func writeFollowState(ctx *gin.Context, targetID uint, state userFollowState) {
 	ctx.JSON(http.StatusOK, userFollowStateResponse{
 		UserID:         targetID,
 		Following:      state.Following,
+		Muted:          state.Muted,
 		FollowerCount:  state.FollowerCount,
 		FollowingCount: state.FollowingCount,
 	})

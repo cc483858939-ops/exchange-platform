@@ -134,10 +134,12 @@ func TestLoadPostReferencesBatchesMixedReferencesAndPreservesTombstonesIntegrati
 func TestGormRecommendationResponseMapperBatchesPostReferencesIntegration(t *testing.T) {
 	db := openProfileTimelineIntegrationDB(t)
 	author := responseMapperTestAuthor(t, db)
+	quoteAuthor := responseMapperTestAuthor(t, db)
+	viewer := responseMapperTestAuthor(t, db)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	targets := make([]models.Post, 20)
 	for index := range targets {
-		targets[index] = createReferenceBatchTestPost(t, db, author.ID, "reference-target-"+strconvInt(index), "public", now.Add(-time.Minute), nil, nil)
+		targets[index] = createReferenceBatchTestPost(t, db, quoteAuthor.ID, "reference-target-"+strconvInt(index), "public", now.Add(-time.Minute), nil, nil)
 	}
 	roots := make([]models.Post, 20)
 	for index := range roots {
@@ -163,7 +165,11 @@ func TestGormRecommendationResponseMapperBatchesPostReferencesIntegration(t *tes
 		}
 		db.Unscoped().Where("id IN ?", targetIDs).Delete(&models.Post{})
 		db.Unscoped().Where("id = ?", author.ID).Delete(&models.User{})
+		db.Unscoped().Where("id IN ?", []uint{quoteAuthor.ID, viewer.ID}).Delete(&models.User{})
 	})
+	if err := db.Create(&models.UserMute{MuterID: viewer.ID, MutedID: quoteAuthor.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	selected := make([]recommendation.SelectedCandidate, len(roots))
 	for index, root := range roots {
@@ -176,7 +182,7 @@ func TestGormRecommendationResponseMapperBatchesPostReferencesIntegration(t *tes
 
 	queryLogger := &postDetailSQLLogger{Interface: logger.Default}
 	mapper.db = db.Session(&gorm.Session{Logger: queryLogger})
-	responses, err := mapper.Map(context.Background(), selected, now)
+	responses, err := mapper.Map(context.Background(), viewer.ID, selected, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,11 +190,14 @@ func TestGormRecommendationResponseMapperBatchesPostReferencesIntegration(t *tes
 		t.Fatalf("response count=%d want %d", len(responses), len(selected))
 	}
 	for index, response := range responses {
-		if response.Post.ID != roots[index].ID || response.Score != selected[index].Breakdown.FinalScore || response.Post.QuotePost == nil || response.Post.QuotePost.ID != targets[index].ID {
+		if response.Post.ID != roots[index].ID || response.Score != selected[index].Breakdown.FinalScore || response.Post.QuotePost == nil || response.Post.QuotePost.ID != targets[index].ID || !response.Post.QuotePost.MutedByViewer {
 			t.Fatalf("response[%d]=%#v lost selected order, score, or reference", index, response)
 		}
 	}
 	assertOneReferenceBatch(t, queryLogger.snapshot(), 1, 1, 2, 20)
+	if got := len(selectQueriesFromTable(queryLogger.snapshot(), "user_mutes")); got != 1 {
+		t.Fatalf("mute reference lookup query count=%d want one batched query", got)
+	}
 
 	duplicateID := targets[0].ID
 	duplicateSelected := append([]recommendation.SelectedCandidate(nil), selected...)
@@ -198,7 +207,7 @@ func TestGormRecommendationResponseMapperBatchesPostReferencesIntegration(t *tes
 	}
 	duplicateLogger := &postDetailSQLLogger{Interface: logger.Default}
 	mapper.db = db.Session(&gorm.Session{Logger: duplicateLogger})
-	duplicateResponses, err := mapper.Map(context.Background(), duplicateSelected, now)
+	duplicateResponses, err := mapper.Map(context.Background(), viewer.ID, duplicateSelected, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +215,7 @@ func TestGormRecommendationResponseMapperBatchesPostReferencesIntegration(t *tes
 		t.Fatalf("duplicate response count=%d want %d", len(duplicateResponses), len(duplicateSelected))
 	}
 	for index, response := range duplicateResponses {
-		if response.Post.QuotePost == nil || response.Post.QuotePost.ID != duplicateID {
+		if response.Post.QuotePost == nil || response.Post.QuotePost.ID != duplicateID || !response.Post.QuotePost.MutedByViewer {
 			t.Fatalf("duplicate response[%d] reference=%#v want id=%d", index, response.Post.QuotePost, duplicateID)
 		}
 	}
@@ -214,6 +223,9 @@ func TestGormRecommendationResponseMapperBatchesPostReferencesIntegration(t *tes
 		t.Fatal("duplicate recommendation references should not share mutable response pointers")
 	}
 	assertOneReferenceBatch(t, duplicateLogger.snapshot(), 1, 1, 2, 1)
+	if got := len(selectQueriesFromTable(duplicateLogger.snapshot(), "user_mutes")); got != 1 {
+		t.Fatalf("duplicate mute reference lookup query count=%d want one", got)
+	}
 }
 
 func TestLoadPostResponsesReferenceQueriesStayBoundedAsPageGrowsIntegration(t *testing.T) {

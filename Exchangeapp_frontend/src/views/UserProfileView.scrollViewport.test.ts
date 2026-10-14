@@ -182,6 +182,7 @@ const prepareLoadedSession = (id: number, scrollTop: number) => {
   session.followState = {
     user_id: id,
     following: false,
+    muted: false,
     follower_count: 0,
     following_count: 0,
   };

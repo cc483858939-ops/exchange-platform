@@ -77,9 +77,13 @@ func (r *GormCandidateRepository) eligibilityQuery(db *gorm.DB, query *gorm.DB, 
 		Where("rb.user_id = ? AND rb.post_id = ni.post_id AND rb.action = ? AND rb.active = TRUE AND rb.last_seen_at > ni.last_seen_at",
 			input.UserID, "reply")
 	negative = negative.Where("NOT EXISTS (?)", laterLike).Where("NOT EXISTS (?)", laterReply)
+	mutedAuthor := db.Table("user_mutes AS um").
+		Select("1").
+		Where("um.muter_id = ? AND um.muted_id = posts.author_id", input.UserID)
 	query = recommendationPublicPostScope(query).
 		Where("posts.reply_to_post_id IS NULL").
 		Where("posts.author_id <> ?", input.UserID).
+		Where("NOT EXISTS (?)", mutedAuthor).
 		Where("NOT EXISTS (?)", negative)
 	if input.MaterializedInteractionsReady {
 		interacted := db.Table("user_post_reco_states AS rs").

@@ -47,7 +47,7 @@ func TestFollowGraphIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.UserMute{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -249,7 +249,7 @@ func TestFollowConnectionListsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserFollow{}, &models.UserMute{}); err != nil {
 		t.Fatal(err)
 	}
 	originalDB := global.APIDb
