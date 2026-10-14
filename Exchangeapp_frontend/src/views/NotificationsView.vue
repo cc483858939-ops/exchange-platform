@@ -337,7 +337,11 @@ onActivated(() => {
   notificationsViewActive.value = true;
   beginNotificationRestoreEpoch();
 
-  void notificationStore.loadInitial();
+  if (loaded.value) {
+    void notificationStore.revalidateNotifications(true);
+  } else {
+    void notificationStore.loadInitial();
+  }
 
   void nextTick(() => {
     if (!mounted || !notificationsViewActive.value) {

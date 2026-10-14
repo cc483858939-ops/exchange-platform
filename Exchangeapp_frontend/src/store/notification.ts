@@ -57,9 +57,11 @@ export const useNotificationStore = defineStore('notification', () => {
   const listRequestVersion = ref(0);
   const pagingRequestVersion = ref(0);
 
+  const pagingRequestsInFlight = new Map<number, number>();
   let unreadInFlight: { key: string; promise: Promise<number | null> } | null = null;
   let markAllSnapshot: Map<number, boolean> | null = null;
   let markAllPreviousCount = 0;
+  let revalidateAfterInitialLoad = false;
 
   const unreadBadge = computed(() => {
     if (unreadCount.value <= 0) {
@@ -109,6 +111,7 @@ export const useNotificationStore = defineStore('notification', () => {
     pendingReadIDs.value = new Set();
     markAllPending.value = false;
     markAllSnapshot = null;
+    revalidateAfterInitialLoad = false;
     scrollTop.value = 0;
   };
 
@@ -196,9 +199,20 @@ export const useNotificationStore = defineStore('notification', () => {
       && pagingVersion === pagingRequestVersion.value
   );
 
+  const hasCurrentPagingRequest = () => (pagingRequestsInFlight.get(viewerGeneration.value) ?? 0) > 0;
+
   const loadInitial = async (force = false) => {
     const capture = captureViewer();
-    if (!capture || (loaded.value && !force) || loading.value) {
+    if (!capture) {
+      return;
+    }
+    if (loading.value) {
+      if (!loaded.value) {
+        revalidateAfterInitialLoad = true;
+      }
+      return;
+    }
+    if (loaded.value && !force) {
       return;
     }
     if (force && (pendingReadIDs.value.size > 0 || markAllPending.value)) {
@@ -230,6 +244,13 @@ export const useNotificationStore = defineStore('notification', () => {
     } finally {
       if (isCurrentListRequest(capture, requestVersion, pagingVersion)) {
         loading.value = false;
+        if (revalidateAfterInitialLoad) {
+          revalidateAfterInitialLoad = false;
+          if (loaded.value) {
+            listStale.value = true;
+            settleRevalidationIfNeeded();
+          }
+        }
       }
     }
   };
@@ -250,6 +271,7 @@ export const useNotificationStore = defineStore('notification', () => {
     const requestVersion = ++listRequestVersion.value;
     const pagingVersion = ++pagingRequestVersion.value;
     const cursor = nextCursor.value;
+    pagingRequestsInFlight.set(capture.generation, (pagingRequestsInFlight.get(capture.generation) ?? 0) + 1);
     loadingMore.value = true;
     loadMoreError.value = null;
     try {
@@ -264,8 +286,17 @@ export const useNotificationStore = defineStore('notification', () => {
         loadMoreError.value = loadError;
       }
     } finally {
+      const inFlightCount = (pagingRequestsInFlight.get(capture.generation) ?? 1) - 1;
+      if (inFlightCount > 0) {
+        pagingRequestsInFlight.set(capture.generation, inFlightCount);
+      } else {
+        pagingRequestsInFlight.delete(capture.generation);
+      }
       if (isCurrentListRequest(capture, requestVersion, pagingVersion)) {
         loadingMore.value = false;
+      }
+      if (isCurrentViewer(capture) && !hasCurrentPagingRequest() && !loadingMore.value) {
+        settleRevalidationIfNeeded();
       }
     }
   };
@@ -277,12 +308,19 @@ export const useNotificationStore = defineStore('notification', () => {
       || !loaded.value
       || (!listStale.value && !force)
       || revalidating.value
-      || pendingReadIDs.value.size > 0
-      || markAllPending.value
     ) {
       return;
     }
-    if (force && (loading.value || loadingMore.value)) {
+    if (
+      loading.value
+      || loadingMore.value
+      || hasCurrentPagingRequest()
+      || pendingReadIDs.value.size > 0
+      || markAllPending.value
+    ) {
+      if (force) {
+        listStale.value = true;
+      }
       return;
     }
 
@@ -299,14 +337,12 @@ export const useNotificationStore = defineStore('notification', () => {
       }
 
       const fresh = mergeUniqueNotifications([], response.items);
-      const freshIDs = new Set(fresh.map(item => item.id));
-      const cachedTail = items.value.filter(item => !freshIDs.has(item.id));
       const readOverrides = new Map(
         items.value
           .filter(item => markAllPending.value || pendingReadIDs.value.has(item.id))
           .map(item => [item.id, item.read]),
       );
-      items.value = [...fresh, ...cachedTail].map(item => (
+      items.value = fresh.map(item => (
         readOverrides.has(item.id) ? { ...item, read: readOverrides.get(item.id) ?? item.read } : item
       ));
       nextCursor.value = response.next_cursor;

@@ -366,7 +366,52 @@ describe('NotificationsView', () => {
     revalidation.resolve({ items: [notification(2)], next_cursor: 'cursor-new' });
     await request;
     expect(store.listStale).toBe(false);
-    expect(store.items.map(item => item.id)).toEqual([2, 1]);
+    expect(store.items.map(item => item.id)).toEqual([2]);
+    wrapper.unmount();
+  });
+
+  it('revalidates once on KeepAlive re-entry even when the unread count is unchanged', async () => {
+    setAuth(7);
+    setNotificationViewer(7);
+    mocks.getNotifications
+      .mockResolvedValueOnce({ items: [notification(1)], next_cursor: null })
+      .mockResolvedValueOnce({ items: [notification(2)], next_cursor: null });
+    const { state, wrapper } = mountKeepAliveView();
+    const store = useNotificationStore();
+    await flushPromises();
+    expect(store.items.map(item => item.id)).toEqual([1]);
+
+    state.showNotifications = false;
+    await nextTick();
+    state.showNotifications = true;
+    await flushPromises();
+
+    expect(mocks.getNotifications).toHaveBeenCalledTimes(2);
+    expect(store.items.map(item => item.id)).toEqual([2]);
+    wrapper.unmount();
+  });
+
+  it('does not duplicate activation refreshes while the initial page is still loading', async () => {
+    setAuth(7);
+    setNotificationViewer(7);
+    const firstPage = deferred<{ items: Notification[]; next_cursor: string | null }>();
+    mocks.getNotifications.mockReturnValueOnce(firstPage.promise);
+    const { state, wrapper } = mountKeepAliveView();
+    const store = useNotificationStore();
+    expect(mocks.getNotifications).toHaveBeenCalledTimes(1);
+
+    state.showNotifications = false;
+    await nextTick();
+    state.showNotifications = true;
+    await nextTick();
+    expect(mocks.getNotifications).toHaveBeenCalledTimes(1);
+
+    mocks.getNotifications.mockResolvedValueOnce({ items: [notification(2)], next_cursor: null });
+    firstPage.resolve({ items: [notification(1)], next_cursor: null });
+    await flushPromises();
+
+    expect(mocks.getNotifications).toHaveBeenCalledTimes(2);
+    expect(store.items.map(item => item.id)).toEqual([2]);
     wrapper.unmount();
   });
 
