@@ -50,10 +50,6 @@ func TestUserMuteLifecycleIntegration(t *testing.T) {
 	if err := tx.Create(&models.UserFollow{FollowerID: viewer.ID, FollowingID: target.ID}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := tx.Create(&models.UserMute{MuterID: third.ID, MutedID: target.ID}).Error; err != nil {
-		t.Fatal(err)
-	}
-
 	put := func(targetID uint) int {
 		ctx, _ := newUserMuteControllerContext(http.MethodPut, strconvUint(targetID), "", &viewer.ID)
 		MuteUser(ctx)
