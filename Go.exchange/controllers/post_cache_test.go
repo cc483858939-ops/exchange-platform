@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -91,6 +92,190 @@ func TestLoadJSONCacheWithStoreDeduplicatesConcurrentMisses(t *testing.T) {
 	// 验证：尽管有 100 个并发请求，但 loader 应该只被调用了 1 次
 	if loads.Load() != 1 {
 		t.Fatalf("expected loader to run once, got %d", loads.Load())
+	}
+}
+
+func TestPostDetailCacheFenceRejectsOldBackfillAndReloads(t *testing.T) {
+	postCacheGroup = singleflight.Group{}
+
+	const key = "post:detail:v5:fence-race"
+	var mu sync.Mutex
+	cache := map[string]string{}
+	fence := "token-A"
+	var tokens []string
+	var loads atomic.Int32
+	oldSnapshotReady := make(chan struct{})
+	allowOldBackfill := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(allowOldBackfill) })
+
+	getter := func(key string) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		value, ok := cache[key]
+		if !ok {
+			return "", redis.Nil
+		}
+		return value, nil
+	}
+	fenceGetter := func() (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		tokens = append(tokens, fence)
+		return fence, nil
+	}
+	setter := func(token string, payload []byte, _ time.Duration) (bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if token != fence {
+			return false, nil
+		}
+		cache[key] = string(payload)
+		return true, nil
+	}
+	loader := func() (cacheTestPayload, error) {
+		if loads.Add(1) == 1 {
+			old := cacheTestPayload{Value: "stale"}
+			close(oldSnapshotReady)
+			<-allowOldBackfill
+			return old, nil
+		}
+		return cacheTestPayload{Value: "fresh"}, nil
+	}
+
+	type loadResult struct {
+		value cacheTestPayload
+		err   error
+	}
+	resultCh := make(chan loadResult, 1)
+	go func() {
+		value, err := loadJSONCacheWithFenceStoreContext(
+			context.Background(), key, postCacheTTL, getter, fenceGetter, setter, loader,
+		)
+		resultCh <- loadResult{value: value, err: err}
+	}()
+
+	<-oldSnapshotReady
+	mu.Lock()
+	tokenA := fence
+	fence = "token-B"
+	delete(cache, key)
+	mu.Unlock()
+	releaseOnce.Do(func() { close(allowOldBackfill) })
+
+	result := <-resultCh
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	if tokenA == "token-B" {
+		t.Fatal("invalidation reused the old fence token")
+	}
+	if result.value.Value != "fresh" {
+		t.Fatalf("load returned %q after the fence changed; want fresh", result.value.Value)
+	}
+	if loads.Load() != 2 {
+		t.Fatalf("loader calls=%d want one bounded retry", loads.Load())
+	}
+	if len(tokens) != 2 || tokens[0] != tokenA || tokens[1] != "token-B" {
+		t.Fatalf("captured fence tokens=%v want [token-A token-B]", tokens)
+	}
+	var cached cacheTestPayload
+	if err := json.Unmarshal([]byte(cache[key]), &cached); err != nil {
+		t.Fatalf("cached payload is missing or invalid: %v", err)
+	}
+	if cached.Value != "fresh" {
+		t.Fatalf("cache contains %q after invalidation; want fresh", cached.Value)
+	}
+	hit, err := loadJSONCacheWithFenceStoreContext(
+		context.Background(), key, postCacheTTL, getter, fenceGetter, setter,
+		func() (cacheTestPayload, error) {
+			loads.Add(1)
+			return cacheTestPayload{Value: "unexpected reload"}, nil
+		},
+	)
+	if err != nil || hit.Value != "fresh" || loads.Load() != 2 || len(tokens) != 2 {
+		t.Fatalf("subsequent hit=%+v loads=%d fence reads=%d err=%v", hit, loads.Load(), len(tokens), err)
+	}
+}
+
+func TestPostDetailCacheFencePreservesSingleflight(t *testing.T) {
+	postCacheGroup = singleflight.Group{}
+	const workers = 40
+	const key = "post:detail:v5:fence-singleflight"
+	var mu sync.Mutex
+	cache := map[string]string{}
+	var getterCalls atomic.Int32
+	var loads atomic.Int32
+	allInitialLookups := make(chan struct{})
+	loaderStarted := make(chan struct{})
+	releaseLoader := make(chan struct{})
+	var releaseOnce sync.Once
+	var loaderStartOnce sync.Once
+	defer releaseOnce.Do(func() { close(releaseLoader) })
+
+	getter := func(key string) (string, error) {
+		call := getterCalls.Add(1)
+		if call <= workers {
+			if call == workers {
+				close(allInitialLookups)
+			}
+			<-allInitialLookups
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		value, ok := cache[key]
+		if !ok {
+			return "", redis.Nil
+		}
+		return value, nil
+	}
+	fenceGetter := func() (string, error) { return "stable-token", nil }
+	setter := func(token string, payload []byte, _ time.Duration) (bool, error) {
+		if token != "stable-token" {
+			return false, nil
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		cache[key] = string(payload)
+		return true, nil
+	}
+	loader := func() (cacheTestPayload, error) {
+		loads.Add(1)
+		loaderStartOnce.Do(func() { close(loaderStarted) })
+		<-releaseLoader
+		return cacheTestPayload{Value: "shared"}, nil
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			value, err := loadJSONCacheWithFenceStoreContext(
+				context.Background(), key, postCacheTTL, getter, fenceGetter, setter, loader,
+			)
+			if err != nil {
+				errs <- err
+			} else if value.Value != "shared" {
+				errs <- fmt.Errorf("unexpected value %q", value.Value)
+			}
+		}()
+	}
+	close(start)
+	<-loaderStarted
+	<-allInitialLookups
+	time.Sleep(10 * time.Millisecond)
+	releaseOnce.Do(func() { close(releaseLoader) })
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	if loads.Load() != 1 {
+		t.Fatalf("loader calls=%d want 1", loads.Load())
 	}
 }
 

@@ -36,10 +36,7 @@ func publicPostScope(query *gorm.DB, now time.Time) *gorm.DB {
 }
 
 var invalidatePostDetailCacheKey = func(key string) error {
-	if global.RedisDB == nil {
-		return nil
-	}
-	return global.RedisDB.Del(key).Err()
+	return invalidatePostDetailCacheKeyWithRedis(global.RedisDB, key)
 }
 
 func isPublicPostResponseAt(post postResponse, now time.Time) bool {
@@ -50,7 +47,7 @@ func isPublicPostResponseAt(post postResponse, now time.Time) bool {
 }
 
 var loadPostDetailCache = func(ctx context.Context, key string, loader func() (postResponse, error)) (postResponse, error) {
-	return loadJSONCacheWithContext(ctx, key, loader)
+	return loadPostDetailJSONCacheWithContext(ctx, key, loader)
 }
 
 var validatePostDetailPublic = func(db *gorm.DB, id uint) error {
