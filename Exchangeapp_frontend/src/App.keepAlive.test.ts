@@ -26,6 +26,14 @@ vi.mock('./components/composer/PostPublishStatus.vue', () => ({
   },
 }));
 
+vi.mock('./components/onboarding/OnboardingDialog.vue', () => ({
+  default: {
+    name: 'OnboardingDialog',
+    props: ['enabled'],
+    template: '<div data-onboarding-dialog :data-enabled="enabled" />',
+  },
+}));
+
 const HomeProbe = defineComponent({
   name: 'HomeView',
   template: '<main data-home-marker><img data-home-image src="/avatar.webp" /></main>',

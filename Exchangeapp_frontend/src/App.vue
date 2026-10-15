@@ -57,6 +57,7 @@
       />
     </AppShell>
   </RouterView>
+  <OnboardingDialog :enabled="route.meta.layout !== 'auth'" />
 </template>
 
 <script setup lang="ts">
@@ -64,6 +65,7 @@ import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import AppShell from './components/layout/AppShell.vue';
 import PostPublishStatus from './components/composer/PostPublishStatus.vue';
+import OnboardingDialog from './components/onboarding/OnboardingDialog.vue';
 import {
   getExternalProfileCacheKey,
   getHistoryReturnCacheKey,
