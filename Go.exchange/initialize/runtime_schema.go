@@ -216,11 +216,26 @@ var postSchemaObjectCanaries = []schemaObjectCanary{
 			"fk_user_post_reco_states_post",
 		},
 	},
+	{
+		Table: "user_onboardings",
+		Constraints: []string{
+			"fk_user_onboardings_user",
+			"chk_user_onboardings_current_step",
+		},
+		Indexes: []string{"user_onboardings_pkey"},
+	},
+	{
+		Table:       "user_onboarding_interests",
+		Constraints: []string{"fk_user_onboarding_interests_user"},
+		Indexes:     []string{"user_onboarding_interests_pkey"},
+	},
 }
 
 var apiSchemaModels = []interface{}{
 	&models.User{},
 	&models.UserFollow{},
+	&models.UserOnboarding{},
+	&models.UserOnboardingInterest{},
 	&models.Post{},
 	&models.PostMedia{},
 	&models.PostMediaUpload{},

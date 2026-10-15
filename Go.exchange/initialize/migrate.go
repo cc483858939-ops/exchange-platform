@@ -38,6 +38,8 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 			&models.User{},
 			&models.UserFollow{},
 			&models.UserMute{},
+			&models.UserOnboarding{},
+			&models.UserOnboardingInterest{},
 			&models.Post{},
 			&models.PostMedia{},
 			&models.PostMediaUpload{},
@@ -97,6 +99,9 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 			return err
 		}
 		if err := applyUserMuteConstraints(tx); err != nil {
+			return err
+		}
+		if err := applyUserOnboardingConstraints(tx); err != nil {
 			return err
 		}
 		if err := applyPostRepostConstraints(tx); err != nil {
@@ -405,6 +410,21 @@ func applyUserMuteConstraints(tx *gorm.DB) error {
 	}
 	if err := applyMigrationStatements(tx, "apply user mute constraint", statements); err != nil {
 		return fmt.Errorf("apply user mute constraint: %w", err)
+	}
+	return nil
+}
+
+func applyUserOnboardingConstraints(tx *gorm.DB) error {
+	statements := []string{
+		"ALTER TABLE user_onboardings DROP CONSTRAINT IF EXISTS fk_user_onboardings_user",
+		"ALTER TABLE user_onboardings ADD CONSTRAINT fk_user_onboardings_user FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE user_onboardings DROP CONSTRAINT IF EXISTS chk_user_onboardings_current_step",
+		"ALTER TABLE user_onboardings ADD CONSTRAINT chk_user_onboardings_current_step CHECK (current_step IN ('avatar', 'display_name', 'interests', 'follow_users'))",
+		"ALTER TABLE user_onboarding_interests DROP CONSTRAINT IF EXISTS fk_user_onboarding_interests_user",
+		"ALTER TABLE user_onboarding_interests ADD CONSTRAINT fk_user_onboarding_interests_user FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
+	}
+	if err := applyMigrationStatements(tx, "apply user onboarding constraints", statements); err != nil {
+		return fmt.Errorf("apply user onboarding constraints: %w", err)
 	}
 	return nil
 }

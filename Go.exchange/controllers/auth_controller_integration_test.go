@@ -90,7 +90,7 @@ func TestRegisterStoresSubmittedPasswordIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserOnboarding{}, &models.UserOnboardingInterest{}); err != nil {
 		t.Fatal(err)
 	}
 	userLikeInit := &userLikeInitializerSpy{}
@@ -142,6 +142,79 @@ func TestRegisterStoresSubmittedPasswordIntegration(t *testing.T) {
 	if len(userLikeInit.userIDs) != 1 || userLikeInit.userIDs[0] != user.ID {
 		t.Fatalf("User Like initializer IDs=%v want [%d]", userLikeInit.userIDs, user.ID)
 	}
+	var onboarding models.UserOnboarding
+	if err := db.Where("user_id = ?", user.ID).Take(&onboarding).Error; err != nil {
+		t.Fatalf("load registered user's onboarding state: %v", err)
+	}
+	if onboarding.CurrentStep != models.UserOnboardingStepAvatar || onboarding.CompletedAt != nil {
+		t.Fatalf("unexpected initial onboarding state: %+v", onboarding)
+	}
+	var interestCount int64
+	if err := db.Model(&models.UserOnboardingInterest{}).Where("user_id = ?", user.ID).Count(&interestCount).Error; err != nil || interestCount != 0 {
+		t.Fatalf("initial onboarding interests=%d err=%v", interestCount, err)
+	}
+	duplicateRecorder := httptest.NewRecorder()
+	duplicateCtx, _ := gin.CreateTestContext(duplicateRecorder)
+	duplicateCtx.Request = httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewReader(payload))
+	duplicateCtx.Request.Header.Set("Content-Type", "application/json")
+	controller.Register(duplicateCtx)
+	if duplicateRecorder.Code != http.StatusConflict {
+		t.Fatalf("duplicate username status=%d body=%s", duplicateRecorder.Code, duplicateRecorder.Body.String())
+	}
+	assertAuthError(t, duplicateRecorder, "AUTH_USERNAME_UNAVAILABLE")
+}
+
+func TestRegisterOnboardingInitializationFailureRollsBackUserIntegration(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
+	}
+	db, err := testdb.Open(t, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := db.Begin()
+	if tx.Error != nil {
+		t.Fatal(tx.Error)
+	}
+	t.Cleanup(func() { tx.Rollback() })
+	schema := "register_onboarding_failure_" + uuid.NewString()
+	if err := tx.Exec("CREATE SCHEMA \"" + schema + "\"").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Exec("SET LOCAL search_path TO \"" + schema + "\", public").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.AutoMigrate(&models.User{}); err != nil {
+		t.Fatal(err)
+	}
+	initializer := &userLikeInitializerSpy{}
+	tokens := &authTokenServiceSpy{}
+	controller, err := NewAuthController(tx, tokens, allowAllAttemptLimiter{}, initializer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	username := "onboarding-init-fail-" + uuid.NewString()
+	payload, err := json.Marshal(map[string]string{"username": username, "password": "secret123"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewReader(payload))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	controller.Register(ctx)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("registration status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	assertAuthError(t, recorder, "AUTH_ONBOARDING_INIT_FAILED")
+	if len(initializer.userIDs) != 0 || tokens.issueCalls != 0 {
+		t.Fatalf("continued registration after onboarding initialization failure: like=%v tokenCalls=%d", initializer.userIDs, tokens.issueCalls)
+	}
+	var userCount int64
+	if err := tx.Model(&models.User{}).Where("username = ?", username).Count(&userCount).Error; err != nil || userCount != 0 {
+		t.Fatalf("failed registration left user count=%d err=%v", userCount, err)
+	}
 }
 
 func TestRegisterRedisInitializationFailureRollsBackUserIntegration(t *testing.T) {
@@ -153,7 +226,7 @@ func TestRegisterRedisInitializationFailureRollsBackUserIntegration(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserOnboarding{}, &models.UserOnboardingInterest{}); err != nil {
 		t.Fatal(err)
 	}
 	username := "register-like-fail-" + uuid.NewString()
@@ -181,6 +254,13 @@ func TestRegisterRedisInitializationFailureRollsBackUserIntegration(t *testing.T
 	var user models.User
 	if err := db.Unscoped().Where("username = ?", username).First(&user).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("failed registration left User=%#v err=%v", user, err)
+	}
+	if len(initializer.userIDs) != 1 {
+		t.Fatalf("User Like initializer IDs=%v want one attempted user", initializer.userIDs)
+	}
+	var onboarding models.UserOnboarding
+	if err := db.Where("user_id = ?", initializer.userIDs[0]).Take(&onboarding).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("failed registration left onboarding state=%+v err=%v", onboarding, err)
 	}
 }
 

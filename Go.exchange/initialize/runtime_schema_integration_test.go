@@ -135,6 +135,9 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	if err := applyPostBehaviorConstraints(tx); err != nil {
 		t.Fatalf("apply PostBehavior constraints: %v", err)
 	}
+	if err := applyUserOnboardingConstraints(tx); err != nil {
+		t.Fatalf("apply user onboarding constraints: %v", err)
+	}
 	if err := applyRecommendationProfileMaterializationSchema(tx); err != nil {
 		t.Fatalf("apply UserPostRecoState constraints: %v", err)
 	}

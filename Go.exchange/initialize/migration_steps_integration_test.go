@@ -55,8 +55,57 @@ func TestMigrationStepsSkipRepeatedDDLAndRepairCatalogDriftIntegration(t *testin
 	}
 	firstElapsed, firstDDL := time.Since(firstStart), len(observer.statements)
 	var steps int64
-	if err := tx.Model(&models.MigrationStep{}).Count(&steps).Error; err != nil || steps != 24 {
+	if err := tx.Model(&models.MigrationStep{}).Count(&steps).Error; err != nil || steps != 25 {
 		t.Fatalf("steps=%d err=%v", steps, err)
+	}
+	user := models.User{Username: "onboarding-constraints-" + fmt.Sprint(time.Now().UnixNano()), Password: "unused"}
+	if err := tx.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	invalidStepUser := models.User{Username: user.Username + "-invalid-step", Password: "unused"}
+	if err := tx.Create(&invalidStepUser).Error; err != nil {
+		t.Fatal(err)
+	}
+	onboarding := models.UserOnboarding{UserID: user.ID, CurrentStep: models.UserOnboardingStepAvatar}
+	if err := tx.Create(&onboarding).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Create(&models.UserOnboardingInterest{UserID: user.ID, TopicSlug: "ai"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for name, create := range map[string]func(*gorm.DB) error{
+		"duplicate onboarding": func(nested *gorm.DB) error {
+			return nested.Create(&models.UserOnboarding{UserID: user.ID, CurrentStep: models.UserOnboardingStepAvatar}).Error
+		},
+		"invalid step": func(nested *gorm.DB) error {
+			return nested.Create(&models.UserOnboarding{UserID: invalidStepUser.ID, CurrentStep: "invalid"}).Error
+		},
+		"duplicate interest": func(nested *gorm.DB) error {
+			return nested.Create(&models.UserOnboardingInterest{UserID: user.ID, TopicSlug: "ai"}).Error
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := tx.Transaction(create)
+			if err == nil {
+				t.Fatal("database constraint did not reject fixture")
+			}
+		})
+	}
+	if err := tx.Unscoped().Delete(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Unscoped().Delete(&invalidStepUser).Error; err != nil {
+		t.Fatal(err)
+	}
+	var onboardingRows, interestRows int64
+	if err := tx.Model(&models.UserOnboarding{}).Where("user_id = ?", user.ID).Count(&onboardingRows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Model(&models.UserOnboardingInterest{}).Where("user_id = ?", user.ID).Count(&interestRows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if onboardingRows != 0 || interestRows != 0 {
+		t.Fatalf("user delete left onboarding rows=%d interests=%d", onboardingRows, interestRows)
 	}
 	observer.statements = nil
 	repeatStart := time.Now()

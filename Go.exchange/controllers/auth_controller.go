@@ -19,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
 	ginjson "github.com/gin-gonic/gin/codec/json"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
 
@@ -67,6 +68,8 @@ type userLikeInitCompensator interface {
 }
 
 var errRegistrationUserLikeInit = errors.New("initialize registration user like state")
+var errRegistrationOnboardingInit = errors.New("initialize registration onboarding state")
+var errRegistrationUsernameConflict = errors.New("registration username conflict")
 
 const authRequestMaxBodyBytes int64 = 16 << 10
 
@@ -118,7 +121,13 @@ func (c *AuthController) Register(ctx *gin.Context) {
 	userLikeInitAttempted := false
 	err = c.db.WithContext(requestCtx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&user).Error; err != nil {
+			if isRegistrationUniqueViolation(err) {
+				return fmt.Errorf("%w: %w", errRegistrationUsernameConflict, err)
+			}
 			return err
+		}
+		if err := tx.Create(&models.UserOnboarding{UserID: user.ID, CurrentStep: models.UserOnboardingStepAvatar}).Error; err != nil {
+			return fmt.Errorf("%w: %w", errRegistrationOnboardingInit, err)
 		}
 		userLikeInitAttempted = true
 		if err := c.userLikeInit.InitializeUserEmpty(requestCtx, user.ID); err != nil {
@@ -136,10 +145,23 @@ func (c *AuthController) Register(ctx *gin.Context) {
 			writeAuthError(ctx, http.StatusServiceUnavailable, "AUTH_LIKE_STATE_UNAVAILABLE", "Registration is temporarily unavailable")
 			return
 		}
+		if errors.Is(err, errRegistrationOnboardingInit) {
+			if handleRequestDBError(ctx, err) {
+				return
+			}
+			log.Printf("[AuthRegister] initialize onboarding state user=%d: %v", user.ID, err)
+			writeAuthError(ctx, http.StatusInternalServerError, "AUTH_ONBOARDING_INIT_FAILED", "Registration could not be completed")
+			return
+		}
+		if errors.Is(err, errRegistrationUsernameConflict) {
+			writeAuthError(ctx, http.StatusConflict, "AUTH_USERNAME_UNAVAILABLE", "Username is unavailable")
+			return
+		}
 		if handleRequestDBError(ctx, err) {
 			return
 		}
-		writeAuthError(ctx, http.StatusConflict, "AUTH_USERNAME_UNAVAILABLE", "Username is unavailable")
+		log.Printf("[AuthRegister] create user: %v", err)
+		writeAuthError(ctx, http.StatusInternalServerError, "AUTH_INTERNAL", "Registration could not be completed")
 		return
 	}
 
@@ -149,6 +171,14 @@ func (c *AuthController) Register(ctx *gin.Context) {
 		return
 	}
 	writeAuthResponse(ctx, pair, user)
+}
+
+func isRegistrationUniqueViolation(err error) bool {
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return true
+	}
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 func (c *AuthController) cleanupRolledBackUserLikeInitialization(ctx context.Context, userID uint) {
