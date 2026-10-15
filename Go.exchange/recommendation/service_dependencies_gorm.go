@@ -2,6 +2,7 @@ package recommendation
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/go-redis/redis/v7"
 	"gorm.io/gorm"
@@ -19,6 +20,9 @@ func NewGormServiceDependencies(db *gorm.DB, redisClient *redis.Client) (Service
 	if err != nil {
 		return ServiceDependencies{}, err
 	}
+	if err := candidates.validateOnboardingInterestSourceSchema(); err != nil {
+		return ServiceDependencies{}, fmt.Errorf("validate onboarding-interest recommendation schema: %w", err)
+	}
 	profiles, err := NewGormProfileRepository(db)
 	if err != nil {
 		return ServiceDependencies{}, err
@@ -35,7 +39,9 @@ func NewGormServiceDependencies(db *gorm.DB, redisClient *redis.Client) (Service
 		return ServiceDependencies{}, err
 	}
 	return ServiceDependencies{
-		DataDependencies: DataDependencies{Candidates: candidates, Profiles: profiles, History: history},
-		ServingVersions:  versionProvider,
+		DataDependencies: DataDependencies{
+			Candidates: candidates, Profiles: profiles, History: history, OnboardingInterests: candidates,
+		},
+		ServingVersions: versionProvider,
 	}, nil
 }

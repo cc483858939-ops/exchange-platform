@@ -40,21 +40,27 @@ func RankCandidates(profile ProfileFeatures, candidates []RankedCandidate, now t
 		if cfg.Language.Enabled {
 			languageAffinity, languageComponent = ScoreLanguage(candidate.Post.Language, languageContext.Combined, cfg.Language)
 		}
+		onboardingInterestComponent := 0.0
+		if candidate.Candidate.FromOnboardingInterest {
+			onboardingInterestComponent = onboardingInterestMaxBoost * ClampUnit(profile.OnboardingInterestStrength)
+		}
 		candidate.IsInNetwork = followed
 		candidate.IsNovelAuthor = !candidate.IsInNetwork && interactionAffinity <= 0
 		candidate.Breakdown = ScoreBreakdown{
 			PositiveSemantic: positiveSemantic, NegativeSemantic: negativeSemantic, NegativeConfidence: negativeConfidence,
 			InteractionAffinity: interactionAffinity, FollowingBonusApplied: followingBonus,
-			SemanticComponent:       cfg.SemanticWeight * semanticRaw,
-			TrendingComponent:       cfg.TrendingWeight * trendingRaw,
-			AuthorAffinityComponent: cfg.AuthorAffinityWeight * authorScore,
-			LanguageAffinity:        languageAffinity,
-			LanguageComponent:       languageComponent,
+			SemanticComponent:           cfg.SemanticWeight * semanticRaw,
+			TrendingComponent:           cfg.TrendingWeight * trendingRaw,
+			AuthorAffinityComponent:     cfg.AuthorAffinityWeight * authorScore,
+			OnboardingInterestComponent: onboardingInterestComponent,
+			LanguageAffinity:            languageAffinity,
+			LanguageComponent:           languageComponent,
 		}
 		candidate.Breakdown.BaseScore = candidate.Breakdown.SemanticComponent +
 			candidate.Breakdown.TrendingComponent +
 			candidate.Breakdown.AuthorAffinityComponent +
-			candidate.Breakdown.LanguageComponent
+			candidate.Breakdown.LanguageComponent +
+			candidate.Breakdown.OnboardingInterestComponent
 		candidate.Breakdown.FinalScore = candidate.Breakdown.BaseScore
 		candidate.ExplorationSemantic = explorationSemantic(*candidate, profile, cfg)
 	}

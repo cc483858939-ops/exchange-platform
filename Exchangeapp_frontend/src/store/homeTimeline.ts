@@ -748,6 +748,22 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     }
   };
 
+  const refreshForYouAfterOnboarding = (expectedViewerID: number) => {
+    const expectedID = normalizeID(expectedViewerID);
+    const authenticatedID = normalizeID(authStore.currentIdentity?.id);
+    if (
+      expectedID === null
+      || expectedID !== authenticatedID
+      || !authStore.isAuthenticated
+      || activeTab.value !== 'for-you'
+    ) return false;
+
+    if (viewerID.value !== expectedID) setViewer(expectedID);
+    resetForYou();
+    void loadForYou();
+    return true;
+  };
+
   const loadMoreForYou = async () => {
     const capturedAudience = currentForYouAudience();
     if (
@@ -1380,6 +1396,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     setScrollTop,
     requestHomeReselect,
     loadForYou,
+    refreshForYouAfterOnboarding,
     loadMoreForYou,
     retryForYouLoadMore,
     loadFollowing,

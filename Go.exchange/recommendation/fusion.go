@@ -54,6 +54,7 @@ func FuseCandidates(limit int, cfg FusionConfig, lists ...CandidateSet) []Candid
 			}
 
 			current := &fused[candidateIndex]
+			current.FromOnboardingInterest = current.FromOnboardingInterest || candidate.FromOnboardingInterest
 			if recordRecallSource(current, list.Source, index+1, candidate.PositiveSemanticSimilarity) {
 				current.FusionScore += 1.0 / (float64(rankConstant) + float64(index+1))
 			}
@@ -89,6 +90,7 @@ func MergeCandidates(limit int, sources ...[]Candidate) []Candidate {
 				current.FromFollowing = current.FromFollowing || candidate.FromFollowing
 				current.FromRecent = current.FromRecent || candidate.FromRecent
 				current.FromTrending = current.FromTrending || candidate.FromTrending
+				current.FromOnboardingInterest = current.FromOnboardingInterest || candidate.FromOnboardingInterest
 				current.SemanticRank = minNonZeroRank(current.SemanticRank, candidate.SemanticRank)
 				current.FollowingRank = minNonZeroRank(current.FollowingRank, candidate.FollowingRank)
 				current.RecentRank = minNonZeroRank(current.RecentRank, candidate.RecentRank)

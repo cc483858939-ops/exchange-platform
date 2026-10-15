@@ -29,32 +29,36 @@ type ServeRequest struct {
 }
 
 type CandidateSetSummary struct {
-	Candidates     []Candidate
-	SemanticCount  int
-	FollowingCount int
-	RecentCount    int
-	RecentPostIDs  []uint
-	TrendingCount  int
+	Candidates                       []Candidate
+	SemanticCount                    int
+	FollowingCount                   int
+	RecentCount                      int
+	RecentPostIDs                    []uint
+	TrendingCount                    int
+	OnboardingInterestActive         bool
+	OnboardingInterestCandidateCount int
 }
 
 type ServeResult struct {
-	Viewer                Viewer
-	RequestID             string
-	Now                   time.Time
-	Limit                 int
-	EmbeddingVersion      string
-	Profile               Profile
-	LanguageContext       LanguageContext
-	CandidateSummary      CandidateSetSummary
-	FreshCandidateSummary CandidateSetSummary
-	RecallSets            []CandidateSetSummary
-	Selected              []SelectedCandidate
-	StrategyID            string
-	RankerConfigHash      string
-	PersonalizationMode   string
-	FallbackReason        string
-	Depleted              bool
-	Tracking              []TrackingFact
+	Viewer                           Viewer
+	RequestID                        string
+	Now                              time.Time
+	Limit                            int
+	EmbeddingVersion                 string
+	Profile                          Profile
+	LanguageContext                  LanguageContext
+	CandidateSummary                 CandidateSetSummary
+	FreshCandidateSummary            CandidateSetSummary
+	RecallSets                       []CandidateSetSummary
+	Selected                         []SelectedCandidate
+	StrategyID                       string
+	RankerConfigHash                 string
+	PersonalizationMode              string
+	FallbackReason                   string
+	OnboardingInterestActive         bool
+	OnboardingInterestCandidateCount int
+	Depleted                         bool
+	Tracking                         []TrackingFact
 }
 
 type Service interface {

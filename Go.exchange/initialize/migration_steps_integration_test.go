@@ -55,8 +55,12 @@ func TestMigrationStepsSkipRepeatedDDLAndRepairCatalogDriftIntegration(t *testin
 	}
 	firstElapsed, firstDDL := time.Since(firstStart), len(observer.statements)
 	var steps int64
-	if err := tx.Model(&models.MigrationStep{}).Count(&steps).Error; err != nil || steps != 25 {
+	if err := tx.Model(&models.MigrationStep{}).Count(&steps).Error; err != nil || steps != 26 {
 		t.Fatalf("steps=%d err=%v", steps, err)
+	}
+	if !tx.Migrator().HasColumn(&models.RecommendationResultTrace{}, "OnboardingInterestComponent") ||
+		!tx.Migrator().HasConstraint(&models.RecommendationResultTrace{}, "chk_recommendation_result_trace_onboarding_interest_component") {
+		t.Fatal("recommendation result trace is missing the onboarding-interest score contract")
 	}
 	user := models.User{Username: "onboarding-constraints-" + fmt.Sprint(time.Now().UnixNano()), Password: "unused"}
 	if err := tx.Create(&user).Error; err != nil {

@@ -28,6 +28,7 @@ type Candidate struct {
 	FromFollowing              bool
 	FromRecent                 bool
 	FromTrending               bool
+	FromOnboardingInterest     bool
 	WasSoftServed              bool
 	LastServedAt               time.Time
 }
@@ -38,27 +39,29 @@ type CandidateSet struct {
 }
 
 type ScoreBreakdown struct {
-	PositiveSemantic        float64
-	NegativeSemantic        float64
-	NegativeConfidence      float64
-	InteractionAffinity     float64
-	FollowingBonusApplied   float64
-	SemanticComponent       float64
-	TrendingComponent       float64
-	AuthorAffinityComponent float64
-	LanguageAffinity        float64
-	LanguageComponent       float64
-	DiversityPenalty        float64
-	BaseScore               float64
-	FinalScore              float64
+	PositiveSemantic            float64
+	NegativeSemantic            float64
+	NegativeConfidence          float64
+	InteractionAffinity         float64
+	FollowingBonusApplied       float64
+	SemanticComponent           float64
+	TrendingComponent           float64
+	AuthorAffinityComponent     float64
+	OnboardingInterestComponent float64
+	LanguageAffinity            float64
+	LanguageComponent           float64
+	DiversityPenalty            float64
+	BaseScore                   float64
+	FinalScore                  float64
 }
 
 type ProfileFeatures struct {
-	PositiveVector     []float32
-	NegativeVector     []float32
-	NegativeConfidence float64
-	AuthorAffinity     map[uint]float64
-	FollowingAuthorIDs map[uint]struct{}
+	PositiveVector             []float32
+	NegativeVector             []float32
+	NegativeConfidence         float64
+	OnboardingInterestStrength float64
+	AuthorAffinity             map[uint]float64
+	FollowingAuthorIDs         map[uint]struct{}
 }
 
 // RankedCandidate carries only data consumed by ranking and selection. Post

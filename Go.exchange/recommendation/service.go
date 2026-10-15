@@ -26,9 +26,10 @@ var (
 )
 
 type RecommendationService struct {
-	dependencies ServiceDependencies
-	config       ServiceConfig
-	metrics      Metrics
+	dependencies           ServiceDependencies
+	config                 ServiceConfig
+	metrics                Metrics
+	onboardingTopicSources map[string][]string
 }
 
 func NewService(dependencies ServiceDependencies, cfg ServiceConfig) (VerificationService, error) {
@@ -41,8 +42,24 @@ func NewService(dependencies ServiceDependencies, cfg ServiceConfig) (Verificati
 	if dependencies.Metrics == nil {
 		dependencies.Metrics = NoopMetrics{}
 	}
+	var onboardingTopicSources map[string][]string
+	if dependencies.OnboardingInterests != nil {
+		catalog, err := config.LoadCuratedTopics()
+		if err != nil {
+			return nil, fmt.Errorf("load curated topics for onboarding recommendations: %w", err)
+		}
+		onboardingTopicSources = make(map[string][]string, len(catalog.Topics))
+		for _, topic := range catalog.Topics {
+			if topic.Enabled {
+				onboardingTopicSources[topic.Slug] = append([]string(nil), topic.SourceKeys...)
+			}
+		}
+	}
 	cfg.Tracking.SigningKey = append([]byte(nil), cfg.Tracking.SigningKey...)
-	return &RecommendationService{dependencies: dependencies, config: cfg, metrics: dependencies.Metrics}, nil
+	return &RecommendationService{
+		dependencies: dependencies, config: cfg, metrics: dependencies.Metrics,
+		onboardingTopicSources: onboardingTopicSources,
+	}, nil
 }
 
 func (service *RecommendationService) Serve(ctx context.Context, request ServeRequest) (output ServeResult, returnErr error) {
@@ -65,6 +82,11 @@ func (service *RecommendationService) Serve(ctx context.Context, request ServeRe
 			span.SetAttributes(
 				attribute.Int("recommendation.candidate_count", len(output.CandidateSummary.Candidates)),
 				attribute.Int("recommendation.result_count", len(output.Selected)),
+				attribute.Bool("interest_cold_start_active", output.OnboardingInterestActive),
+				attribute.Int("interest_candidate_count", output.OnboardingInterestCandidateCount),
+				attribute.Int("interest_boosted_result_count", countSelected(output.Selected, func(item SelectedCandidate) bool {
+					return item.Breakdown.OnboardingInterestComponent > 0
+				})),
 			)
 			finishRecommendationSpan(span, returnErr)
 			span.End()
@@ -237,6 +259,21 @@ func (service *RecommendationService) executeUser(ctx context.Context, request S
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
+	interestContext := onboardingInterestContext{}
+	if repository := service.dependencies.OnboardingInterests; repository != nil &&
+		onboardingInterestStrength(profile.PersonalizedSignalCount) > 0 && len(service.onboardingTopicSources) > 0 {
+		slugs, interestErr := repository.LoadOnboardingInterestSlugs(
+			ctx, request.Viewer.UserID, enabledOnboardingTopicSlugs(service.onboardingTopicSources),
+		)
+		if interestErr != nil {
+			return result, fmt.Errorf("load onboarding interests for recommendation user %d: %w", request.Viewer.UserID, interestErr)
+		}
+		interestContext.sourceKeys = onboardingSourceKeys(slugs, service.onboardingTopicSources)
+		if len(interestContext.sourceKeys) > 0 {
+			interestContext.strength = onboardingInterestStrength(profile.PersonalizedSignalCount)
+			profile.OnboardingInterestStrength = interestContext.strength
+		}
+	}
 	languageContext := BuildLanguageContext(
 		request.BrowserLanguage,
 		LanguagePrior{ZH: profile.LanguageZHWeight, JA: profile.LanguageJAWeight, EN: profile.LanguageENWeight},
@@ -246,7 +283,7 @@ func (service *RecommendationService) executeUser(ctx context.Context, request S
 	loadedAuthors := make(map[uint]struct{})
 	freshSet, err := buildCandidateSet(
 		ctx, service.dependencies.Candidates, servingVersion, request.Viewer.UserID,
-		profile, served, request.Now, service.config.Recommendation, false,
+		profile, served, request.Now, service.config.Recommendation, false, interestContext,
 	)
 	if err != nil {
 		return result, err
@@ -278,7 +315,7 @@ func (service *RecommendationService) executeUser(ctx context.Context, request S
 		}
 		softSet, softErr := buildCandidateSet(
 			ctx, service.dependencies.Candidates, servingVersion, request.Viewer.UserID,
-			profile, served, request.Now, service.config.Recommendation, true,
+			profile, served, request.Now, service.config.Recommendation, true, interestContext,
 		)
 		if softErr != nil {
 			return result, softErr
@@ -306,6 +343,8 @@ func (service *RecommendationService) executeUser(ctx context.Context, request S
 	result.LanguageContext = languageContext
 	result.CandidateSummary = finalSet
 	result.FreshCandidateSummary = freshSet
+	result.OnboardingInterestActive = freshSet.OnboardingInterestActive
+	result.OnboardingInterestCandidateCount = freshSet.OnboardingInterestCandidateCount
 	result.Selected = selected
 	return result, nil
 }

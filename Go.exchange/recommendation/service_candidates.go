@@ -3,13 +3,74 @@ package recommendation
 import (
 	"context"
 	"errors"
+	"sort"
 	"time"
 
 	"Go.exchange/config"
 	"go.opentelemetry.io/otel/attribute"
 )
 
-func buildCandidateSet(ctx context.Context, repository CandidateRepository, servingVersion string, userID uint, profile Profile, served ServedHistory, now time.Time, cfg config.RecommendationConfig, softOnly bool) (CandidateSetSummary, error) {
+const (
+	onboardingInterestSignalLimit = 8
+	onboardingInterestMaxBoost    = 0.4
+	onboardingInterestMaxBudget   = 40
+)
+
+type onboardingInterestContext struct {
+	sourceKeys []string
+	strength   float64
+}
+
+func onboardingInterestStrength(signalCount int) float64 {
+	if signalCount >= onboardingInterestSignalLimit {
+		return 0
+	}
+	if signalCount <= 0 {
+		return 1
+	}
+	return 1 - float64(signalCount)/onboardingInterestSignalLimit
+}
+
+func onboardingSourceKeys(slugs []string, topicSources map[string][]string) []string {
+	seen := make(map[string]struct{})
+	keys := make([]string, 0)
+	for _, slug := range slugs {
+		for _, key := range topicSources[slug] {
+			if key == "" {
+				continue
+			}
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func enabledOnboardingTopicSlugs(topicSources map[string][]string) []string {
+	slugs := make([]string, 0, len(topicSources))
+	for slug := range topicSources {
+		slugs = append(slugs, slug)
+	}
+	sort.Strings(slugs)
+	return slugs
+}
+
+func onboardingInterestCandidateBudget(recentLimit int) int {
+	if recentLimit <= 0 {
+		return 0
+	}
+	budget := recentLimit / 4
+	if budget > onboardingInterestMaxBudget {
+		budget = onboardingInterestMaxBudget
+	}
+	return budget
+}
+
+func buildCandidateSet(ctx context.Context, repository CandidateRepository, servingVersion string, userID uint, profile Profile, served ServedHistory, now time.Time, cfg config.RecommendationConfig, softOnly bool, onboarding ...onboardingInterestContext) (CandidateSetSummary, error) {
 	phase := phaseName(softOnly)
 	ctx, span := startRecommendationSpan(ctx, "recommendation.recall", attribute.String("recommendation.phase", phase))
 	defer span.End()
@@ -28,6 +89,16 @@ func buildCandidateSet(ctx context.Context, repository CandidateRepository, serv
 		Served: served, SoftOnly: softOnly,
 		MaterializedInteractionsReady: profile.MaterializedInteractionsReady,
 		InteractedPostIDs:             profile.InteractedPostIDs,
+	}
+	interest := onboardingInterestContext{}
+	if len(onboarding) > 0 {
+		interest = onboarding[0]
+	}
+	if interest.strength > 0 {
+		query.OnboardingInterestLimit = onboardingInterestCandidateBudget(caps.Recent)
+		if query.OnboardingInterestLimit > 0 {
+			query.OnboardingInterestSourceKeys = append([]string(nil), interest.sourceKeys...)
+		}
 	}
 	query.Limit = caps.Semantic
 	semantic, err := loadRecommendationCandidates(ctx, "recommendation.recall.semantic", "semantic", phase, func(stageCtx context.Context) ([]Candidate, error) {
@@ -79,10 +150,18 @@ func buildCandidateSet(ctx context.Context, repository CandidateRepository, serv
 			merged[index].WasSoftServed = softOnly && item.Soft && !item.Hard
 		}
 	}
+	interestCandidateCount := 0
+	for _, candidate := range recent {
+		if candidate.FromOnboardingInterest {
+			interestCandidateCount++
+		}
+	}
 	span.SetAttributes(attribute.Int("recommendation.candidate_count", len(merged)))
 	return CandidateSetSummary{
 		Candidates: merged, SemanticCount: len(semantic), FollowingCount: len(following),
 		RecentCount: len(recent), RecentPostIDs: CandidatePostIDs(recent), TrendingCount: len(trending),
+		OnboardingInterestActive:         len(query.OnboardingInterestSourceKeys) > 0,
+		OnboardingInterestCandidateCount: interestCandidateCount,
 	}, nil
 }
 
@@ -153,13 +232,22 @@ func mergeCandidateSets(first, second CandidateSetSummary, mergedLimit int) Cand
 		seenRecent[postID] = struct{}{}
 		recentPostIDs = append(recentPostIDs, postID)
 	}
+	mergedCandidates := MergeCandidates(mergedLimit, first.Candidates, second.Candidates)
+	interestCount := 0
+	for _, candidate := range mergedCandidates {
+		if candidate.FromOnboardingInterest {
+			interestCount++
+		}
+	}
 	return CandidateSetSummary{
-		Candidates:     MergeCandidates(mergedLimit, first.Candidates, second.Candidates),
-		SemanticCount:  first.SemanticCount + second.SemanticCount,
-		FollowingCount: first.FollowingCount + second.FollowingCount,
-		RecentCount:    first.RecentCount + second.RecentCount,
-		RecentPostIDs:  recentPostIDs,
-		TrendingCount:  first.TrendingCount + second.TrendingCount,
+		Candidates:                       mergedCandidates,
+		SemanticCount:                    first.SemanticCount + second.SemanticCount,
+		FollowingCount:                   first.FollowingCount + second.FollowingCount,
+		RecentCount:                      first.RecentCount + second.RecentCount,
+		RecentPostIDs:                    recentPostIDs,
+		TrendingCount:                    first.TrendingCount + second.TrendingCount,
+		OnboardingInterestActive:         first.OnboardingInterestActive || second.OnboardingInterestActive,
+		OnboardingInterestCandidateCount: interestCount,
 	}
 }
 
@@ -292,7 +380,8 @@ func languageConfig(cfg config.RecommendationConfig) LanguageConfig {
 func profileFeatures(profile Profile) ProfileFeatures {
 	return ProfileFeatures{
 		PositiveVector: profile.PositiveVector, NegativeVector: profile.NegativeVector,
-		NegativeConfidence: profile.NegativeConfidence, AuthorAffinity: profile.AuthorAffinity,
+		NegativeConfidence: profile.NegativeConfidence, OnboardingInterestStrength: profile.OnboardingInterestStrength,
+		AuthorAffinity:     profile.AuthorAffinity,
 		FollowingAuthorIDs: profile.FollowingAuthorIDs,
 	}
 }

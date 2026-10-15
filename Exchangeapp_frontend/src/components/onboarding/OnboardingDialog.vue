@@ -95,11 +95,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import type { ComponentPublicInstance } from 'vue';
+import { useRoute } from 'vue-router';
 import OnboardingAvatarStep from './OnboardingAvatarStep.vue';
 import OnboardingDisplayNameStep from './OnboardingDisplayNameStep.vue';
 import OnboardingInterestsStep from './OnboardingInterestsStep.vue';
 import OnboardingFollowStep from './OnboardingFollowStep.vue';
 import { useAuthStore } from '../../store/auth';
+import { useHomeTimelineStore } from '../../store/homeTimeline';
 import { useOnboardingStore } from '../../store/onboarding';
 
 const props = defineProps<{ enabled: boolean }>();
@@ -111,7 +113,9 @@ type StepControls = ComponentPublicInstance & {
 };
 
 const authStore = useAuthStore();
+const homeTimeline = useHomeTimelineStore();
 const onboarding = useOnboardingStore();
+const route = useRoute();
 const dialogElement = ref<HTMLDialogElement | null>(null);
 const stepController = ref<StepControls | null>(null);
 
@@ -156,6 +160,13 @@ const canAdvance = computed(() => stepController.value?.canAdvance !== false);
 const statusUnavailable = computed(() => onboarding.status === null && Boolean(onboarding.error));
 const sessionKey = computed(() => `${onboarding.currentViewerID ?? 'none'}:${authStore.sessionVersion}`);
 const isVisible = computed(() => props.enabled && onboarding.isOpen);
+
+watch(() => onboarding.status, (next, previous) => {
+  if (previous?.completed !== false || next?.completed !== true || next.interest_slugs.length === 0) return;
+  if (route.name !== 'Home' || route.query.tab === 'following' || homeTimeline.activeTab !== 'for-you') return;
+  const viewerID = onboarding.currentViewerID;
+  if (viewerID !== null) homeTimeline.refreshForYouAfterOnboarding(viewerID);
+}, { flush: 'sync' });
 
 watch(
   [() => props.enabled, () => authStore.isAuthenticated, () => authStore.currentIdentity?.id, () => authStore.sessionVersion],

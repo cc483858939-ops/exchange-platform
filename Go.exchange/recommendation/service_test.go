@@ -28,19 +28,20 @@ func (provider serviceTestVersionProvider) LoadServingVersion(context.Context) (
 }
 
 type serviceTestCandidateRepository struct {
-	calls        *[]string
-	semantic     []Candidate
-	following    []Candidate
-	recent       []Candidate
-	trending     []Candidate
-	publicRecent []Candidate
-	publicTrend  []Candidate
-	softRecent   []Candidate
-	posts        map[uint]models.Post
-	loadErr      error
-	hydrateErr   error
-	publicCalls  int
-	softQueries  int
+	calls         *[]string
+	semantic      []Candidate
+	following     []Candidate
+	recent        []Candidate
+	trending      []Candidate
+	publicRecent  []Candidate
+	publicTrend   []Candidate
+	softRecent    []Candidate
+	posts         map[uint]models.Post
+	loadErr       error
+	hydrateErr    error
+	publicCalls   int
+	softQueries   int
+	recentQueries []CandidateQuery
 }
 
 func (repository *serviceTestCandidateRepository) addCall(value string) {
@@ -59,6 +60,7 @@ func (repository *serviceTestCandidateRepository) LoadFollowingCandidates(contex
 }
 func (repository *serviceTestCandidateRepository) LoadRecentCandidates(_ context.Context, query CandidateQuery) ([]Candidate, error) {
 	repository.addCall("recent")
+	repository.recentQueries = append(repository.recentQueries, query)
 	if query.SoftOnly {
 		repository.softQueries++
 		soft := make([]Candidate, 0, len(repository.softRecent))

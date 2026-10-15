@@ -28,6 +28,30 @@ func NewGormCandidateRepository(db *gorm.DB) (*GormCandidateRepository, error) {
 	return &GormCandidateRepository{db: db}, nil
 }
 
+func (r *GormCandidateRepository) validateOnboardingInterestSourceSchema() error {
+	if r == nil || r.db == nil {
+		return errors.New("recommendation candidate repository database is nil")
+	}
+	for _, table := range []interface{}{&models.DevDataMirrorAccount{}, &models.DevDataMirrorPost{}, &models.UserOnboardingInterest{}} {
+		if !r.db.Migrator().HasTable(table) {
+			return fmt.Errorf("onboarding-interest recommendation source table is missing: %T", table)
+		}
+	}
+	for _, required := range []struct {
+		model interface{}
+		name  string
+	}{
+		{&models.DevDataMirrorAccount{}, "ucon_devdata_mirror_accounts_registry_key"},
+		{&models.DevDataMirrorPost{}, "ucon_devdata_mirror_posts_local_post"},
+		{&models.DevDataMirrorPost{}, "idx_devdata_mirror_posts_account_state"},
+	} {
+		if !r.db.Migrator().HasIndex(required.model, required.name) {
+			return fmt.Errorf("onboarding-interest recommendation source index is missing: %s", required.name)
+		}
+	}
+	return nil
+}
+
 func recommendationContextDB(ctx context.Context, db *gorm.DB) (*gorm.DB, error) {
 	if ctx == nil {
 		return nil, errors.New("recommendation repository context is nil")
@@ -212,7 +236,89 @@ func (r *GormCandidateRepository) LoadRecentCandidates(ctx context.Context, inpu
 		return nil, fmt.Errorf("load recent candidates: %w", err)
 	}
 	query := r.eligibilityQuery(db, db.Table("posts").Select("posts.id"), input)
-	return queryCandidateIDs(query.Order("posts.created_at DESC, posts.id DESC"), input.Limit, false, true)
+	ordinary, err := queryCandidateIDs(query.Order("posts.created_at DESC, posts.id DESC"), input.Limit, false, true)
+	if err != nil {
+		return nil, fmt.Errorf("load ordinary recent candidates: %w", err)
+	}
+	interestLimit := input.OnboardingInterestLimit
+	if maxBudget := onboardingInterestCandidateBudget(input.Limit); interestLimit > maxBudget {
+		interestLimit = maxBudget
+	}
+	if interestLimit <= 0 || len(input.OnboardingInterestSourceKeys) == 0 {
+		return ordinary, nil
+	}
+	interestQuery := r.onboardingInterestCandidateQuery(db, input)
+	interest, err := queryCandidateIDs(interestQuery.Order("posts.created_at DESC, posts.id DESC"), interestLimit, false, true)
+	if err != nil {
+		return nil, fmt.Errorf("load onboarding-interest recent candidates: %w", err)
+	}
+	for index := range interest {
+		interest[index].FromOnboardingInterest = true
+	}
+	return mergeRecentInterestCandidates(ordinary, interest, input.Limit), nil
+}
+
+func (r *GormCandidateRepository) onboardingInterestCandidateQuery(db *gorm.DB, input CandidateQuery) *gorm.DB {
+	query := db.Table("posts").Select("posts.id").
+		Joins("JOIN devdata_mirror_posts AS mp ON mp.local_post_id = posts.id").
+		Joins("JOIN devdata_mirror_accounts AS ma ON ma.id = mp.mirror_account_id").
+		Where("ma.registry_key IN ? AND ma.enabled = TRUE AND mp.state = ?",
+			input.OnboardingInterestSourceKeys, models.DevDataMirrorPostStateActive)
+	return r.eligibilityQuery(db, query, input)
+}
+
+func mergeRecentInterestCandidates(ordinary, interest []Candidate, limit int) []Candidate {
+	if limit <= 0 {
+		return nil
+	}
+	result := make([]Candidate, 0, min(limit, len(ordinary)+len(interest)))
+	positions := make(map[uint]int, len(ordinary)+len(interest))
+	for _, candidate := range interest {
+		if candidate.PostID == 0 {
+			continue
+		}
+		candidate.FromRecent = true
+		candidate.FromOnboardingInterest = true
+		if index, exists := positions[candidate.PostID]; exists {
+			result[index].FromOnboardingInterest = true
+			continue
+		}
+		positions[candidate.PostID] = len(result)
+		result = append(result, candidate)
+	}
+	for _, candidate := range ordinary {
+		if candidate.PostID == 0 {
+			continue
+		}
+		if index, exists := positions[candidate.PostID]; exists {
+			result[index].FromOnboardingInterest = result[index].FromOnboardingInterest || candidate.FromOnboardingInterest
+			continue
+		}
+		if len(result) >= limit {
+			break
+		}
+		candidate.FromRecent = true
+		positions[candidate.PostID] = len(result)
+		result = append(result, candidate)
+	}
+	return result
+}
+
+func (r *GormCandidateRepository) LoadOnboardingInterestSlugs(ctx context.Context, userID uint, enabledTopicSlugs []string) ([]string, error) {
+	if userID == 0 || len(enabledTopicSlugs) == 0 {
+		return nil, nil
+	}
+	db, err := recommendationContextDB(ctx, r.db)
+	if err != nil {
+		return nil, fmt.Errorf("load onboarding interests: %w", err)
+	}
+	var slugs []string
+	if err := db.Model(&models.UserOnboardingInterest{}).
+		Where("user_id = ? AND topic_slug IN ?", userID, enabledTopicSlugs).
+		Order("topic_slug ASC").Limit(len(enabledTopicSlugs)).Pluck("topic_slug", &slugs).Error; err != nil {
+		return nil, fmt.Errorf("load onboarding interests: %w", err)
+	}
+	return slugs, nil
 }
 
 func (r *GormCandidateRepository) LoadTrendingCandidates(ctx context.Context, input CandidateQuery) ([]Candidate, error) {

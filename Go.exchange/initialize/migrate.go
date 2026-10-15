@@ -128,6 +128,9 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 		if err := applyRecommendationTraceConstraints(tx); err != nil {
 			return err
 		}
+		if err := applyRecommendationOnboardingInterestTrace(tx); err != nil {
+			return err
+		}
 		if err := applyRecommendationExplorationConstraints(tx); err != nil {
 			return err
 		}
@@ -539,6 +542,18 @@ func applyRecommendationTraceConstraints(tx *gorm.DB) error {
 	}
 	if err := applyMigrationStatements(tx, "apply recommendation trace constraint", statements); err != nil {
 		return fmt.Errorf("apply recommendation trace constraint: %w", err)
+	}
+	return nil
+}
+
+func applyRecommendationOnboardingInterestTrace(tx *gorm.DB) error {
+	statements := []string{
+		"ALTER TABLE recommendation_result_traces ADD COLUMN IF NOT EXISTS onboarding_interest_component double precision NOT NULL DEFAULT 0",
+		"ALTER TABLE recommendation_result_traces DROP CONSTRAINT IF EXISTS chk_recommendation_result_trace_onboarding_interest_component",
+		"ALTER TABLE recommendation_result_traces ADD CONSTRAINT chk_recommendation_result_trace_onboarding_interest_component CHECK (onboarding_interest_component >= 0 AND onboarding_interest_component < 'Infinity'::double precision AND onboarding_interest_component <> 'NaN'::double precision)",
+	}
+	if err := applyMigrationStatements(tx, "apply recommendation onboarding-interest trace", statements); err != nil {
+		return fmt.Errorf("apply recommendation onboarding-interest trace: %w", err)
 	}
 	return nil
 }

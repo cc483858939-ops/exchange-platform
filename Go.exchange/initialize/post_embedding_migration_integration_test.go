@@ -29,14 +29,14 @@ func TestPostEmbeddingVectorDimensionsMigrationIntegration(t *testing.T) {
 	if err := db.Where("id = ?", runtimeSchemaStateID).Take(&runtimeState).Error; err != nil {
 		t.Fatalf("load published runtime schema state: %v", err)
 	}
-	if runtimeState.CurrentVersion != 18 || runtimeState.CompatibilityFloor != 14 {
-		t.Fatalf("runtime schema state current=%d floor=%d, want 18/14", runtimeState.CurrentVersion, runtimeState.CompatibilityFloor)
+	if runtimeState.CurrentVersion != 19 || runtimeState.CompatibilityFloor != 19 {
+		t.Fatalf("runtime schema state current=%d floor=%d, want 19/19", runtimeState.CurrentVersion, runtimeState.CompatibilityFloor)
 	}
 	if err := CheckRuntimeSchema(context.Background(), db, SchemaValidationOptions{RequiredVersion: 11}); SchemaReasonCode(err) != "schema_incompatible" {
 		t.Fatalf("schema 12 compatibility for required version 11: reason=%q err=%v, want schema_incompatible", SchemaReasonCode(err), err)
 	}
-	if err := CheckRuntimeSchema(context.Background(), db, SchemaValidationOptions{RequiredVersion: 14}); err != nil {
-		t.Fatalf("schema 14 rejected required version 14: %v", err)
+	if err := CheckRuntimeSchema(context.Background(), db, SchemaValidationOptions{RequiredVersion: RequiredSchemaVersion}); err != nil {
+		t.Fatalf("current schema rejected current binary: %v", err)
 	}
 	var primaryKeyDefinition string
 	if err := db.Raw("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'post_embeddings'::regclass AND conname = 'post_embeddings_pkey'").Scan(&primaryKeyDefinition).Error; err != nil {

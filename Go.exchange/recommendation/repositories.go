@@ -24,6 +24,8 @@ type CandidateQuery struct {
 	SoftOnly                      bool
 	MaterializedInteractionsReady bool
 	InteractedPostIDs             map[uint]struct{}
+	OnboardingInterestSourceKeys  []string
+	OnboardingInterestLimit       int
 }
 
 type PublicCandidateQuery struct {
@@ -44,6 +46,12 @@ type CandidateRepository interface {
 	LoadPublicTrendingCandidates(ctx context.Context, query PublicCandidateQuery) ([]Candidate, error)
 	HydrateCandidates(ctx context.Context, servingVersion string, candidates []Candidate, now time.Time) ([]RankedCandidate, error)
 	LoadPostEmbeddings(ctx context.Context, postIDs []uint, version string) (map[uint][]float32, error)
+}
+
+// OnboardingInterestRepository reads the bounded topic choices used by the
+// authenticated cold-start recommendation path.
+type OnboardingInterestRepository interface {
+	LoadOnboardingInterestSlugs(ctx context.Context, userID uint, enabledTopicSlugs []string) ([]string, error)
 }
 
 type Profile struct {
@@ -67,6 +75,7 @@ type Profile struct {
 	ProfileStatus                 string
 	ProfileAgeMS                  int64
 	MaterializedInteractionsReady bool
+	OnboardingInterestStrength    float64
 }
 
 func (profile Profile) PositiveContributionIDs() []uint {
@@ -161,9 +170,10 @@ type TraceRepository interface {
 }
 
 type DataDependencies struct {
-	Candidates CandidateRepository
-	Profiles   ProfileRepository
-	History    HistoryStore
+	Candidates          CandidateRepository
+	Profiles            ProfileRepository
+	History             HistoryStore
+	OnboardingInterests OnboardingInterestRepository
 }
 
 type ServiceDependencies struct {

@@ -54,7 +54,7 @@ func TestConsumerInboxCurrentSchemaAndRepeatedMigrationIntegration(t *testing.T)
 		t.Fatalf("event ID column width=%d err=%v", width, err)
 	}
 	var state models.RuntimeSchemaState
-	if err := tx.First(&state).Error; err != nil || state.CurrentVersion != PublishedSchemaCurrentVersion || state.CompatibilityFloor != 14 {
+	if err := tx.First(&state).Error; err != nil || state.CurrentVersion != PublishedSchemaCurrentVersion || state.CompatibilityFloor != PublishedSchemaCompatibilityFloor {
 		t.Fatalf("schema state=%+v err=%v", state, err)
 	}
 	var existing []models.ConsumerInbox

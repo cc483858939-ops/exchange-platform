@@ -363,6 +363,60 @@ describe('home timeline session store', () => {
     expect(store.forYou.loadMoreError).toBe(false);
   });
 
+  it('refreshes after onboarding without cancelling Like mutations or accepting an older response', async () => {
+    const store = useHomeTimelineStore();
+    const oldRecommendations = deferred<ReturnType<typeof recommendationPage>>();
+    const pendingLike = deferred<{ likes: number; liked: boolean }>();
+    mocks.getPostRecommendations
+      .mockReturnValueOnce(oldRecommendations.promise)
+      .mockResolvedValueOnce(recommendationPage([recommendation(9)]));
+    const oldRequest = store.loadForYou();
+
+    store.following.items = [feedPostFixture(47, 7)];
+    mocks.likePost.mockReturnValueOnce(pendingLike.promise);
+    const likeRequest = store.toggleLike(47);
+    expect(store.likePendingPostIds.has(47)).toBe(true);
+
+    expect(store.refreshForYouAfterOnboarding(7)).toBe(true);
+    await settle();
+    expect(mocks.getPostRecommendations).toHaveBeenCalledTimes(2);
+    expect(store.likePendingPostIds.has(47)).toBe(true);
+
+    oldRecommendations.resolve(recommendationPage([recommendation(1)]));
+    await oldRequest;
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([9]);
+
+    pendingLike.resolve({ likes: 1, liked: true });
+    await expect(likeRequest).resolves.toBe('succeeded');
+    expect(store.likePendingPostIds.has(47)).toBe(false);
+  });
+
+  it('does not refresh onboarding recommendations outside For You or for another viewer', () => {
+    const store = useHomeTimelineStore();
+    store.setActiveTab('following');
+    expect(store.refreshForYouAfterOnboarding(7)).toBe(false);
+    store.setActiveTab('for-you');
+    mocks.authStore!.currentIdentity = { id: 8 };
+    expect(store.refreshForYouAfterOnboarding(7)).toBe(false);
+    expect(mocks.getPostRecommendations).not.toHaveBeenCalled();
+  });
+
+  it('drops an onboarding refresh response after the viewer changes', async () => {
+    const store = useHomeTimelineStore();
+    const pending = deferred<ReturnType<typeof recommendationPage>>();
+    mocks.getPostRecommendations.mockReturnValueOnce(pending.promise);
+    expect(store.refreshForYouAfterOnboarding(7)).toBe(true);
+
+    mocks.authStore!.currentIdentity = { id: 8 };
+    store.setViewer(8);
+    pending.resolve(recommendationPage([recommendation(70)]));
+    await settle();
+
+    expect(store.viewerID).toBe(8);
+    expect(store.forYou.items).toHaveLength(0);
+    expect(store.refreshForYouAfterOnboarding(7)).toBe(false);
+  });
+
   it('stops after two successful no-progress pages', async () => {
     mocks.getPostRecommendations
       .mockResolvedValueOnce(recommendationPage([recommendation(1)]))

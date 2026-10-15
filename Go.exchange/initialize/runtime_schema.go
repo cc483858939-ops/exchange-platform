@@ -17,16 +17,16 @@ import (
 )
 
 // RequiredSchemaVersion is the schema version required by this binary.
-// Schema 18 adds durable initialization retries for newly created Posts.
-const RequiredSchemaVersion int64 = 18
+// Schema 19 persists the onboarding-interest scoring component in result traces.
+const RequiredSchemaVersion int64 = 19
 
 // PublishedSchemaCurrentVersion and PublishedSchemaCompatibilityFloor are
 // migration-owned values. They are deliberately separate from the binary's
 // required version so a migration can publish a compatibility interval that
 // spans more than one release.
 const (
-	PublishedSchemaCurrentVersion     int64 = 18
-	PublishedSchemaCompatibilityFloor int64 = 14
+	PublishedSchemaCurrentVersion     int64 = 19
+	PublishedSchemaCompatibilityFloor int64 = 19
 )
 
 const runtimeSchemaStateID uint = 1

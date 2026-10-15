@@ -7,12 +7,16 @@ import { reactive } from 'vue';
 const mocks = vi.hoisted(() => ({
   authStore: null as any,
   onboarding: null as any,
+  homeTimeline: null as any,
+  route: null as any,
   next: vi.fn(),
   skip: vi.fn(),
 }));
 
 vi.mock('../../store/auth', () => ({ useAuthStore: () => mocks.authStore }));
+vi.mock('../../store/homeTimeline', () => ({ useHomeTimelineStore: () => mocks.homeTimeline }));
 vi.mock('../../store/onboarding', () => ({ useOnboardingStore: () => mocks.onboarding }));
+vi.mock('vue-router', () => ({ useRoute: () => mocks.route }));
 
 vi.mock('./OnboardingAvatarStep.vue', async () => {
   const { defineComponent, h } = await import('vue');
@@ -71,6 +75,11 @@ beforeEach(() => {
     retry: vi.fn(),
     dismissTemporarily: vi.fn(),
   });
+  mocks.homeTimeline = reactive({
+    activeTab: 'for-you',
+    refreshForYouAfterOnboarding: vi.fn(),
+  });
+  mocks.route = reactive({ name: 'Home', query: {} });
   mocks.next.mockReset();
   mocks.skip.mockReset();
 });
@@ -112,6 +121,38 @@ describe('OnboardingDialog', () => {
     expect(document.body.textContent).toContain('Continue to app for now');
     await document.body.querySelector<HTMLButtonElement>('.onboarding-dialog__continue')!.click();
     expect(mocks.onboarding.dismissTemporarily).toHaveBeenCalledOnce();
+    wrapper.unmount();
+  });
+
+  it('refreshes For You only after confirmed completion with interests on Home', async () => {
+    const wrapper = mount(OnboardingDialog, { props: { enabled: true }, attachTo: document.body });
+    await flushPromises();
+
+    mocks.onboarding.status = { ...incompleteStatus(), completed: true, interest_slugs: ['ai'], completed_at: '2026-10-15T00:00:00Z' };
+    await wrapper.vm.$nextTick();
+    expect(mocks.homeTimeline.refreshForYouAfterOnboarding).toHaveBeenCalledOnce();
+    expect(mocks.homeTimeline.refreshForYouAfterOnboarding).toHaveBeenCalledWith(7);
+
+    mocks.homeTimeline.refreshForYouAfterOnboarding.mockClear();
+    mocks.onboarding.status = incompleteStatus();
+    mocks.route.name = 'CurrencyExchange';
+    mocks.onboarding.status = { ...incompleteStatus(), completed: true, interest_slugs: ['space'], completed_at: '2026-10-15T00:00:00Z' };
+    await wrapper.vm.$nextTick();
+    expect(mocks.homeTimeline.refreshForYouAfterOnboarding).not.toHaveBeenCalled();
+
+    mocks.route.name = 'Home';
+    mocks.homeTimeline.activeTab = 'for-you';
+    mocks.onboarding.status = incompleteStatus();
+    mocks.onboarding.status = { ...incompleteStatus(), completed: true, interest_slugs: [], completed_at: '2026-10-15T00:00:00Z' };
+    await wrapper.vm.$nextTick();
+    expect(mocks.homeTimeline.refreshForYouAfterOnboarding).not.toHaveBeenCalled();
+
+    mocks.onboarding.status = incompleteStatus();
+    mocks.route.query = { tab: 'following' };
+    mocks.homeTimeline.activeTab = 'following';
+    mocks.onboarding.status = { ...incompleteStatus(), completed: true, interest_slugs: ['ai'], completed_at: '2026-10-15T00:00:00Z' };
+    await wrapper.vm.$nextTick();
+    expect(mocks.homeTimeline.refreshForYouAfterOnboarding).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
