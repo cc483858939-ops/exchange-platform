@@ -1,3 +1,5 @@
+import { extractMentionTokens } from './mentionText';
+
 export type LinkifiedTextSegment =
   | {
       type: 'text';
@@ -7,6 +9,11 @@ export type LinkifiedTextSegment =
       type: 'link';
       text: string;
       href: string;
+    }
+  | {
+      type: 'mention';
+      text: string;
+      username: string;
     };
 
 const URL_PATTERN = /(?:https?:\/\/|www\.)[^\s<>"'`]+/gi;
@@ -82,5 +89,31 @@ export function linkifyText(text: string): LinkifiedTextSegment[] {
     segments.push({ type: 'text', text: text.slice(cursor) });
   }
 
-  return segments.length > 0 ? segments : [{ type: 'text', text }];
+  const urlSegments = segments.length > 0 ? segments : [{ type: 'text' as const, text }];
+  return urlSegments.flatMap(segment => {
+    if (segment.type !== 'text') {
+      return [segment];
+    }
+    const mentions = extractMentionTokens(segment.text);
+    if (mentions.length === 0) {
+      return [segment];
+    }
+    const parts: LinkifiedTextSegment[] = [];
+    let mentionCursor = 0;
+    for (const mention of mentions) {
+      if (mention.start > mentionCursor) {
+        parts.push({ type: 'text', text: segment.text.slice(mentionCursor, mention.start) });
+      }
+      parts.push({
+        type: 'mention',
+        text: segment.text.slice(mention.start, mention.end),
+        username: mention.username,
+      });
+      mentionCursor = mention.end;
+    }
+    if (mentionCursor < segment.text.length) {
+      parts.push({ type: 'text', text: segment.text.slice(mentionCursor) });
+    }
+    return parts;
+  });
 }

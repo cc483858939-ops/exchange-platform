@@ -622,6 +622,7 @@ func TestSetupRouterKeepsPublicPostAndProfileReadsOpen(t *testing.T) {
 		{http.MethodGet, "/api/posts/not-a-number/replies"},
 		{http.MethodGet, "/api/posts/not-a-number/quotes"},
 		{http.MethodGet, "/api/users/not-a-number"},
+		{http.MethodGet, "/api/users/by-username/alice"},
 		{http.MethodGet, "/api/users/not-a-number/timeline"},
 	}
 	for _, route := range publicRoutes {

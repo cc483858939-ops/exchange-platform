@@ -15,6 +15,7 @@ import (
 
 	"Go.exchange/global"
 	"Go.exchange/models"
+	"Go.exchange/postmention"
 	"Go.exchange/profileavatar"
 	"Go.exchange/profilecover"
 
@@ -57,6 +58,27 @@ var loadActiveProfileViewer = func(ctx context.Context, userID uint) (models.Use
 }
 
 var searchUsers = searchUsersFromDB
+
+var loadPublicUserByExactUsername = func(ctx context.Context, username string) (publicUserSummaryResponse, error) {
+	if global.APIDb == nil {
+		return publicUserSummaryResponse{}, errors.New("database is not initialized")
+	}
+	var user models.User
+	if err := global.APIDb.WithContext(ctx).
+		Select("id", "username", "display_name", "bio", "avatar_url", "created_at").
+		Where("username = ?", username).
+		First(&user).Error; err != nil {
+		return publicUserSummaryResponse{}, err
+	}
+	return publicUserSummaryResponse{
+		ID:          user.ID,
+		Username:    user.Username,
+		DisplayName: user.DisplayName,
+		Bio:         user.Bio,
+		AvatarURL:   user.AvatarURL,
+		CreatedAt:   user.CreatedAt,
+	}, nil
+}
 
 func requireActiveProfileViewerID(ctx *gin.Context) (uint, bool) {
 	rawViewerID, exists := ctx.Get("user_id")
@@ -365,6 +387,20 @@ func GetUserByID(ctx *gin.Context) {
 		return
 	}
 	user, err := loadPublicUserByID(ctx.Request.Context(), id)
+	if err != nil {
+		writeUserAPIError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, user)
+}
+
+func GetUserByExactUsername(ctx *gin.Context) {
+	username := ctx.Param("username")
+	if !postmention.ValidUsername(username) {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid username"})
+		return
+	}
+	user, err := loadPublicUserByExactUsername(ctx.Request.Context(), username)
 	if err != nil {
 		writeUserAPIError(ctx, err)
 		return

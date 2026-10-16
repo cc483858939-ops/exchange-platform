@@ -67,12 +67,31 @@
               placeholder="What's happening?"
               :disabled="isSubmitting"
               :aria-describedby="contentError ? 'post-content-error' : undefined"
-              @input="syncContentSelection"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-haspopup="listbox"
+              :aria-expanded="mentionSuggestions.isOpen.value"
+              :aria-controls="mentionSuggestions.listboxId"
+              :aria-activedescendant="mentionSuggestions.activeOptionId.value"
+              @input="handleContentInput"
               @select="syncContentSelection"
-              @click="syncContentSelection"
+              @click="handleContentClick"
               @keyup="syncContentSelection"
               @focus="syncContentSelection"
+              @keydown="handleMentionKeydown"
+              @compositionstart="handleMentionCompositionStart"
+              @compositionend="handleMentionCompositionEnd"
             ></textarea>
+
+            <MentionSuggestions
+              :open="mentionSuggestions.isOpen.value"
+              :state="mentionSuggestions.state.value"
+              :items="mentionSuggestions.items.value"
+              :active-index="mentionSuggestions.activeIndex.value"
+              :listbox-id="mentionSuggestions.listboxId"
+              :prefix="mentionSuggestions.prefix.value"
+              @select="selectMention"
+            />
 
             <section
               v-if="postDraft.quotePostID !== null"
@@ -332,6 +351,7 @@ import PostDraftsDialog from '../components/composer/PostDraftsDialog.vue';
 import EmojiPickerPopover, {
   type EmojiPickerCloseReason,
 } from '../components/composer/EmojiPickerPopover.vue';
+import MentionSuggestions from '../components/mentions/MentionSuggestions.vue';
 import type { Post, PostMedia } from '../types/Post';
 import type { PersistedPostDraft } from '../storage/postDraftRepository';
 import {
@@ -339,6 +359,8 @@ import {
   type LocalImagePreviewGenerator,
 } from '../utils/localImagePreview';
 import { insertTextAtSelection } from '../utils/textareaInsertion';
+import { extractMentionTokens, replaceMentionAtCaret } from '../utils/mentionText';
+import { useMentionSuggestions } from '../composables/useMentionSuggestions';
 import {
   composerIntentKey,
   composerIntentsEqual,
@@ -356,6 +378,7 @@ const route = useRoute();
 const authStore = useAuthStore();
 const postDraft = usePostDraftStore();
 const postPublishStore = usePostPublishStore();
+const mentionSuggestions = useMentionSuggestions();
 
 const savedDrafts = shallowRef<PersistedPostDraft[]>([]);
 const draftsDialogOpen = ref(false);
@@ -370,6 +393,7 @@ const deleteDraftBusy = ref(false);
 const deleteDraftError = ref('');
 let resolveExitDecision: ((allowNavigation: boolean) => void) | null = null;
 let beforeUnloadAttached = false;
+let suppressedMentionSelection: { value: string; caret: number } | null = null;
 let draftRouteLoadVersion = 0;
 let draftListRequestVersion = 0;
 let quotePreviewRequestVersion = 0;
@@ -384,6 +408,7 @@ const emojiButton = ref<HTMLButtonElement | null>(null);
 const emojiPickerOpen = ref(false);
 const selectionStart = ref<number | null>(null);
 const selectionEnd = ref<number | null>(null);
+const mentionCompositionActive = ref(false);
 type PreviewEntry = {
   file: File;
   url: string;
@@ -501,6 +526,105 @@ const syncContentSelection = () => {
   }
   selectionStart.value = input.selectionStart;
   selectionEnd.value = input.selectionEnd;
+  if (suppressedMentionSelection) {
+    if (
+      input.value === suppressedMentionSelection.value
+      && input.selectionStart === suppressedMentionSelection.caret
+      && input.selectionEnd === suppressedMentionSelection.caret
+    ) {
+      mentionSuggestions.close();
+      return;
+    }
+    suppressedMentionSelection = null;
+  }
+  updateMentionSuggestions();
+};
+
+const handleContentInput = () => {
+  suppressedMentionSelection = null;
+  syncContentSelection();
+};
+
+const handleContentClick = () => {
+  suppressedMentionSelection = null;
+  syncContentSelection();
+};
+
+const suppressCurrentMentionSelection = () => {
+  const input = contentInput.value;
+  if (input) {
+    suppressedMentionSelection = { value: input.value, caret: input.selectionStart };
+  }
+};
+
+const updateMentionSuggestions = (composing = mentionCompositionActive.value) => {
+  const input = contentInput.value;
+  if (!input) {
+    mentionSuggestions.close();
+    return;
+  }
+  mentionSuggestions.update(input.value, input.selectionStart, input.selectionEnd, {
+    composing,
+    disabled: isSubmitting.value || input.disabled,
+  });
+};
+
+const selectMention = async (user: { username: string }) => {
+  const input = contentInput.value;
+  const context = mentionSuggestions.activeContext.value;
+  if (!input || input.disabled || !context) {
+    mentionSuggestions.close();
+    return;
+  }
+  const result = replaceMentionAtCaret(input.value, context, user.username);
+  content.value = result.value;
+  selectionStart.value = result.caret;
+  selectionEnd.value = result.caret;
+  suppressedMentionSelection = { value: result.value, caret: result.caret };
+  mentionSuggestions.close();
+  await nextTick();
+  if (!contentInput.value || contentInput.value.disabled) {
+    return;
+  }
+  contentInput.value.focus({ preventScroll: true });
+  contentInput.value.setSelectionRange(result.caret, result.caret);
+  resizeContent();
+};
+
+const handleMentionKeydown = (event: KeyboardEvent) => {
+  if (event.isComposing || mentionCompositionActive.value || !mentionSuggestions.isOpen.value) {
+    return;
+  }
+  if (event.key === 'Tab' && event.shiftKey) {
+    const searchLink = document.getElementById(`${mentionSuggestions.listboxId}-search`);
+    if (searchLink instanceof HTMLElement) {
+      event.preventDefault();
+      searchLink.focus();
+    }
+  } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    mentionSuggestions.moveSelection(event.key === 'ArrowDown' ? 1 : -1);
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    suppressCurrentMentionSelection();
+    mentionSuggestions.close();
+  } else if (event.key === 'Enter' || event.key === 'Tab') {
+    const selected = mentionSuggestions.selectedItem();
+    if (selected) {
+      event.preventDefault();
+      void selectMention(selected);
+    }
+  }
+};
+
+const handleMentionCompositionStart = () => {
+  mentionCompositionActive.value = true;
+  mentionSuggestions.close();
+};
+
+const handleMentionCompositionEnd = () => {
+  mentionCompositionActive.value = false;
+  void nextTick(() => updateMentionSuggestions(false));
 };
 
 const focusContentInput = async () => {
@@ -554,6 +678,8 @@ const insertEmoji = async (emoji: string) => {
   input.setSelectionRange(result.caret, result.caret);
   selectionStart.value = result.caret;
   selectionEnd.value = result.caret;
+  suppressedMentionSelection = null;
+  updateMentionSuggestions();
   resizeContent();
 };
 
@@ -1154,6 +1280,7 @@ const submitPost = async () => {
   }
 
   emojiPickerOpen.value = false;
+  mentionSuggestions.close();
 
   validationAttempted.value = true;
   if (!canPublish.value) {
@@ -1162,6 +1289,11 @@ const submitPost = async () => {
     } else if (previewPreparationBlocked.value) {
       publishError.value = previewPreparationError.value || 'Wait for image previews to finish before posting.';
     }
+    return;
+  }
+
+  if (new Set(extractMentionTokens(content.value).map(token => token.username)).size > 5) {
+    publishError.value = 'A post can mention at most 5 different users.';
     return;
   }
 
@@ -1246,6 +1378,7 @@ watch(
 watch(isSubmitting, submitting => {
   if (submitting) {
     emojiPickerOpen.value = false;
+    mentionSuggestions.close();
   }
 });
 
@@ -1268,6 +1401,7 @@ onBeforeUnmount(() => {
   previewQueue.length = 0;
   queuedPreviewFiles.clear();
   emojiPickerOpen.value = false;
+  mentionSuggestions.close();
   previewGenerator.dispose();
   revokeAllPreviews();
 });

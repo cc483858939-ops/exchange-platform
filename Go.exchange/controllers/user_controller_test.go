@@ -229,6 +229,62 @@ func TestSearchUsersAuthenticationAndStoreErrors(t *testing.T) {
 	}
 }
 
+func TestGetUserByExactUsernameUsesCaseSensitiveLookup(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalLookup := loadPublicUserByExactUsername
+	t.Cleanup(func() { loadPublicUserByExactUsername = originalLookup })
+	var received string
+	loadPublicUserByExactUsername = func(_ context.Context, username string) (publicUserSummaryResponse, error) {
+		received = username
+		return publicUserSummaryResponse{ID: 27, Username: username, DisplayName: "Exact match"}, nil
+	}
+
+	ctx, recorder := newExactUsernameUnitContext("Alice_甲-2")
+	GetUserByExactUsername(ctx)
+	if recorder.Code != http.StatusOK || received != "Alice_甲-2" {
+		t.Fatalf("status=%d lookup=%q body=%s", recorder.Code, received, recorder.Body.String())
+	}
+	var user publicUserSummaryResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &user); err != nil {
+		t.Fatal(err)
+	}
+	if user.ID != 27 || user.Username != "Alice_甲-2" || user.DisplayName != "Exact match" {
+		t.Fatalf("user=%#v", user)
+	}
+}
+
+func TestGetUserByExactUsernameRejectsInvalidAndReportsMissing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalLookup := loadPublicUserByExactUsername
+	t.Cleanup(func() { loadPublicUserByExactUsername = originalLookup })
+	loadPublicUserByExactUsername = func(context.Context, string) (publicUserSummaryResponse, error) {
+		t.Fatal("invalid username must not reach the database")
+		return publicUserSummaryResponse{}, nil
+	}
+	ctx, recorder := newExactUsernameUnitContext("alice.invalid")
+	GetUserByExactUsername(ctx)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("invalid username status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	loadPublicUserByExactUsername = func(context.Context, string) (publicUserSummaryResponse, error) {
+		return publicUserSummaryResponse{}, gorm.ErrRecordNotFound
+	}
+	ctx, recorder = newExactUsernameUnitContext("alice")
+	GetUserByExactUsername(ctx)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("missing username status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func newExactUsernameUnitContext(username string) (*gin.Context, *httptest.ResponseRecorder) {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/users/by-username/"+username, nil)
+	ctx.Params = gin.Params{{Key: "username", Value: username}}
+	return ctx, recorder
+}
+
 func newUserSearchUnitContext(rawQuery string, viewerID any) (*gin.Context, *httptest.ResponseRecorder) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)

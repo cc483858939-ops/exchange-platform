@@ -74,4 +74,25 @@ describe('linkifyText', () => {
       { type: 'text', text: '<script>alert(1)</script>\nnext line' },
     ]);
   });
+
+  it('linkifies mentions after URLs and preserves URL precedence', () => {
+    expect(linkifyText('Hi @alice https://example.com/@inside, mail a@domain.test @@hidden'))
+      .toEqual([
+        { type: 'text', text: 'Hi ' },
+        { type: 'mention', text: '@alice', username: 'alice' },
+        { type: 'text', text: ' ' },
+        { type: 'link', text: 'https://example.com/@inside', href: 'https://example.com/@inside' },
+        { type: 'text', text: ',' },
+        { type: 'text', text: ' mail a@domain.test @@hidden' },
+      ]);
+  });
+
+  it('keeps CJK punctuation outside Unicode username tokens', () => {
+    expect(linkifyText('你好 @用户_甲！'))
+      .toEqual([
+        { type: 'text', text: '你好 ' },
+        { type: 'mention', text: '@用户_甲', username: '用户_甲' },
+        { type: 'text', text: '！' },
+      ]);
+  });
 });

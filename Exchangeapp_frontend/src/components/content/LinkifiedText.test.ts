@@ -1,8 +1,22 @@
 // @vitest-environment jsdom
 
 import { mount, RouterLinkStub } from '@vue/test-utils';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import LinkifiedText from './LinkifiedText.vue';
+
+const mocks = vi.hoisted(() => ({
+  routerPush: vi.fn(),
+  resolveMentionUsername: vi.fn(),
+}));
+
+vi.mock('vue-router', async importOriginal => {
+  const actual = await importOriginal<typeof import('vue-router')>();
+  return { ...actual, useRouter: () => ({ push: mocks.routerPush }) };
+});
+
+vi.mock('../../services/mentionService', () => ({
+  resolveMentionUsername: mocks.resolveMentionUsername,
+}));
 
 const mountLinkifiedText = (text: string, to?: { name: string; params?: Record<string, string> }) => (
   mount(LinkifiedText, {
@@ -16,6 +30,35 @@ const mountLinkifiedText = (text: string, to?: { name: string; params?: Record<s
 );
 
 describe('LinkifiedText', () => {
+  it('resolves a clicked exact username to the real profile ID only on click', async () => {
+    mocks.routerPush.mockReset();
+    mocks.resolveMentionUsername.mockReset().mockResolvedValue({
+      id: 42,
+      username: 'alice',
+      display_name: 'Alice',
+    });
+    const wrapper = mountLinkifiedText('Thanks @alice and https://example.com/@not-a-user');
+
+    expect(mocks.resolveMentionUsername).not.toHaveBeenCalled();
+    expect(wrapper.findAll('.linkified-text__mention')).toHaveLength(1);
+    await wrapper.get('.linkified-text__mention').trigger('click');
+
+    expect(mocks.resolveMentionUsername).toHaveBeenCalledWith('alice', expect.any(AbortSignal));
+    expect(mocks.routerPush).toHaveBeenCalledWith({ name: 'UserProfile', params: { id: '42' } });
+    wrapper.unmount();
+  });
+
+  it('reports an unavailable username without navigating to a guessed profile', async () => {
+    mocks.routerPush.mockReset();
+    mocks.resolveMentionUsername.mockReset().mockResolvedValue(null);
+    const wrapper = mountLinkifiedText('@missing');
+    await wrapper.get('.linkified-text__mention').trigger('click');
+
+    expect(mocks.routerPush).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain('Couldn’t find an active account for @missing.');
+    wrapper.unmount();
+  });
+
   it('renders external links with safe browser-link attributes', () => {
     const wrapper = mountLinkifiedText('Visit https://example.com');
     const link = wrapper.get('a.linkified-text__external');

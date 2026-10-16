@@ -1,4 +1,4 @@
-export type NotificationType = 'post_liked' | 'post_replied' | 'post_quoted' | 'user_followed';
+export type NotificationType = 'post_liked' | 'post_replied' | 'post_quoted' | 'post_mentioned' | 'user_followed';
 
 export interface NotificationActor {
   id: number;

@@ -68,6 +68,13 @@ const followedNotification = (id: number, actorID = 9, read = false): Notificati
   read,
 });
 
+const mentionedNotification = (id: number, postID: number, read = false): Notification => ({
+  ...notification(id, read),
+  type: 'post_mentioned',
+  post_id: postID,
+  conversation_id: postID,
+});
+
 const setAuth = (id: number | null) => {
   mocks.authStore = reactive({
     isAuthenticated: id !== null,
@@ -200,12 +207,30 @@ describe('NotificationsView', () => {
     wrapper.unmount();
   });
 
+  it('shows mention notifications, marks them read, and opens the mentioned post', async () => {
+    setAuth(7);
+    setNotificationViewer(7);
+    mocks.getNotifications.mockResolvedValue({
+      items: [mentionedNotification(31, 800)],
+      next_cursor: null,
+    });
+    const wrapper = mountView();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('Alice mentioned you in a post.');
+    await wrapper.find('.notification-card__open').trigger('click');
+
+    expect(mocks.markNotificationRead).toHaveBeenCalledWith(31);
+    expect(mocks.router.push).toHaveBeenCalledWith({ name: 'PostDetail', params: { id: '800' } });
+    wrapper.unmount();
+  });
+
   it('mentions quotes in the empty state', async () => {
     setAuth(7);
     setNotificationViewer(7);
     const wrapper = mountView();
     await flushPromises();
-    expect(wrapper.text()).toContain('New likes, replies, quotes, and follows will appear here.');
+    expect(wrapper.text()).toContain('New likes, replies, quotes, mentions, and follows will appear here.');
     wrapper.unmount();
   });
 

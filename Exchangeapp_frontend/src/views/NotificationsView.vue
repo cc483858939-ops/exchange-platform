@@ -41,7 +41,7 @@
           <AppIcon name="notifications" :size="28" />
         </span>
         <h2>You’re all caught up.</h2>
-        <p>New likes, replies, quotes, and follows will appear here.</p>
+        <p>New likes, replies, quotes, mentions, and follows will appear here.</p>
       </div>
       <div v-else class="notifications-page__list" aria-live="polite">
         <article
@@ -279,6 +279,7 @@ const notificationCopy = (item: Notification) => {
     case 'post_liked': return 'liked your post.';
     case 'post_replied': return 'replied to your post.';
     case 'post_quoted': return 'quoted your post.';
+    case 'post_mentioned': return 'mentioned you in a post.';
     case 'user_followed': return 'followed you.';
   }
 };

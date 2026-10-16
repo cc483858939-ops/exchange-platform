@@ -10,20 +10,40 @@
         :size="30"
         decorative
       />
-      <textarea
-        ref="textareaRef"
-        v-model="content"
-        class="reply-composer__textarea"
-        rows="1"
-        :disabled="disabled || submitting"
-        placeholder="Post your reply..."
-        aria-label="Reply content"
-        @input="handleTextareaInput"
-        @select="syncTextareaSelection"
-        @click="syncTextareaSelection"
-        @keyup="syncTextareaSelection"
-        @focus="syncTextareaSelection"
-      />
+      <div class="reply-composer__input">
+        <textarea
+          ref="textareaRef"
+          v-model="content"
+          class="reply-composer__textarea"
+          rows="1"
+          :disabled="disabled || submitting"
+          placeholder="Post your reply..."
+          aria-label="Reply content"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-haspopup="listbox"
+          :aria-expanded="mentionSuggestions.isOpen.value"
+          :aria-controls="mentionSuggestions.listboxId"
+          :aria-activedescendant="mentionSuggestions.activeOptionId.value"
+          @input="handleTextareaInput"
+          @select="syncTextareaSelection"
+          @click="handleTextareaClick"
+          @keyup="syncTextareaSelection"
+          @focus="syncTextareaSelection"
+          @keydown="handleMentionKeydown"
+          @compositionstart="handleMentionCompositionStart"
+          @compositionend="handleMentionCompositionEnd"
+        />
+        <MentionSuggestions
+          :open="mentionSuggestions.isOpen.value"
+          :state="mentionSuggestions.state.value"
+          :items="mentionSuggestions.items.value"
+          :active-index="mentionSuggestions.activeIndex.value"
+          :listbox-id="mentionSuggestions.listboxId"
+          :prefix="mentionSuggestions.prefix.value"
+          @select="selectMention"
+        />
+      </div>
     </div>
 
     <div class="reply-composer__footer">
@@ -64,6 +84,9 @@
       <span v-if="exceedsMaxLength" class="reply-composer__validation" role="alert">
         {{ contentLength }}/{{ maxContentLength }} characters. Please shorten your reply.
       </span>
+      <span v-if="mentionError" class="reply-composer__validation" role="alert">
+        {{ mentionError }}
+      </span>
       <button
         class="reply-composer__submit"
         type="submit"
@@ -83,7 +106,10 @@ import EmojiPickerPopover, {
 } from '../composer/EmojiPickerPopover.vue';
 import AppIcon from '../icons/AppIcon.vue';
 import UserAvatar from '../users/UserAvatar.vue';
+import MentionSuggestions from '../mentions/MentionSuggestions.vue';
 import { insertTextAtSelection } from '../../utils/textareaInsertion';
+import { extractMentionTokens, replaceMentionAtCaret } from '../../utils/mentionText';
+import { useMentionSuggestions } from '../../composables/useMentionSuggestions';
 
 const props = withDefaults(defineProps<{
   author?: PublicAuthor | null;
@@ -114,6 +140,8 @@ const emit = defineEmits<{
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const emojiButton = ref<HTMLButtonElement | null>(null);
 const emojiPickerOpen = ref(false);
+const mentionCompositionActive = ref(false);
+const mentionError = ref('');
 const selectionStart = ref<number | null>(null);
 const selectionEnd = ref<number | null>(null);
 const emojiPickerId = 'reply-emoji-picker';
@@ -126,6 +154,8 @@ const trimmedContent = computed(() => content.value.trim());
 const contentLength = computed(() => Array.from(trimmedContent.value).length);
 const exceedsMaxLength = computed(() => contentLength.value > maxContentLength);
 const emojiPickerDisabled = computed(() => props.disabled || props.submitting);
+const mentionSuggestions = useMentionSuggestions();
+let suppressedMentionSelection: { value: string; caret: number } | null = null;
 
 const syncTextareaSelection = () => {
   const textarea = textareaRef.value;
@@ -134,6 +164,100 @@ const syncTextareaSelection = () => {
   }
   selectionStart.value = textarea.selectionStart;
   selectionEnd.value = textarea.selectionEnd;
+  if (suppressedMentionSelection) {
+    if (
+      textarea.value === suppressedMentionSelection.value
+      && textarea.selectionStart === suppressedMentionSelection.caret
+      && textarea.selectionEnd === suppressedMentionSelection.caret
+    ) {
+      mentionSuggestions.close();
+      return;
+    }
+    suppressedMentionSelection = null;
+  }
+  updateMentionSuggestions();
+};
+
+const handleTextareaClick = () => {
+  suppressedMentionSelection = null;
+  syncTextareaSelection();
+};
+
+const suppressCurrentMentionSelection = () => {
+  const textarea = textareaRef.value;
+  if (textarea) {
+    suppressedMentionSelection = { value: textarea.value, caret: textarea.selectionStart };
+  }
+};
+
+const updateMentionSuggestions = (composing = mentionCompositionActive.value) => {
+  const textarea = textareaRef.value;
+  if (!textarea) {
+    mentionSuggestions.close();
+    return;
+  }
+  mentionSuggestions.update(textarea.value, textarea.selectionStart, textarea.selectionEnd, {
+    composing,
+    disabled: emojiPickerDisabled.value || textarea.disabled,
+  });
+};
+
+const selectMention = async (user: { username: string }) => {
+  const textarea = textareaRef.value;
+  const context = mentionSuggestions.activeContext.value;
+  if (!textarea || textarea.disabled || !context) {
+    mentionSuggestions.close();
+    return;
+  }
+  const result = replaceMentionAtCaret(textarea.value, context, user.username);
+  content.value = result.value;
+  selectionStart.value = result.caret;
+  selectionEnd.value = result.caret;
+  suppressedMentionSelection = { value: result.value, caret: result.caret };
+  mentionSuggestions.close();
+  await nextTick();
+  if (!textareaRef.value || textareaRef.value.disabled) {
+    return;
+  }
+  textareaRef.value.focus({ preventScroll: true });
+  textareaRef.value.setSelectionRange(result.caret, result.caret);
+  resizeTextarea();
+};
+
+const handleMentionKeydown = (event: KeyboardEvent) => {
+  if (event.isComposing || mentionCompositionActive.value || !mentionSuggestions.isOpen.value) {
+    return;
+  }
+  if (event.key === 'Tab' && event.shiftKey) {
+    const searchLink = document.getElementById(`${mentionSuggestions.listboxId}-search`);
+    if (searchLink instanceof HTMLElement) {
+      event.preventDefault();
+      searchLink.focus();
+    }
+  } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    mentionSuggestions.moveSelection(event.key === 'ArrowDown' ? 1 : -1);
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    suppressCurrentMentionSelection();
+    mentionSuggestions.close();
+  } else if (event.key === 'Enter' || event.key === 'Tab') {
+    const selected = mentionSuggestions.selectedItem();
+    if (selected) {
+      event.preventDefault();
+      void selectMention(selected);
+    }
+  }
+};
+
+const handleMentionCompositionStart = () => {
+  mentionCompositionActive.value = true;
+  mentionSuggestions.close();
+};
+
+const handleMentionCompositionEnd = () => {
+  mentionCompositionActive.value = false;
+  void nextTick(() => updateMentionSuggestions(false));
 };
 
 const focusTextareaAtSelection = async () => {
@@ -187,11 +311,14 @@ const insertEmoji = async (emoji: string) => {
   textarea.setSelectionRange(result.caret, result.caret);
   selectionStart.value = result.caret;
   selectionEnd.value = result.caret;
+  suppressedMentionSelection = null;
+  updateMentionSuggestions();
   resizeTextarea();
 };
 
 const handleTextareaInput = () => {
   syncTextareaSelection();
+  mentionError.value = '';
   resizeTextarea();
 };
 
@@ -207,6 +334,7 @@ const resizeTextarea = () => {
 
 const clear = () => {
   emojiPickerOpen.value = false;
+  mentionSuggestions.close();
   emit('update:modelValue', '');
   void nextTick(resizeTextarea);
 };
@@ -229,7 +357,13 @@ const focus = async (): Promise<boolean> => {
 
 const submitReply = () => {
   emojiPickerOpen.value = false;
+  mentionSuggestions.close();
   if (props.disabled || props.submitting || !trimmedContent.value || exceedsMaxLength.value) {
+    return;
+  }
+
+  if (new Set(extractMentionTokens(content.value).map(token => token.username)).size > 5) {
+    mentionError.value = 'A post can mention at most 5 different users.';
     return;
   }
 
@@ -243,11 +377,13 @@ onMounted(resizeTextarea);
 watch(emojiPickerDisabled, disabled => {
   if (disabled) {
     emojiPickerOpen.value = false;
+    mentionSuggestions.close();
   }
 });
 
 onBeforeUnmount(() => {
   emojiPickerOpen.value = false;
+  mentionSuggestions.close();
 });
 
 watch(
@@ -267,6 +403,11 @@ watch(
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
+}
+
+.reply-composer__input {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .reply-composer__avatar {

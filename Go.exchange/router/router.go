@@ -101,6 +101,7 @@ func setupRouter(authController *controllers.AuthController, verifier auth.Acces
 	api.GET("/posts/:id/quotes", controllers.GetPostQuotes)
 	api.GET("/topics", controllers.GetTopics)
 	api.GET("/topics/:slug/posts", controllers.GetTopicPosts)
+	api.GET("/users/by-username/:username", controllers.GetUserByExactUsername)
 	api.GET("/users/:id", controllers.GetUserByID)
 	api.GET("/users/:id/timeline", controllers.GetUserTimeline)
 

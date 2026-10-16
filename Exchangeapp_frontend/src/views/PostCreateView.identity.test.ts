@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   feedStore: { registerPublishedPost: vi.fn() },
   profileSessionStore: { registerPublishedTimelinePost: vi.fn() },
   createPost: vi.fn(),
+  getMentionSuggestions: vi.fn(),
   getPostById: vi.fn(),
   uploadPostMedia: vi.fn(),
   getPostBookmarkStates: vi.fn(),
@@ -92,6 +93,11 @@ vi.mock('../services/postService', () => ({
   createPost: mocks.createPost,
   getPostById: mocks.getPostById,
   uploadPostMedia: mocks.uploadPostMedia,
+}));
+
+vi.mock('../services/mentionService', () => ({
+  getMentionSuggestions: mocks.getMentionSuggestions,
+  resolveMentionUsername: vi.fn(),
 }));
 
 vi.mock('../services/bookmarkService', () => ({
@@ -218,6 +224,13 @@ describe('PostCreateView identity and text publishing', () => {
       fullPath: '/posts/new',
     });
     mocks.createPost.mockResolvedValue(publishedPost());
+    mocks.getMentionSuggestions.mockResolvedValue([{
+      id: 12,
+      username: 'alice_2',
+      display_name: 'Alice Two',
+      avatar_url: '',
+      reason: 'following',
+    }]);
     mocks.getPostById.mockReset().mockImplementation(async (id: number) => quotedPost(id));
     mocks.getPostBookmarkStates.mockResolvedValue({ items: [], unavailable_post_ids: [] });
     mocks.captureBookmarkStateSyncVersion.mockReturnValue(0);
@@ -282,6 +295,7 @@ describe('PostCreateView identity and text publishing', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     wrapper?.unmount();
     wrapper = null;
   });
@@ -338,6 +352,25 @@ describe('PostCreateView identity and text publishing', () => {
     expect(publish.attributes('disabled')).toBeDefined();
     await wrapper.get('#post-content').setValue('A valid post');
     expect(publish.attributes('disabled')).toBeUndefined();
+  });
+
+  it('inserts the selected real username into the post draft at the caret', async () => {
+    vi.useFakeTimers();
+    wrapper = mountPage();
+    const input = wrapper.get('#post-content');
+    await input.setValue('Hello @ali');
+    const textarea = input.element as HTMLTextAreaElement;
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    await input.trigger('select');
+    await vi.advanceTimersByTimeAsync(200);
+    await flushPromises();
+
+    expect(mocks.getMentionSuggestions).toHaveBeenCalledWith('ali', expect.any(AbortSignal));
+    await wrapper.get('[role="option"]').trigger('click');
+    await nextTick();
+
+    expect(usePostDraftStore().content).toBe('Hello @alice_2');
+    expect(textarea.selectionStart).toBe('Hello @alice_2'.length);
   });
 
   it('keeps Post actionable while succeeded-operation cleanup is pending', async () => {
