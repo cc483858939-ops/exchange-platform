@@ -169,8 +169,9 @@ func TestPersistPostMentionsStoresRecentAndOutboxAtomicallyIntegration(t *testin
 	if err := db.Unscoped().First(&rolledBack, rolledBackPostID).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("post survived failed mention outbox transaction: err=%v", err)
 	}
-	if err := db.Where("user_id = ? AND mentioned_user_id = ?", actor.ID, replyTarget.ID).First(&thirdRecent).Error; err != nil || !thirdRecent.LastMentionedAt.Equal(firstAt) {
-		t.Fatalf("failed outbox changed recent mention: row=%+v err=%v", thirdRecent, err)
+	var replyTargetRecent models.UserMentionRecent
+	if err := db.Where("user_id = ? AND mentioned_user_id = ?", actor.ID, replyTarget.ID).First(&replyTargetRecent).Error; err != nil || !replyTargetRecent.LastMentionedAt.Equal(firstAt) {
+		t.Fatalf("failed outbox changed recent mention: row=%+v err=%v", replyTargetRecent, err)
 	}
 
 	var tooManyPost models.Post

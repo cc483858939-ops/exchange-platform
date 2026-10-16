@@ -101,6 +101,10 @@ func loadMentionSuggestions(db *gorm.DB, viewerID uint, prefix string, limit int
 	for _, row := range recent {
 		items = append(items, mentionSuggestionItem{User: mentionSuggestionUser{ID: row.ID, Username: row.Username, DisplayName: row.DisplayName, AvatarURL: row.AvatarURL}, Reason: "recently_mentioned"})
 	}
+	recentIDs := make([]uint, 0, len(recent))
+	for _, row := range recent {
+		recentIDs = append(recentIDs, row.ID)
+	}
 	remaining := limit - len(items)
 	if remaining == 0 {
 		return items, nil
@@ -109,8 +113,10 @@ func loadMentionSuggestions(db *gorm.DB, viewerID uint, prefix string, limit int
 		Select("u.id, u.username, u.display_name, u.avatar_url").
 		Joins("JOIN users AS u ON u.id = f.following_id AND u.deleted_at IS NULL").
 		Where("f.follower_id = ? AND f.following_id <> ?", viewerID, viewerID).
-		Where("NOT EXISTS (SELECT 1 FROM user_mutes AS um WHERE um.muter_id = ? AND um.muted_id = u.id)", viewerID).
-		Where("NOT EXISTS (SELECT 1 FROM user_mention_recents AS r WHERE r.user_id = ? AND r.mentioned_user_id = u.id)", viewerID)
+		Where("NOT EXISTS (SELECT 1 FROM user_mutes AS um WHERE um.muter_id = ? AND um.muted_id = u.id)", viewerID)
+	if len(recentIDs) > 0 {
+		followingQuery = followingQuery.Where("u.id NOT IN ?", recentIDs)
+	}
 	var following []mentionSuggestionRow
 	if err := query(followingQuery).Order("f.created_at DESC, f.following_id DESC").Limit(remaining).Scan(&following).Error; err != nil {
 		return nil, err

@@ -14,6 +14,7 @@ import (
 	"Go.exchange/auth"
 	"Go.exchange/metrics"
 	"Go.exchange/models"
+	"Go.exchange/postmention"
 	"Go.exchange/utils"
 
 	"github.com/gin-gonic/gin"
@@ -99,6 +100,10 @@ func (c *AuthController) Register(ctx *gin.Context) {
 			writeAuthError(ctx, http.StatusRequestEntityTooLarge, "AUTH_REQUEST_TOO_LARGE", "Authentication request is too large")
 			return
 		}
+		writeAuthError(ctx, http.StatusBadRequest, "AUTH_REQUEST_INVALID", "Invalid request data")
+		return
+	}
+	if !postmention.ValidUsername(request.Username) {
 		writeAuthError(ctx, http.StatusBadRequest, "AUTH_REQUEST_INVALID", "Invalid request data")
 		return
 	}

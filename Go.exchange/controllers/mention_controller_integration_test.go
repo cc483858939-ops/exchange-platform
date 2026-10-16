@@ -78,6 +78,8 @@ func TestMentionSuggestionsPrioritizeRecentAndFilterBeforeLimitIntegration(t *te
 	if err := tx.Create(&models.UserFollow{FollowerID: viewer.ID, FollowingID: recent[0].ID, CreatedAt: now.Add(time.Hour)}).Error; err != nil {
 		t.Fatal(err)
 	}
+	// The fifth historical recent user is not in the current recent four, so
+	// following should still be able to fill a slot with that user.
 	if err := tx.Create(&models.UserFollow{FollowerID: viewer.ID, FollowingID: recent[4].ID, CreatedAt: now.Add(2 * time.Hour)}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -102,15 +104,21 @@ func TestMentionSuggestionsPrioritizeRecentAndFilterBeforeLimitIntegration(t *te
 			t.Fatalf("recent position %d=%+v want user %d recently_mentioned", i, items[i], recent[i].ID)
 		}
 	}
-	for i := 0; i < 4; i++ {
-		if items[4+i].User.ID != following[i].ID || items[4+i].Reason != "following" {
-			t.Fatalf("following position %d=%+v want user %d following", i, items[4+i], following[i].ID)
+	wantFollowing := []uint{recent[4].ID, following[0].ID, following[1].ID, following[2].ID}
+	for i, wantID := range wantFollowing {
+		if items[4+i].User.ID != wantID || items[4+i].Reason != "following" {
+			t.Fatalf("following position %d=%+v want user %d following", i, items[4+i], wantID)
 		}
 	}
+	seen := make(map[uint]struct{}, len(items))
 	for _, item := range items {
 		if item.User.ID == viewer.ID || item.User.ID == mutedRecent.ID || item.User.ID == deletedRecent.ID {
 			t.Fatalf("ineligible user returned: %+v", item)
 		}
+		if _, exists := seen[item.User.ID]; exists {
+			t.Fatalf("duplicate suggestion returned: %+v", item)
+		}
+		seen[item.User.ID] = struct{}{}
 	}
 
 	prefixItems, err := loadMentionSuggestions(tx, viewer.ID, "PREFIX", 8)

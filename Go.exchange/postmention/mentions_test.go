@@ -66,3 +66,20 @@ func TestValidPrefix(t *testing.T) {
 		}
 	}
 }
+
+func TestValidUsernameMatchesMentionGrammar(t *testing.T) {
+	for _, username := range []string{"alice", "Alice_甲-2", strings.Repeat("界", MaxUsernameRunes)} {
+		if !ValidUsername(username) {
+			t.Fatalf("ValidUsername(%q)=false", username)
+		}
+		tokens, err := ExtractTokens("@" + username)
+		if err != nil || len(tokens) != 1 || tokens[0] != username {
+			t.Fatalf("accepted username %q not fully extracted: tokens=%q err=%v", username, tokens, err)
+		}
+	}
+	for _, username := range []string{"", "alice smith", "alice.name", strings.Repeat("a", MaxUsernameRunes+1)} {
+		if ValidUsername(username) {
+			t.Fatalf("ValidUsername(%q)=true", username)
+		}
+	}
+}

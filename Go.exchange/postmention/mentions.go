@@ -77,6 +77,19 @@ func ValidPrefix(raw string) (string, bool) {
 	return prefix, true
 }
 
+// ValidUsername reports whether username is fully recognizable by ExtractTokens.
+func ValidUsername(username string) bool {
+	if username == "" || len([]rune(username)) > MaxUsernameRunes {
+		return false
+	}
+	for _, r := range username {
+		if !usernameRune(r) {
+			return false
+		}
+	}
+	return true
+}
+
 func usernameRune(r rune) bool {
 	switch {
 	case unicode.IsLetter(r), unicode.IsNumber(r), unicode.IsMark(r), r == '_', r == '-':

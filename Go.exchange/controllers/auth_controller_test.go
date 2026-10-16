@@ -258,7 +258,7 @@ func TestAuthControllerNormalizesLoginAndRegisterLimiterSubjects(t *testing.T) {
 		body   []byte
 		handle func(*AuthController, *gin.Context)
 	}{
-		{name: "register", body: []byte(`{"username":"  Alice ","password":"secret123"}`), handle: (*AuthController).Register},
+		{name: "register", body: []byte(`{"username":"Alice","password":"secret123"}`), handle: (*AuthController).Register},
 		{name: "login", body: []byte(`{"username":"  Alice ","password":"secret123"}`), handle: (*AuthController).Login},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -270,6 +270,24 @@ func TestAuthControllerNormalizesLoginAndRegisterLimiterSubjects(t *testing.T) {
 			}
 			if len(limiter.inputs) != 1 || limiter.inputs[0].Subject != "alice" {
 				t.Fatalf("limiter input=%+v", limiter.inputs)
+			}
+		})
+	}
+}
+
+func TestAuthControllerRejectsInvalidRegistrationUsernamesBeforeLimiter(t *testing.T) {
+	for _, username := range []string{"  Alice ", "alice.name", strings.Repeat("a", 65)} {
+		t.Run(username, func(t *testing.T) {
+			limiter := &authLimiterSpy{decision: auth.AttemptDecision{Allowed: true}}
+			controller := &AuthController{db: &gorm.DB{}, tokens: &authTokenServiceSpy{}, limiter: limiter}
+			payload := []byte(`{"username":"` + username + `","password":"secret123"}`)
+			response := callAuthHandler(controller, payload, (*AuthController).Register)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			assertAuthError(t, response, "AUTH_REQUEST_INVALID")
+			if len(limiter.inputs) != 0 {
+				t.Fatalf("invalid username reached limiter: %+v", limiter.inputs)
 			}
 		})
 	}

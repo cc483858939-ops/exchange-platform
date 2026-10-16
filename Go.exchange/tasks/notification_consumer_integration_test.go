@@ -24,7 +24,7 @@ func TestFilterNotificationCandidatesRequiresActiveParticipantsAndValidReplyPost
 		t.Fatal(err)
 	}
 
-	recipient := models.User{Username: "notification-filter-recipient-" + uuid.NewString(), Password: "test"}
+	recipient := models.User{Username: "nf-r-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&recipient).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -41,22 +41,22 @@ func TestFilterNotificationCandidatesRequiresActiveParticipantsAndValidReplyPost
 		}
 	})
 
-	deletedRecipient := models.User{Username: "notification-filter-deleted-recipient-" + uuid.NewString(), Password: "test"}
+	deletedRecipient := models.User{Username: "nf-dr-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&deletedRecipient).Error; err != nil {
 		t.Fatal(err)
 	}
 	userIDs = append(userIDs, deletedRecipient.ID)
-	activeActor := models.User{Username: "notification-filter-active-actor-" + uuid.NewString(), Password: "test"}
+	activeActor := models.User{Username: "nf-aa-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&activeActor).Error; err != nil {
 		t.Fatal(err)
 	}
 	userIDs = append(userIDs, activeActor.ID)
-	thirdParty := models.User{Username: "notification-filter-third-party-" + uuid.NewString(), Password: "test"}
+	thirdParty := models.User{Username: "nf-tp-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&thirdParty).Error; err != nil {
 		t.Fatal(err)
 	}
 	userIDs = append(userIDs, thirdParty.ID)
-	deletedActor := models.User{Username: "notification-filter-deleted-actor-" + uuid.NewString(), Password: "test"}
+	deletedActor := models.User{Username: "nf-da-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&deletedActor).Error; err != nil {
 		t.Fatal(err)
 	}

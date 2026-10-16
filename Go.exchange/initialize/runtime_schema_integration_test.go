@@ -141,6 +141,12 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	if err := applyRecommendationProfileMaterializationSchema(tx); err != nil {
 		t.Fatalf("apply UserPostRecoState constraints: %v", err)
 	}
+	if err := applyNotificationSchema(tx); err != nil {
+		t.Fatalf("apply notification schema: %v", err)
+	}
+	if err := applyUserMentionRecentSchema(tx); err != nil {
+		t.Fatalf("apply user mention recent schema: %v", err)
+	}
 	if err := setIntegrationValidationSearchPath(tx, primarySchema, fallbackSchema); err != nil {
 		t.Fatalf("restore isolated schema validation search path: %v", err)
 	}

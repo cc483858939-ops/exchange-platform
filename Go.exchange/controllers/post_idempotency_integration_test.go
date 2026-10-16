@@ -159,7 +159,7 @@ func TestCreatePostMentionIdempotencyReplayDoesNotRefreshRecentOrOutboxIntegrati
 	}
 	fixture := newPostEmbeddingOutboxFixture(t, db)
 	actorID := fixture.users[0].ID
-	recipient := models.User{Username: "mention-idempotency-recipient-" + uuid.NewString(), Password: "test"}
+	recipient := models.User{Username: "mention-idem-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&recipient).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -187,6 +187,15 @@ func TestCreatePostMentionIdempotencyReplayDoesNotRefreshRecentOrOutboxIntegrati
 	}
 	first := decodeCreatedPost(t, recorder)
 	trackIntegrationPost(fixture, first.ID)
+	var firstRecent models.UserMentionRecent
+	if err := db.Where("user_id = ? AND mentioned_user_id = ?", actorID, recipient.ID).First(&firstRecent).Error; err != nil {
+		t.Fatalf("first publish did not persist recent mention: %v", err)
+	}
+	aggregateID := strconv.FormatUint(uint64(first.ID), 10) + ":" + strconv.FormatUint(uint64(recipient.ID), 10)
+	var firstEventCount int64
+	if err := db.Model(&models.OutboxEvent{}).Where("aggregate_type = ? AND aggregate_id = ?", "post_mention", aggregateID).Count(&firstEventCount).Error; err != nil || firstEventCount != 1 {
+		t.Fatalf("first publish outbox event count=%d err=%v", firstEventCount, err)
+	}
 
 	sentinelTime := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
 	if err := db.Model(&models.UserMentionRecent{}).Where("user_id = ? AND mentioned_user_id = ?", actorID, recipient.ID).Update("last_mentioned_at", sentinelTime).Error; err != nil {
@@ -207,7 +216,6 @@ func TestCreatePostMentionIdempotencyReplayDoesNotRefreshRecentOrOutboxIntegrati
 		t.Fatalf("idempotent replay refreshed mention recent=%+v err=%v", recent, err)
 	}
 	var eventCount int64
-	aggregateID := strconv.FormatUint(uint64(first.ID), 10) + ":" + strconv.FormatUint(uint64(recipient.ID), 10)
 	if err := db.Model(&models.OutboxEvent{}).Where("aggregate_type = ? AND aggregate_id = ?", "post_mention", aggregateID).Count(&eventCount).Error; err != nil || eventCount != 1 {
 		t.Fatalf("mention outbox event count=%d err=%v", eventCount, err)
 	}

@@ -58,9 +58,9 @@ func TestPostMentionNotificationProjectionIsValidatedAndReadIdempotentIntegratio
 	global.WorkerDb = tx
 	groupID := "mention-projection-" + uuid.NewString()
 	config.AppConfig = &config.Config{Kafka: config.KafkaConfig{NotificationGroupID: groupID}}
-	actor := models.User{Username: "mention-projection-actor-" + uuid.NewString(), Password: "test"}
-	recipient := models.User{Username: "mention-projection-recipient-" + uuid.NewString(), Password: "test"}
-	other := models.User{Username: "mention-projection-other-" + uuid.NewString(), Password: "test"}
+	actor := models.User{Username: "mp-actor-" + uuid.NewString(), Password: "test"}
+	recipient := models.User{Username: "mp-recipient-" + uuid.NewString(), Password: "test"}
+	other := models.User{Username: "mp-other-" + uuid.NewString(), Password: "test"}
 	if err := tx.Create(&[]*models.User{&actor, &recipient, &other}).Error; err != nil {
 		t.Fatal(err)
 	}
