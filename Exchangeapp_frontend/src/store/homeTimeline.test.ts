@@ -141,9 +141,11 @@ const recommendation = (id: number, repostCount = 0) => ({
 const recommendationPage = (
   items: ReturnType<typeof recommendation>[],
   depleted = false,
+  nextCursor: string | null = null,
 ) => ({
   items,
   request_id: 'request-id',
+  next_cursor: nextCursor,
   depleted,
 });
 
@@ -451,6 +453,53 @@ describe('home timeline session store', () => {
 
     expect(mocks.getPostLikeStates).toHaveBeenCalledWith([3]);
     expect(mocks.getPostRepostStates).toHaveBeenCalledWith([3]);
+  });
+
+  it('uses the saved cursor for For You pages and advances it only after success', async () => {
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)], false, 'cursor-page-1'))
+      .mockResolvedValueOnce(recommendationPage([recommendation(2)], false, 'cursor-page-2'));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    expect(store.forYou.nextCursor).toBe('cursor-page-1');
+    await store.loadMoreForYou();
+
+    expect(mocks.getPostRecommendations).toHaveBeenNthCalledWith(1, 20);
+    expect(mocks.getPostRecommendations).toHaveBeenNthCalledWith(2, 20, 'cursor-page-1');
+    expect(store.forYou.nextCursor).toBe('cursor-page-2');
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2]);
+  });
+
+  it('rebuilds an expired For You cursor once without clearing loaded posts', async () => {
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)], false, 'expired-cursor'))
+      .mockRejectedValueOnce({ response: { status: 410 } })
+      .mockResolvedValueOnce(recommendationPage([recommendation(2)], false, 'replacement-cursor'));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await store.loadMoreForYou();
+
+    expect(mocks.getPostRecommendations).toHaveBeenNthCalledWith(1, 20);
+    expect(mocks.getPostRecommendations).toHaveBeenNthCalledWith(2, 20, 'expired-cursor');
+    expect(mocks.getPostRecommendations).toHaveBeenNthCalledWith(3, 20);
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2]);
+    expect(store.forYou.nextCursor).toBe('replacement-cursor');
+    expect(store.forYou.loadMoreError).toBe(false);
+  });
+
+  it('clears the For You cursor when force refreshing', async () => {
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)], false, 'old-cursor'))
+      .mockResolvedValueOnce(recommendationPage([recommendation(2)], false, 'new-cursor'));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await store.loadForYou(true);
+
+    expect(mocks.getPostRecommendations).toHaveBeenNthCalledWith(2, 20);
+    expect(store.forYou.nextCursor).toBe('new-cursor');
   });
 
   it('keeps later-page Like and Repost hydration valid when the next page starts', async () => {

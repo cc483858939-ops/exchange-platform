@@ -45,6 +45,30 @@ func TestRecommendationServingTimeoutDoesNotChangeRecommendationHashes(t *testin
 	}
 }
 
+func TestRecommendationSnapshotConfigDefaultsAndBounds(t *testing.T) {
+	defaults := NormalizeConfig(config.RecommendationConfig{}, nil).Snapshot
+	if !defaults.Enabled || defaults.TTLSeconds != 120 || defaults.MaxCandidates != 500 ||
+		defaults.PreselectPages != 2 || defaults.DefaultPageSize != 20 || defaults.MaxPageSize != 50 {
+		t.Fatalf("snapshot defaults=%#v", defaults)
+	}
+
+	configured := config.RecommendationConfig{Snapshot: config.RecommendationSnapshotConfig{
+		Enabled: true, TTLSeconds: 30, MaxCandidates: 900, PreselectPages: 4,
+		DefaultPageSize: 80, MaxPageSize: 75,
+	}}
+	got := NormalizeConfig(configured, map[string]bool{"snapshot.enabled": true}).Snapshot
+	if !got.Enabled || got.TTLSeconds != 30 || got.MaxCandidates != 500 || got.PreselectPages != 4 ||
+		got.DefaultPageSize != 50 || got.MaxPageSize != 50 {
+		t.Fatalf("normalized snapshot settings=%#v", got)
+	}
+
+	configured.Snapshot = config.RecommendationSnapshotConfig{Enabled: true, TTLSeconds: -1, MaxCandidates: -1, PreselectPages: -1, DefaultPageSize: -1, MaxPageSize: -1}
+	got = NormalizeConfig(configured, nil).Snapshot
+	if got.TTLSeconds != 120 || got.MaxCandidates != 500 || got.PreselectPages != 2 || got.DefaultPageSize != 20 || got.MaxPageSize != 50 {
+		t.Fatalf("invalid snapshot settings did not use defaults: %#v", got)
+	}
+}
+
 func TestRecommendationTraceDispatcherSettingsDefaultAndNormalize(t *testing.T) {
 	defaults := NormalizeConfig(config.RecommendationConfig{}, nil).Trace
 	if defaults.PersistTimeoutMS != 5000 || defaults.QueueCapacity != 256 || defaults.WorkerCount != 1 || defaults.ShutdownDrainTimeoutMS != 5000 {

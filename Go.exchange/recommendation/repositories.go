@@ -72,6 +72,7 @@ type Profile struct {
 	FollowingAuthorIDs            map[uint]struct{}
 	ProfileVersion                string
 	ProfileConfigHash             string
+	ComputedAt                    time.Time
 	ProfileStatus                 string
 	ProfileAgeMS                  int64
 	MaterializedInteractionsReady bool
@@ -179,6 +180,7 @@ type DataDependencies struct {
 type ServiceDependencies struct {
 	DataDependencies
 	ServingVersions ServingVersionProvider
+	Snapshots       SnapshotStore
 	TraceEnqueuer   TraceEnqueuer
 	Metrics         Metrics
 }

@@ -62,6 +62,7 @@ func TestRecommendationServiceUsesConfiguredHistoryPolicies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	finalizeServiceTestResult(t, service, userResult)
 	if len(userResult.Selected) != 1 || !reflect.DeepEqual(history.lastUserIDs, []uint{1}) || history.lastUserWindow != wantUserWindow {
 		t.Fatalf("user history record ids=%v window=%#v result=%#v", history.lastUserIDs, history.lastUserWindow, userResult)
 	}
@@ -72,6 +73,7 @@ func TestRecommendationServiceUsesConfiguredHistoryPolicies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	finalizeServiceTestResult(t, service, guestResult)
 	if len(guestResult.Selected) != 1 || !reflect.DeepEqual(history.lastGuestIDs, []uint{2}) || history.lastGuestWindow != wantGuestWindow {
 		t.Fatalf("guest history record ids=%v window=%#v result=%#v", history.lastGuestIDs, history.lastGuestWindow, guestResult)
 	}

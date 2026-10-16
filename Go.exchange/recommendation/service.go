@@ -56,6 +56,7 @@ func NewService(dependencies ServiceDependencies, cfg ServiceConfig) (Verificati
 		}
 	}
 	cfg.Tracking.SigningKey = append([]byte(nil), cfg.Tracking.SigningKey...)
+	cfg.SnapshotSigningKey = append([]byte(nil), cfg.SnapshotSigningKey...)
 	return &RecommendationService{
 		dependencies: dependencies, config: cfg, metrics: dependencies.Metrics,
 		onboardingTopicSources: onboardingTopicSources,
@@ -92,6 +93,12 @@ func (service *RecommendationService) Serve(ctx context.Context, request ServeRe
 			span.End()
 		}()
 	}
+	if request.Limit <= 0 && service.config.Recommendation.Snapshot.DefaultPageSize > 0 {
+		request.Limit = service.config.Recommendation.Snapshot.DefaultPageSize
+	}
+	if maxPageSize := service.config.Recommendation.Snapshot.MaxPageSize; maxPageSize > 0 && request.Limit > maxPageSize {
+		request.Limit = maxPageSize
+	}
 	request, err := normalizeServeRequest(request)
 	if err != nil {
 		service.metrics.RecordRequest("error", RecommendationColdStartStrategyID)
@@ -123,26 +130,76 @@ func (service *RecommendationService) Serve(ctx context.Context, request ServeRe
 		service.recordFailedRequest(request.Viewer, historyErr, Profile{})
 		return ServeResult{RequestID: request.RequestID, Now: request.Now, Viewer: request.Viewer}, historyErr
 	}
-	result, err := service.execute(ctx, request, servingVersion, served, true)
-	if err != nil {
-		service.recordFailedRequest(request.Viewer, err, result.Profile)
-		result.RequestID = request.RequestID
-		result.Now = request.Now
-		result.Viewer = request.Viewer
-		return result, err
+	var result ServeResult
+	if request.Cursor != "" {
+		result, request, err = service.serveSnapshotCursor(ctx, request, servingVersion, served)
+		if errors.Is(err, ErrSnapshotUnavailable) || errors.Is(err, ErrSnapshotTooLarge) {
+			log.Printf("[RecommendationSnapshot] cursor fallback: %v", err)
+			service.metrics.RecordSnapshotOutcome("fallback")
+			result, err = service.execute(ctx, request, servingVersion, served, true)
+			if err == nil {
+				result.snapshotFallback = true
+				result.NextCursor = ""
+				result.Depleted = false
+			}
+		} else if err != nil {
+			if errors.Is(err, ErrInvalidCursor) {
+				service.metrics.RecordSnapshotOutcome("invalid_cursor")
+			} else if errors.Is(err, ErrCursorExpired) {
+				service.metrics.RecordSnapshotOutcome("expired")
+			}
+			service.recordFailedRequest(request.Viewer, err, result.Profile)
+			return result, err
+		} else if result.CacheHit {
+			service.metrics.RecordSnapshotOutcome("hit")
+		}
+	} else {
+		result, err = service.execute(ctx, request, servingVersion, served, true)
+		if err != nil {
+			service.recordFailedRequest(request.Viewer, err, result.Profile)
+			result.RequestID = request.RequestID
+			result.Now = request.Now
+			result.Viewer = request.Viewer
+			return result, err
+		}
+		if request.Viewer.Kind == ViewerAuthenticated && service.snapshotConfigured() {
+			if snapshotErr := service.createInitialSnapshot(ctx, request, servingVersion, &result, time.Since(started)); snapshotErr != nil {
+				service.metrics.RecordSnapshotOutcome("fallback")
+				if !errors.Is(snapshotErr, ErrSnapshotUnavailable) {
+					log.Printf("[RecommendationSnapshot] create fallback: %v", snapshotErr)
+				}
+				result.NextCursor = ""
+				if errors.Is(snapshotErr, ErrSnapshotUnavailable) || errors.Is(snapshotErr, ErrSnapshotTooLarge) {
+					result.snapshotFallback = true
+					result.Depleted = false
+				}
+			} else if result.snapshotPrepared {
+				service.metrics.RecordSnapshotOutcome("created")
+			}
+		}
 	}
 	result.Viewer = request.Viewer
-	result.RequestID = request.RequestID
-	result.Now = request.Now
+	if result.RequestID == "" {
+		result.RequestID = request.RequestID
+	}
+	if result.Now.IsZero() {
+		result.Now = request.Now
+	}
 	result.Limit = request.Limit
 	result.EmbeddingVersion = servingVersion
 	result.StrategyID = serviceStrategyFor(request.Viewer, result.Profile)
 	result.RankerConfigHash = RankerConfigHash(service.config.Recommendation, servingVersion)
-	result.PersonalizationMode = personalizationMode(result.Profile, result.CandidateSummary.FollowingCount)
-	result.FallbackReason = fallbackReason(result.Profile.PositiveSignalCount, len(result.Selected), request.Limit)
-	result.Depleted = len(result.Selected) == 0
-	if request.Viewer.Kind == ViewerGuest {
-		result.Depleted = len(result.Selected) < request.Limit
+	if result.PersonalizationMode == "" {
+		result.PersonalizationMode = personalizationMode(result.Profile, result.CandidateSummary.FollowingCount)
+	}
+	if result.FallbackReason == "" {
+		result.FallbackReason = fallbackReason(result.Profile.PositiveSignalCount, len(result.Selected), request.Limit)
+	}
+	if !result.snapshotPrepared && !result.snapshotFallback {
+		result.Depleted = len(result.Selected) == 0
+		if request.Viewer.Kind == ViewerGuest {
+			result.Depleted = len(result.Selected) < request.Limit
+		}
 	}
 
 	if request.Viewer.Kind == ViewerAuthenticated {
@@ -156,27 +213,25 @@ func (service *RecommendationService) Serve(ctx context.Context, request ServeRe
 		service.metrics.AddTrackingResults("untracked", len(result.Selected)-len(result.Tracking))
 	}
 	generationDuration := time.Since(started)
+	if result.traceGenerationDuration <= 0 {
+		result.traceGenerationDuration = generationDuration
+	}
 	service.metrics.ObserveGenerationDuration(result.StrategyID, generationDuration)
-	var traceJob *TracePersistJob
-	if request.Viewer.Kind == ViewerAuthenticated {
-		traceRequest := buildRecommendationRequest(request, result, generationDuration, service.config.Recommendation)
-		traceJob = &TracePersistJob{
-			Request: traceRequest,
-			Results: buildResultTraces(traceRequest, result.Selected, request.Now, service.config.Recommendation),
-		}
-	}
-	service.recordHistory(ctx, request, result.Selected)
-	if traceJob != nil && ctx.Err() == nil && service.dependencies.TraceEnqueuer != nil {
-		service.dependencies.TraceEnqueuer.TryEnqueue(*traceJob)
-	}
 	service.metrics.ObserveCandidateCount(len(result.FreshCandidateSummary.Candidates))
-	service.metrics.ObserveResultCount(len(result.Selected))
-	service.recordResultMetrics(result.Selected)
 	requestOutcome := "success"
 	if len(result.Selected) == 0 {
 		requestOutcome = "empty"
 	}
 	service.metrics.RecordRequest(requestOutcome, result.StrategyID)
+	if result.finalization == nil {
+		result.finalization = &servingFinalization{
+			request: request, generationDuration: result.traceGenerationDuration,
+		}
+	} else {
+		result.finalization.request = request
+		result.finalization.generationDuration = result.traceGenerationDuration
+	}
+	result.finalization.traceContext = ctx
 	return result, nil
 }
 
@@ -304,6 +359,7 @@ func (service *RecommendationService) executeUser(ctx context.Context, request S
 		return result, err
 	}
 	rankedFresh := traceRankRecommendationCandidates(ctx, profileFeatures(profile), freshHydrated, request.Now, rankingConfig(service.config.Recommendation), languageContext, phaseName(false))
+	result.freshRankedCandidates = append([]RankedCandidate(nil), rankedFresh...)
 	selected := traceSelectRecommendationCandidates(ctx, SelectionInput{
 		Candidates: rankedFresh, Limit: request.Limit, Now: request.Now, Phase: SelectionPhaseFresh,
 		RequestID: request.RequestID, Config: selectionConfig(service.config.Recommendation),
@@ -333,6 +389,7 @@ func (service *RecommendationService) executeUser(ctx context.Context, request S
 			return result, err
 		}
 		rankedSoft := traceRankRecommendationCandidates(ctx, profileFeatures(profile), softHydrated, request.Now, rankingConfig(service.config.Recommendation), languageContext, phaseName(true))
+		result.softRankedCandidates = append([]RankedCandidate(nil), rankedSoft...)
 		selected = traceSelectRecommendationCandidates(ctx, SelectionInput{
 			Candidates: rankedSoft, Initial: selected, Limit: request.Limit, Now: request.Now, Phase: SelectionPhaseSoft,
 			RequestID: request.RequestID, Config: selectionConfig(service.config.Recommendation),

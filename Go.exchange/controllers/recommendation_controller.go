@@ -26,9 +26,10 @@ type RecommendedPostResponse struct {
 }
 
 type postRecommendationPageResponse struct {
-	Items     []RecommendedPostResponse `json:"items"`
-	RequestID string                    `json:"request_id"`
-	Depleted  bool                      `json:"depleted"`
+	Items      []RecommendedPostResponse `json:"items"`
+	RequestID  string                    `json:"request_id"`
+	NextCursor *string                   `json:"next_cursor"`
+	Depleted   bool                      `json:"depleted"`
 }
 
 type recommendationTrackingResponse struct {
@@ -92,7 +93,7 @@ func (handler *RecommendationHandler) serve(ctx *gin.Context, viewer recommendat
 		requestedLimit = parsed
 	}
 	result, err := handler.service.Serve(servingCtx, recommendation.ServeRequest{
-		Viewer: viewer, Limit: requestedLimit, BrowserLanguage: recommendation.LanguageContext{
+		Viewer: viewer, Limit: requestedLimit, Cursor: strings.TrimSpace(ctx.Query("cursor")), BrowserLanguage: recommendation.LanguageContext{
 			Browser: browserPrior, BrowserPrimary: browserPrimary,
 		},
 	})
@@ -127,9 +128,34 @@ func (handler *RecommendationHandler) serve(ctx *gin.Context, viewer recommendat
 		return
 	}
 	attachRecommendationTrackingFacts(recommendations, result.Tracking)
+	if finalizer, ok := handler.service.(recommendation.ServingFinalizer); ok {
+		if err := finalizer.FinalizeServing(servingCtx, result, selectedForMappedRecommendations(result.Selected, recommendations)); err != nil {
+			recommendationErrorResponse(ctx, err, result.StrategyID)
+			return
+		}
+	}
+	var nextCursor *string
+	if result.NextCursor != "" {
+		value := result.NextCursor
+		nextCursor = &value
+	}
 	ctx.JSON(http.StatusOK, postRecommendationPageResponse{
-		Items: recommendations, RequestID: result.RequestID, Depleted: result.Depleted,
+		Items: recommendations, RequestID: result.RequestID, NextCursor: nextCursor, Depleted: result.Depleted,
 	})
+}
+
+func selectedForMappedRecommendations(selected []recommendation.SelectedCandidate, mapped []RecommendedPostResponse) []recommendation.SelectedCandidate {
+	byID := make(map[uint]recommendation.SelectedCandidate, len(selected))
+	for _, item := range selected {
+		byID[item.Post.ID] = item
+	}
+	result := make([]recommendation.SelectedCandidate, 0, len(mapped))
+	for _, item := range mapped {
+		if selected, exists := byID[item.Post.ID]; exists {
+			result = append(result, selected)
+		}
+	}
+	return result
 }
 
 func recordRecommendationControllerSpanError(span trace.Span, err error) {
@@ -172,6 +198,14 @@ func recommendationErrorResponse(ctx *gin.Context, err error, _ string) {
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		ctx.JSON(http.StatusGatewayTimeout, gin.H{"error": "recommendation timed out"})
+		return
+	}
+	if errors.Is(err, recommendation.ErrInvalidCursor) {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_CURSOR"})
+		return
+	}
+	if errors.Is(err, recommendation.ErrCursorExpired) {
+		ctx.JSON(http.StatusGone, gin.H{"error": "CURSOR_EXPIRED"})
 		return
 	}
 	ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

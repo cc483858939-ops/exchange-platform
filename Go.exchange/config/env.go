@@ -321,6 +321,10 @@ func RecommendationTelemetrySigningKey() string {
 	return strings.TrimSpace(os.Getenv("RECOMMENDATION_TELEMETRY_SIGNING_KEY"))
 }
 
+func RecommendationSnapshotCursorSigningKey() string {
+	return strings.TrimSpace(os.Getenv("RECOMMENDATION_CURSOR_SIGNING_KEY"))
+}
+
 func RecommendationTelemetryTokenTTL() time.Duration {
 	return envDuration("RECOMMENDATION_TELEMETRY_TOKEN_TTL", 24*time.Hour)
 }

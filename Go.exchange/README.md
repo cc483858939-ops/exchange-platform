@@ -104,6 +104,21 @@ source. Recency is handled by Recent recall, publication-time tie breaking,
 and exploration/selection policies rather than a freshness `BaseScore`
 component.
 
+Authenticated For You pagination reuses a short-lived Redis candidate snapshot
+for up to 120 seconds. The snapshot stores at most 500 lightweight ranked
+candidates, not rendered Post responses. Every page rechecks current Post
+eligibility before mapping the response. Cursors bind the viewer and page size,
+are HMAC signed, and return `400 INVALID_CURSOR` for tampering or `410
+CURSOR_EXPIRED` when their snapshot expires. Redis failures fall back to the
+uncached recommendation path and return `next_cursor: null` with
+`depleted: false`.
+
+Set `RECOMMENDATION_CURSOR_SIGNING_KEY` to a private random secret containing
+at least 32 bytes for each API deployment. Keep it outside source control and
+do not expose it as a frontend `VITE_*` variable. If it is absent, the API does
+not issue authenticated recommendation cursors. Snapshot outcomes are counted
+by the bounded `go_exchange_recommendation_snapshot_total{outcome=...}` metric.
+
 ## Local Development
 
 The local development prerequisites are Docker, Docker Compose, and Go 1.25+ for first-time JWT key generation. Docker-only key generation has not been verified here, so the documented fallback runs the generator with host Go:

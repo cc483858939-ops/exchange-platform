@@ -56,6 +56,7 @@ func (r *GormProfileRepository) Load(ctx context.Context, query ProfileLoadQuery
 	}
 	profile.ProfileVersion = row.ProfileVersion
 	profile.ProfileConfigHash = row.ProfileConfigHash
+	profile.ComputedAt = row.ComputedAt.UTC()
 	profile.MaterializedInteractionsReady = true
 	profile.PositiveSignalCount = row.PositiveSignalCount
 	profile.NegativeSignalCount = row.NegativeSignalCount

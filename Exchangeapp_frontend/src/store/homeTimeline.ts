@@ -92,6 +92,7 @@ export type HomeForYouState = HomeFeedState<HomeRecommendationItem> & {
   loadingMore: boolean;
   loadMoreError: boolean;
   depleted: boolean;
+  nextCursor: string | null;
 };
 
 const HOME_FOR_YOU_PAGE_SIZE = 20;
@@ -129,6 +130,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     loadingMore: false,
     loadMoreError: false,
     depleted: false,
+    nextCursor: null,
   });
   const following = reactive<HomeFollowingState>({
     items: [],
@@ -173,6 +175,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     forYou.loadingMore = false;
     forYou.loadMoreError = false;
     forYou.depleted = false;
+    forYou.nextCursor = null;
     forYouLoadedPostIds.clear();
     forYouNoProgressPages = 0;
   };
@@ -731,6 +734,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       const newItems = appendForYouRecommendations(response.items);
       forYou.loaded = true;
       forYou.depleted = response.depleted;
+      forYou.nextCursor = response.next_cursor ?? null;
       if (capturedAudience.authenticated) {
         void hydrateEngagementStates(
           newItems.map(({ post }) => post.id),
@@ -783,13 +787,18 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     forYou.loadMoreError = false;
 
     try {
+      const cursor = forYou.nextCursor;
       const response = capturedAudience.authenticated
-        ? await getPostRecommendations(HOME_FOR_YOU_PAGE_SIZE)
+        ? cursor
+          ? await getPostRecommendations(HOME_FOR_YOU_PAGE_SIZE, cursor)
+          : await getPostRecommendations(HOME_FOR_YOU_PAGE_SIZE)
         : await getPublicPostRecommendations({
           limit: HOME_FOR_YOU_PAGE_SIZE,
+          ...(cursor ? { cursor } : {}),
           guestSessionId: getGuestRecommendationSessionID(),
         });
       if (!currentForYouPage(requestVersion, generation, pagingVersion, capturedAudience)) return;
+      forYou.nextCursor = response.next_cursor ?? null;
       const newItems = appendForYouRecommendations(response.items);
       if (response.depleted) {
         forYou.depleted = true;
@@ -809,9 +818,38 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
           () => currentForYouRequest(requestVersion, generation, capturedAudience),
         );
       }
-    } catch {
+    } catch (error) {
       if (currentForYouPage(requestVersion, generation, pagingVersion, capturedAudience)) {
-        forYou.loadMoreError = true;
+        if (capturedAudience.authenticated && forYou.nextCursor && getErrorStatus(error) === 410) {
+          // Rebuild the cursor session once while preserving the loaded ID set.
+          forYou.nextCursor = null;
+          try {
+            const response = await getPostRecommendations(HOME_FOR_YOU_PAGE_SIZE);
+            if (!currentForYouPage(requestVersion, generation, pagingVersion, capturedAudience)) return;
+            forYou.nextCursor = response.next_cursor ?? null;
+            const newItems = appendForYouRecommendations(response.items);
+            forYou.depleted = response.depleted;
+            if (response.depleted) {
+              forYouNoProgressPages = 0;
+            } else if (newItems.length > 0) {
+              forYouNoProgressPages = 0;
+            } else if (response.items.length > 0) {
+              forYouNoProgressPages += 1;
+              if (forYouNoProgressPages >= 2) forYou.depleted = true;
+            }
+            void hydrateEngagementStates(
+              newItems.map(({ post }) => post.id),
+              () => currentForYouRequest(requestVersion, generation, capturedAudience),
+            );
+            forYou.loadMoreError = false;
+          } catch {
+            if (currentForYouPage(requestVersion, generation, pagingVersion, capturedAudience)) {
+              forYou.loadMoreError = true;
+            }
+          }
+        } else {
+          forYou.loadMoreError = true;
+        }
       }
     } finally {
       if (currentForYouPage(requestVersion, generation, pagingVersion, capturedAudience)) {

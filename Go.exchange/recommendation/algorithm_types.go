@@ -163,6 +163,7 @@ type SelectionConfig struct {
 type SelectionInput struct {
 	Candidates []RankedCandidate
 	Initial    []SelectedCandidate
+	Prior      []SelectedCandidate
 	Limit      int
 	Now        time.Time
 	Phase      SelectionPhase

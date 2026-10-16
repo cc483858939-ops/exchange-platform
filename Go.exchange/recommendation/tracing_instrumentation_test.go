@@ -48,10 +48,11 @@ func TestRecommendationServiceTracingRecordsAuthenticatedStageHierarchy(t *testi
 	result, err := service.Serve(rootCtx, ServeRequest{
 		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 1, RequestID: requestID, Now: now,
 	})
-	root.End()
 	if err != nil {
 		t.Fatal(err)
 	}
+	finalizeServiceTestResult(t, service, result)
+	root.End()
 	if result.RequestID != requestID {
 		t.Fatalf("business request ID=%q want=%q", result.RequestID, requestID)
 	}

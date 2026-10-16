@@ -23,6 +23,7 @@ type Viewer struct {
 type ServeRequest struct {
 	Viewer          Viewer
 	Limit           int
+	Cursor          string
 	RequestID       string
 	Now             time.Time
 	BrowserLanguage LanguageContext
@@ -58,11 +59,24 @@ type ServeResult struct {
 	OnboardingInterestActive         bool
 	OnboardingInterestCandidateCount int
 	Depleted                         bool
+	NextCursor                       string
+	PoolID                           string
+	CacheHit                         bool
 	Tracking                         []TrackingFact
+	finalization                     *servingFinalization
+	snapshotFallback                 bool
+	freshRankedCandidates            []RankedCandidate
+	softRankedCandidates             []RankedCandidate
+	snapshotPrepared                 bool
+	traceGenerationDuration          time.Duration
 }
 
 type Service interface {
 	Serve(ctx context.Context, request ServeRequest) (ServeResult, error)
+}
+
+type ServingFinalizer interface {
+	FinalizeServing(ctx context.Context, result ServeResult, returned []SelectedCandidate) error
 }
 
 type VerificationRequest struct {
@@ -88,8 +102,9 @@ type ServingVersionProvider interface {
 }
 
 type ServiceConfig struct {
-	Recommendation config.RecommendationConfig
-	Tracking       TrackingConfig
+	Recommendation     config.RecommendationConfig
+	Tracking           TrackingConfig
+	SnapshotSigningKey []byte
 }
 
 type Metrics interface {
@@ -103,6 +118,7 @@ type Metrics interface {
 	AddResultsBySelection(mode, reason string, count int)
 	AddTrackingResults(status string, count int)
 	RecordHistoryLoadFailure(viewer ViewerKind)
+	RecordSnapshotOutcome(outcome string)
 	RecordTracePersistFailure()
 	RecordTraceEnqueue(result TraceEnqueueResult)
 	SetTraceQueueDepth(depth int)
@@ -123,6 +139,7 @@ func (NoopMetrics) AddResultsByClass(string, int)                         {}
 func (NoopMetrics) AddResultsBySelection(string, string, int)             {}
 func (NoopMetrics) AddTrackingResults(string, int)                        {}
 func (NoopMetrics) RecordHistoryLoadFailure(ViewerKind)                   {}
+func (NoopMetrics) RecordSnapshotOutcome(string)                          {}
 func (NoopMetrics) RecordTracePersistFailure()                            {}
 func (NoopMetrics) RecordTraceEnqueue(TraceEnqueueResult)                 {}
 func (NoopMetrics) SetTraceQueueDepth(int)                                {}

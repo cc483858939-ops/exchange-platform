@@ -28,20 +28,23 @@ func (provider serviceTestVersionProvider) LoadServingVersion(context.Context) (
 }
 
 type serviceTestCandidateRepository struct {
-	calls         *[]string
-	semantic      []Candidate
-	following     []Candidate
-	recent        []Candidate
-	trending      []Candidate
-	publicRecent  []Candidate
-	publicTrend   []Candidate
-	softRecent    []Candidate
-	posts         map[uint]models.Post
-	loadErr       error
-	hydrateErr    error
-	publicCalls   int
-	softQueries   int
-	recentQueries []CandidateQuery
+	calls                    *[]string
+	semantic                 []Candidate
+	following                []Candidate
+	recent                   []Candidate
+	trending                 []Candidate
+	publicRecent             []Candidate
+	publicTrend              []Candidate
+	softRecent               []Candidate
+	posts                    map[uint]models.Post
+	loadErr                  error
+	hydrateErr               error
+	publicCalls              int
+	softQueries              int
+	recentQueries            []CandidateQuery
+	snapshotEligibilityCalls int
+	snapshotCandidateIDsRead int
+	embeddingReadCalls       int
 }
 
 func (repository *serviceTestCandidateRepository) addCall(value string) {
@@ -103,7 +106,8 @@ func (repository *serviceTestCandidateRepository) HydrateCandidates(_ context.Co
 	}
 	return items, nil
 }
-func (*serviceTestCandidateRepository) LoadPostEmbeddings(context.Context, []uint, string) (map[uint][]float32, error) {
+func (repository *serviceTestCandidateRepository) LoadPostEmbeddings(_ context.Context, postIDs []uint, _ string) (map[uint][]float32, error) {
+	repository.embeddingReadCalls++
 	return map[uint][]float32{}, nil
 }
 
@@ -177,6 +181,17 @@ type serviceTestTraceEnqueuer struct {
 	job          TracePersistJob
 	result       TraceEnqueueResult
 	enqueueCalls int
+}
+
+func finalizeServiceTestResult(t testing.TB, service VerificationService, result ServeResult) {
+	t.Helper()
+	finalizer, ok := service.(ServingFinalizer)
+	if !ok {
+		t.Fatal("recommendation service does not implement ServingFinalizer")
+	}
+	if err := finalizer.FinalizeServing(context.Background(), result, result.Selected); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (enqueuer *serviceTestTraceEnqueuer) TryEnqueue(job TracePersistJob) TraceEnqueueResult {
@@ -266,6 +281,7 @@ func TestRecommendationServiceAuthenticatedOwnsServingSequenceAndSideEffects(t *
 	if err != nil {
 		t.Fatal(err)
 	}
+	finalizeServiceTestResult(t, service, result)
 	wantCalls := []string{"version", "history_load_user", "profile", "semantic", "following", "recent", "trending", "hydrate", "author_context", "history_record_user", "trace_enqueue"}
 	if !reflect.DeepEqual(calls, wantCalls) {
 		t.Fatalf("serving calls=%v want=%v", calls, wantCalls)
@@ -308,6 +324,7 @@ func TestRecommendationServiceGuestOwnsPublicDiversificationFallbackAndHistory(t
 	if err != nil {
 		t.Fatal(err)
 	}
+	finalizeServiceTestResult(t, service, result)
 	if candidates.publicCalls < 4 {
 		t.Fatalf("public candidate calls=%d want fresh and fallback source calls", candidates.publicCalls)
 	}

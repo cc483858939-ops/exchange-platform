@@ -122,8 +122,9 @@ func SelectCandidates(input SelectionInput) []SelectedCandidate {
 		return nil
 	}
 	result := append([]SelectedCandidate(nil), input.Initial...)
-	selectedIDs := make(map[uint]struct{}, len(result))
-	for _, item := range result {
+	selectedContext := append(append([]SelectedCandidate(nil), input.Prior...), result...)
+	selectedIDs := make(map[uint]struct{}, len(selectedContext))
+	for _, item := range selectedContext {
 		selectedIDs[item.Post.ID] = struct{}{}
 	}
 	outPositions := make(map[int]struct{})
@@ -153,7 +154,7 @@ func SelectCandidates(input SelectionInput) []SelectedCandidate {
 			}
 			return true
 		}
-		_, normal, normalOK := chooseNormalCandidate(input.Candidates, result, available, outPositions, position, input.Config, input.Phase)
+		_, normal, normalOK := chooseNormalCandidate(input.Candidates, selectedContext, available, outPositions, position, input.Config, input.Phase)
 		chosen := normal
 		ok := normalOK
 		selectionOpportunity := false
@@ -166,7 +167,7 @@ func SelectCandidates(input SelectionInput) []SelectedCandidate {
 			opportunity = opportunityPosition
 		}
 		if opportunity {
-			_, strict, strictOK := chooseStrictExplorationCandidateWithConfig(input.Candidates, result, available, outPositions, position, input.Config, input.Now)
+			_, strict, strictOK := chooseStrictExplorationCandidateWithConfig(input.Candidates, selectedContext, available, outPositions, position, input.Config, input.Now)
 			if strictOK && (!normalOK || strict.Post.ID != normal.Post.ID) {
 				chosen = strict
 				ok = true
@@ -183,14 +184,25 @@ func SelectCandidates(input SelectionInput) []SelectedCandidate {
 		}
 		selectedIDs[chosen.Post.ID] = struct{}{}
 		chosen.Breakdown.FinalScore = chosen.Breakdown.BaseScore - chosen.Breakdown.DiversityPenalty
-		result = append(result, SelectedCandidate{
+		selected := SelectedCandidate{
 			Candidate: chosen.Candidate, Post: chosen.Post, Embedding: chosen.Embedding,
 			Breakdown: chosen.Breakdown, IsInNetwork: chosen.IsInNetwork, IsNovelAuthor: chosen.IsNovelAuthor,
 			ExplorationOpportunity: selectionOpportunity, SelectionMode: selectionMode,
 			ExplorationReason: selectionReason, ExplorationSemantic: selectionSemantic,
-		})
+		}
+		result = append(result, selected)
+		selectedContext = append(selectedContext, selected)
 	}
 	return result
+}
+
+// SelectNextPage applies the existing per-page selection policy while using
+// previously returned pages as the author-window and semantic-diversity
+// context. Limit remains the current page size, so exploration and network
+// quotas keep their single-page semantics.
+func SelectNextPage(input SelectionInput, prior []SelectedCandidate) []SelectedCandidate {
+	input.Prior = append([]SelectedCandidate(nil), prior...)
+	return SelectCandidates(input)
 }
 
 func chooseNormalCandidate(candidates []RankedCandidate, selected []SelectedCandidate, available func(RankedCandidate) bool, outPositions map[int]struct{}, position int, cfg SelectionConfig, phase SelectionPhase) (int, RankedCandidate, bool) {

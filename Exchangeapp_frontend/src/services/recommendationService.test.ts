@@ -21,6 +21,7 @@ describe('recommendation service', () => {
     const page = {
       items: [],
       request_id: 'request-42',
+      next_cursor: null,
       depleted: true,
     };
     mocks.get.mockResolvedValue({ data: page });
@@ -29,6 +30,17 @@ describe('recommendation service', () => {
 
     expect(mocks.get).toHaveBeenCalledWith('/recommendations/posts', {
       params: { limit: 20 },
+    });
+  });
+
+  it('forwards a cursor for authenticated recommendation pages', async () => {
+    const page = { items: [], request_id: 'page-2', next_cursor: 'cursor-2', depleted: false };
+    mocks.get.mockResolvedValue({ data: page });
+
+    await expect(getPostRecommendations(20, 'cursor-1')).resolves.toEqual(page);
+
+    expect(mocks.get).toHaveBeenCalledWith('/recommendations/posts', {
+      params: { limit: 20, cursor: 'cursor-1' },
     });
   });
 
@@ -41,7 +53,7 @@ describe('recommendation service', () => {
   );
 
   it('requests guest recommendations with the tab session header', async () => {
-    const page = { items: [], request_id: 'guest-request', depleted: true };
+    const page = { items: [], request_id: 'guest-request', next_cursor: null, depleted: true };
     mocks.get.mockResolvedValue({ data: page });
 
     await expect(getPublicPostRecommendations({
@@ -59,13 +71,26 @@ describe('recommendation service', () => {
   });
 
   it('does not send a guest session header when unavailable', async () => {
-    const page = { items: [], request_id: 'guest-request', depleted: true };
+    const page = { items: [], request_id: 'guest-request', next_cursor: null, depleted: true };
     mocks.get.mockResolvedValue({ data: page });
 
     await expect(getPublicPostRecommendations({ limit: 20 })).resolves.toEqual(page);
 
     expect(mocks.get).toHaveBeenCalledWith('/public/recommendations/posts', {
       params: { limit: 20 },
+    });
+  });
+
+  it('forwards a cursor for public recommendation pages without changing the session header', async () => {
+    const page = { items: [], request_id: 'guest-page-2', next_cursor: 'guest-cursor-2', depleted: false };
+    mocks.get.mockResolvedValue({ data: page });
+
+    await expect(getPublicPostRecommendations({ limit: 20, cursor: 'guest-cursor-1', guestSessionId: 'guest-id' }))
+      .resolves.toEqual(page);
+
+    expect(mocks.get).toHaveBeenCalledWith('/public/recommendations/posts', {
+      params: { limit: 20, cursor: 'guest-cursor-1' },
+      headers: { 'X-Guest-Recommendation-Session': 'guest-id' },
     });
   });
 });

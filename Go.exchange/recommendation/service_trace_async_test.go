@@ -2,6 +2,7 @@ package recommendation
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -90,16 +91,20 @@ func TestRecommendationServeReturnsWhileAsyncTracePersistenceIsBlocked(t *testin
 		TraceEnqueuer:   dispatcher,
 		Metrics:         metrics,
 	}, ServiceConfig{Recommendation: serviceTestConfig()})
-	type serveResult struct {
-		result ServeResult
-		err    error
+	result, err := service.Serve(context.Background(), ServeRequest{
+		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 1, RequestID: requestID, Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	served := make(chan serveResult, 1)
+	finalized := make(chan error, 1)
 	go func() {
-		result, err := service.Serve(context.Background(), ServeRequest{
-			Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 1, RequestID: requestID, Now: now,
-		})
-		served <- serveResult{result: result, err: err}
+		finalizer, ok := service.(ServingFinalizer)
+		if !ok {
+			finalized <- errors.New("recommendation service does not implement ServingFinalizer")
+			return
+		}
+		finalized <- finalizer.FinalizeServing(context.Background(), result, result.Selected)
 	}()
 
 	select {
@@ -108,12 +113,12 @@ func TestRecommendationServeReturnsWhileAsyncTracePersistenceIsBlocked(t *testin
 		t.Fatal("trace worker did not enter blocked persistence")
 	}
 	select {
-	case response := <-served:
-		if response.err != nil || response.result.RequestID != requestID || len(response.result.Selected) != 1 {
-			t.Fatalf("serve response=%#v error=%v", response.result, response.err)
+	case finalizeErr := <-finalized:
+		if finalizeErr != nil {
+			t.Fatalf("finalize response: %v", finalizeErr)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Serve waited for blocked trace repository persistence")
+		t.Fatal("FinalizeServing waited for blocked trace repository persistence")
 	}
 	if generation, observed := metrics.snapshot(); !observed || generation < 0 {
 		t.Fatalf("generation duration not recorded before Serve returned: %v observed=%v", generation, observed)
@@ -155,12 +160,13 @@ func TestRecommendationGenerationDurationIsFrozenBeforeHistoryAndReusedByTrace(t
 		TraceEnqueuer:   enqueuer,
 		Metrics:         metrics,
 	}, ServiceConfig{Recommendation: serviceTestConfig()})
-	_, err := service.Serve(context.Background(), ServeRequest{
+	result, err := service.Serve(context.Background(), ServeRequest{
 		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 1, RequestID: uuid.NewString(), Now: now,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	finalizeServiceTestResult(t, service, result)
 	observedDuration, observed := metrics.snapshot()
 	if !observed || !observedBeforeHistory.Load() {
 		t.Fatalf("generation metric was not frozen before synchronous history: observed=%v beforeHistory=%v", observed, observedBeforeHistory.Load())
@@ -186,11 +192,18 @@ func TestRecommendationServeSkipsTraceEnqueueWhenHistoryExpiresServingContext(t 
 		ServingVersions: serviceTestVersionProvider{version: "post_embedding_v1"},
 		TraceEnqueuer:   enqueuer,
 	}, ServiceConfig{Recommendation: serviceTestConfig()})
-	_, err := service.Serve(ctx, ServeRequest{
+	result, err := service.Serve(ctx, ServeRequest{
 		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 1, RequestID: uuid.NewString(), Now: now,
 	})
 	if err != nil {
 		t.Fatalf("best-effort history cancellation changed serving response: %v", err)
+	}
+	finalizer, ok := service.(ServingFinalizer)
+	if !ok {
+		t.Fatal("recommendation service does not implement ServingFinalizer")
+	}
+	if err := finalizer.FinalizeServing(ctx, result, result.Selected); err != nil {
+		t.Fatalf("finalize failed: %v", err)
 	}
 	if enqueuer.enqueueCalls != 0 {
 		t.Fatalf("trace enqueue calls=%d after serving context expired", enqueuer.enqueueCalls)

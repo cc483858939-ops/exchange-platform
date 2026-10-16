@@ -2,6 +2,7 @@ package recommendation
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -80,12 +81,14 @@ func TestRecommendationServiceAuthenticatedGormServingIntegration(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	result, err := service.Serve(context.Background(), ServeRequest{
+	serveRequest := ServeRequest{
 		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: viewer.ID}, Limit: 20, RequestID: requestID, Now: now,
-	})
+	}
+	result, err := service.Serve(context.Background(), serveRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
+	finalizeServiceTestResult(t, service, result)
 	if result.Viewer != (Viewer{Kind: ViewerAuthenticated, UserID: viewer.ID}) || result.EmbeddingVersion != version {
 		t.Fatalf("service viewer/version=%#v/%q", result.Viewer, result.EmbeddingVersion)
 	}
@@ -105,5 +108,23 @@ func TestRecommendationServiceAuthenticatedGormServingIntegration(t *testing.T) 
 	}
 	if persisted != 1 {
 		t.Fatalf("serving trace persisted %d request rows, want 1", persisted)
+	}
+
+	traceRequest := buildRecommendationRequest(serveRequest, result, result.traceGenerationDuration, cfg)
+	traceResults := buildResultTraces(traceRequest, result.Selected, result.Now, cfg)
+	if err := traces.PersistServing(context.Background(), traceRequest, traceResults); err != nil {
+		t.Fatalf("persist same serving trace twice: %v", err)
+	}
+	var resultRows int64
+	if err := db.Model(&models.RecommendationResultTrace{}).Where("request_id = ?", requestID).Count(&resultRows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if resultRows != int64(len(traceResults)) {
+		t.Fatalf("idempotent trace result rows=%d want %d", resultRows, len(traceResults))
+	}
+	conflictingResults := append([]models.RecommendationResultTrace(nil), traceResults...)
+	conflictingResults[0].PostID++
+	if err := traces.PersistServing(context.Background(), traceRequest, conflictingResults); !errors.Is(err, ErrTraceConflict) {
+		t.Fatalf("same request with different trace results error=%v want ErrTraceConflict", err)
 	}
 }

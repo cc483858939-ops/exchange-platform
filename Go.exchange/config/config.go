@@ -223,6 +223,15 @@ type RecommendationLanguageAffinityConfig struct {
 	MaxBehaviorShare        float64 `mapstructure:"max_behavior_share"`
 }
 
+type RecommendationSnapshotConfig struct {
+	Enabled         bool `mapstructure:"enabled"`
+	TTLSeconds      int  `mapstructure:"ttl_seconds"`
+	MaxCandidates   int  `mapstructure:"max_candidates"`
+	PreselectPages  int  `mapstructure:"preselect_pages"`
+	DefaultPageSize int  `mapstructure:"default_page_size"`
+	MaxPageSize     int  `mapstructure:"max_page_size"`
+}
+
 // RecommendationProfileMaterializationConfig controls the nearline profile
 // projection worker. These values affect scheduling only; they are
 // deliberately excluded from the profile and ranker configuration hashes.
@@ -295,6 +304,7 @@ type RecommendationConfig struct {
 	Candidates                        RecommendationCandidatesConfig             `mapstructure:"candidates"`
 	ProfileMaterialization            RecommendationProfileMaterializationConfig `mapstructure:"profile_materialization"`
 	LanguageAffinity                  RecommendationLanguageAffinityConfig       `mapstructure:"language_affinity"`
+	Snapshot                          RecommendationSnapshotConfig               `mapstructure:"snapshot"`
 }
 
 type OutboxConfig struct {
@@ -331,6 +341,7 @@ type Config struct {
 var AppConfig *Config
 
 var recommendationPresenceKeys = []string{
+	"snapshot.enabled",
 	"behavior_weights.view",
 	"behavior_weights.like",
 	"behavior_weights.click",

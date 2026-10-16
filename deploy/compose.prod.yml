@@ -296,6 +296,7 @@ services:
     environment:
       <<: [*backend-environment, *minio-environment, *jwt-environment]
       API_DB_MAX_OPEN_CONNS: "${API_DB_MAX_OPEN_CONNS-20}"
+      RECOMMENDATION_CURSOR_SIGNING_KEY: "${RECOMMENDATION_CURSOR_SIGNING_KEY:-}"
     volumes:
       - "${JWT_PRIVATE_KEY_FILE:?JWT_PRIVATE_KEY_FILE is required}:/run/secrets/jwt/private.pem:ro"
       - "${JWT_VERIFY_KEYS_DIR:?JWT_VERIFY_KEYS_DIR is required}:/run/secrets/jwt/public:ro"

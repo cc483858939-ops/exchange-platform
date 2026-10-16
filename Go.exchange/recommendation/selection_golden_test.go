@@ -29,6 +29,35 @@ func TestRecommendationSelectionUsesStrictFallbackBeforeAuthorRelaxation(t *test
 	}
 }
 
+func TestSelectNextPageCarriesAuthorAndSemanticContextAcrossPages(t *testing.T) {
+	cfg := testSelectionConfig(DefaultConfig())
+	cfg.OutOfNetworkMinRatio = 0
+	cfg.Exploration.Ratio = 0
+	cfg.Diversity.Enabled = true
+	cfg.Diversity.AuthorWindowSize = 8
+	cfg.Diversity.MaxSameAuthorInWindow = 1
+	cfg.Diversity.SemanticDuplicateThreshold = 0.9
+	cfg.Diversity.SemanticDuplicatePenalty = 200
+	now := time.Date(2026, 10, 16, 10, 0, 0, 0, time.UTC)
+	prior := []SelectedCandidate{{
+		Candidate: Candidate{PostID: 100},
+		Post:      models.Post{Model: gorm.Model{ID: 100}, AuthorID: 10},
+		Embedding: []float32{1, 0},
+		Breakdown: ScoreBreakdown{BaseScore: 10},
+	}}
+	candidates := []RankedCandidate{
+		{Candidate: Candidate{PostID: 1}, Post: models.Post{Model: gorm.Model{ID: 1}, AuthorID: 10}, Embedding: []float32{0, 1}, Breakdown: ScoreBreakdown{BaseScore: 100}},
+		{Candidate: Candidate{PostID: 2}, Post: models.Post{Model: gorm.Model{ID: 2}, AuthorID: 20}, Embedding: []float32{1, 0}, Breakdown: ScoreBreakdown{BaseScore: 100}},
+		{Candidate: Candidate{PostID: 3}, Post: models.Post{Model: gorm.Model{ID: 3}, AuthorID: 30}, Embedding: []float32{0, 1}, Breakdown: ScoreBreakdown{BaseScore: 1}},
+	}
+	selected := SelectNextPage(SelectionInput{
+		Candidates: candidates, Limit: 1, Now: now, Phase: SelectionPhaseFresh, RequestID: "page-2", Config: cfg,
+	}, prior)
+	if len(selected) != 1 || selected[0].Post.ID != 3 {
+		t.Fatalf("next page selection=%#v, want semantically distinct author 30 post 3", selected)
+	}
+}
+
 func TestRecommendationSelectionUsesStrictOutOfNetworkFallbackBeforeAuthorRelaxation(t *testing.T) {
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	cfg := DefaultConfig()

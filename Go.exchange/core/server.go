@@ -126,7 +126,8 @@ func StartHttpServerWithTracing(tokens auth.TokenService, publisher eventing.Bat
 		}
 	}()
 	serviceConfig := recommendation.ServiceConfig{
-		Recommendation: recommendationConfig,
+		Recommendation:     recommendationConfig,
+		SnapshotSigningKey: []byte(config.RecommendationSnapshotCursorSigningKey()),
 		Tracking: recommendation.TrackingConfig{
 			Enabled:        config.RecommendationTelemetryEnabled(),
 			RolloutPercent: config.RecommendationTelemetryRolloutPercent(),

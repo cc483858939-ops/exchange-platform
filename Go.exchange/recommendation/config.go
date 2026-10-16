@@ -54,6 +54,10 @@ func DefaultConfig() config.RecommendationConfig {
 			StaleScanIntervalSeconds: config.DefaultRecommendationProfileStaleScanIntervalSeconds,
 			StaleEnqueueBatchSize:    config.DefaultRecommendationProfileStaleEnqueueBatchSize,
 		},
+		Snapshot: config.RecommendationSnapshotConfig{
+			Enabled: true, TTLSeconds: 120, MaxCandidates: 500, PreselectPages: 2,
+			DefaultPageSize: 20, MaxPageSize: 50,
+		},
 	}
 }
 
@@ -234,6 +238,33 @@ func NormalizeConfig(configured config.RecommendationConfig, presence map[string
 	applyCandidateCaps(&cfg.Candidates.Personalized, set.Candidates.Personalized)
 	applyCandidateCaps(&cfg.Candidates.ColdStart, set.Candidates.ColdStart)
 	cfg.ProfileMaterialization = set.ProfileMaterialization.Normalized()
+	if settingProvided(presence, "snapshot.enabled", set.Snapshot.Enabled) {
+		cfg.Snapshot.Enabled = set.Snapshot.Enabled
+	}
+	if set.Snapshot.TTLSeconds > 0 {
+		cfg.Snapshot.TTLSeconds = set.Snapshot.TTLSeconds
+	}
+	if set.Snapshot.MaxCandidates > 0 {
+		cfg.Snapshot.MaxCandidates = set.Snapshot.MaxCandidates
+	}
+	if cfg.Snapshot.MaxCandidates > 500 {
+		cfg.Snapshot.MaxCandidates = 500
+	}
+	if set.Snapshot.PreselectPages > 0 {
+		cfg.Snapshot.PreselectPages = set.Snapshot.PreselectPages
+	}
+	if set.Snapshot.DefaultPageSize > 0 {
+		cfg.Snapshot.DefaultPageSize = set.Snapshot.DefaultPageSize
+	}
+	if set.Snapshot.MaxPageSize > 0 {
+		cfg.Snapshot.MaxPageSize = set.Snapshot.MaxPageSize
+	}
+	if cfg.Snapshot.MaxPageSize > 50 {
+		cfg.Snapshot.MaxPageSize = 50
+	}
+	if cfg.Snapshot.DefaultPageSize > cfg.Snapshot.MaxPageSize {
+		cfg.Snapshot.DefaultPageSize = cfg.Snapshot.MaxPageSize
+	}
 
 	if cfg.BehaviorWeights.Reply < 0 {
 		cfg.BehaviorWeights.Reply = 5

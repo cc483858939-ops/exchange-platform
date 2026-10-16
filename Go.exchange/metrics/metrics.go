@@ -57,6 +57,7 @@ var (
 	recommendationTelemetryIngestDuration        = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_telemetry_ingest_duration_seconds", Help: "Recommendation telemetry ingestion latency in seconds.", Buckets: prometheus.DefBuckets})
 	recommendationTelemetryProjection            = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_telemetry_projection_total", Help: "Recommendation telemetry projection outcomes."}, []string{"status"})
 	recommendationRequests                       = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_requests_total", Help: "Recommendation requests by outcome and strategy."}, []string{"outcome", "strategy_id"})
+	recommendationSnapshotOutcomes               = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_snapshot_total", Help: "Recommendation candidate snapshot outcomes by bounded result type."}, []string{"outcome"})
 	recommendationRequestLogFailures             = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_request_log_failures_total", Help: "Recommendation request records that failed to persist."})
 	recommendationTrackingResults                = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_tracking_results_total", Help: "Returned recommendation results by tracking availability."}, []string{"status"})
 	recommendationCandidateCount                 = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_candidate_count", Help: "Candidate count for completed recommendation requests.", Buckets: []float64{0, 1, 5, 10, 20, 50, 100, 200}})
@@ -106,7 +107,7 @@ func init() {
 		httpRequestsTotal, httpRequestDuration, recommendationHTTPDuration, postEmbeddingEvents, postEmbeddingFailures, postEmbeddingPublishFailures, postEmbeddingProcessingDuration, kafkaConsumerRecovery,
 		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxRowsLastSuccess, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, consumerInboxRowsLastSuccess, notificationProjectionFailures, notificationProjectionLatency, likePipelineDepth, likePipelineDepthLastSuccess, likeClaimDuration, likeQueueOperations, likeLifecycleEvents, postLikeInitJobsBacklog, userLikeRelationsRemoved, userLikeCleanupBatchUsers, userLikeCleanupBatchRelations, userLikeCleanupBatchRemoved, userLikeCleanupBatchDuration, userLikeCleanupCycleDuration, userLikeCleanupLastCycle, userLikeTTLEvents, userLikeRestoreResults, userLikeRestoreDuration, userLikeRestoreRelations, userLikeRestoreInflight, userLikeCapEvents, userLikeActiveRelations, userLikeEvictionDuration,
 		recommendationTelemetryEvents, recommendationTelemetryBatchSize,
-		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests,
+		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests, recommendationSnapshotOutcomes,
 		recommendationRequestLogFailures, recommendationTrackingResults,
 		recommendationCandidateCount, recommendationResultCount, recommendationGenerationDuration, recommendationRecallCandidates, recommendationResultsBySource, recommendationResultsByClass, recommendationResultsBySelection, recommendationServedHistoryFailures, recommendationTracePersistFailures, recommendationTraceEnqueue, recommendationTraceQueueDepth, recommendationTracePersist, recommendationTracePersistDuration, recommendationTraceCleanupFailures, recommendationTraceCleanupRows, recommendationTraceCleanupRuns, recommendationTraceCleanupDuration, recommendationTraceCleanupBacklogLikely,
 		recommendationProfileLoad, recommendationProfileAge, recommendationProfileMaterialization, recommendationProfileMaterializationDuration, recommendationProfileDirtyQueueDepth,
@@ -343,6 +344,15 @@ func RecordRecommendationTelemetryProjection(status string) {
 }
 func RecordRecommendationRequest(outcome, strategyID string) {
 	recommendationRequests.WithLabelValues(outcome, strategyID).Inc()
+}
+
+func RecordRecommendationSnapshotOutcome(outcome string) {
+	switch outcome {
+	case "created", "hit", "fallback", "invalid_cursor", "expired":
+		recommendationSnapshotOutcomes.WithLabelValues(outcome).Inc()
+	default:
+		recommendationSnapshotOutcomes.WithLabelValues("unknown").Inc()
+	}
 }
 func RecordRecommendationRequestLogFailure() { recommendationRequestLogFailures.Inc() }
 func AddRecommendationTrackingResults(status string, count int) {

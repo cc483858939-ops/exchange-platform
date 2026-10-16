@@ -64,6 +64,27 @@ func TestMiddlewareRecordsRecommendationHTTPHistogramOnlyForRecommendationRoutes
 	}
 }
 
+func TestHandlerExposesBoundedRecommendationSnapshotOutcomeMetrics(t *testing.T) {
+	RecordRecommendationSnapshotOutcome("created")
+	RecordRecommendationSnapshotOutcome("hit")
+	RecordRecommendationSnapshotOutcome("fallback")
+	RecordRecommendationSnapshotOutcome("invalid_cursor")
+	RecordRecommendationSnapshotOutcome("expired")
+	RecordRecommendationSnapshotOutcome("unbounded-user-value")
+
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := response.Body.String()
+	for _, label := range []string{"created", "hit", "fallback", "invalid_cursor", "expired", "unknown"} {
+		if !strings.Contains(body, `go_exchange_recommendation_snapshot_total{outcome="`+label+`"}`) {
+			t.Errorf("snapshot metric missing bounded outcome %q", label)
+		}
+	}
+	if strings.Contains(body, `outcome="unbounded-user-value"`) {
+		t.Fatalf("snapshot metric exposed an unbounded outcome: %s", body)
+	}
+}
+
 func TestHandlerExposesPipelineMetrics(t *testing.T) {
 	recommendationTelemetryEvents.WithLabelValues("accepted", "impression", "")
 	recommendationTelemetryProjection.WithLabelValues("applied")

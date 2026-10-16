@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"Go.exchange/models"
 	"Go.exchange/recommendation"
 
 	"github.com/gin-gonic/gin"
@@ -17,19 +18,27 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"gorm.io/gorm"
 )
 
 type fakeRecommendationService struct {
-	requests []recommendation.ServeRequest
-	contexts []context.Context
-	result   recommendation.ServeResult
-	err      error
+	requests    []recommendation.ServeRequest
+	contexts    []context.Context
+	result      recommendation.ServeResult
+	err         error
+	finalizeErr error
+	finalized   [][]recommendation.SelectedCandidate
 }
 
 func (fake *fakeRecommendationService) Serve(ctx context.Context, request recommendation.ServeRequest) (recommendation.ServeResult, error) {
 	fake.requests = append(fake.requests, request)
 	fake.contexts = append(fake.contexts, ctx)
 	return fake.result, fake.err
+}
+
+func (fake *fakeRecommendationService) FinalizeServing(_ context.Context, _ recommendation.ServeResult, selected []recommendation.SelectedCandidate) error {
+	fake.finalized = append(fake.finalized, append([]recommendation.SelectedCandidate(nil), selected...))
+	return fake.finalizeErr
 }
 
 type fakeRecommendationResponseMapper struct {
@@ -68,7 +77,7 @@ func TestRecommendationHandlerUsesInjectedServiceAndMapsRequest(t *testing.T) {
 	}}
 	mapper := &fakeRecommendationResponseMapper{}
 	handler := newRecommendationHandlerForTest(t, service, mapper, time.Second)
-	ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/recommendations/posts?limit=77")
+	ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/recommendations/posts?limit=77&cursor=opaque-cursor")
 	ctx.Set("user_id", uint(42))
 	ctx.Request.Header.Set("Accept-Language", "ja-JP, en-US;q=0.2")
 	handler.GetPostRecommendations(ctx)
@@ -82,6 +91,9 @@ func TestRecommendationHandlerUsesInjectedServiceAndMapsRequest(t *testing.T) {
 	if service.requests[0].Limit != 77 {
 		t.Fatalf("limit=%d want raw transport value 77 for Service policy", service.requests[0].Limit)
 	}
+	if service.requests[0].Cursor != "opaque-cursor" {
+		t.Fatalf("cursor=%q want opaque-cursor", service.requests[0].Cursor)
+	}
 	if service.requests[0].BrowserLanguage.BrowserPrimary != "ja" {
 		t.Fatalf("browser language=%#v", service.requests[0].BrowserLanguage)
 	}
@@ -93,6 +105,9 @@ func TestRecommendationHandlerUsesInjectedServiceAndMapsRequest(t *testing.T) {
 	}
 	if len(mapper.contexts) != 1 || len(mapper.selectedCalls) != 1 {
 		t.Fatalf("mapper calls=%d, want one", len(mapper.contexts))
+	}
+	if len(service.finalized) != 1 {
+		t.Fatalf("finalize calls=%d, want one after successful mapping", len(service.finalized))
 	}
 	if _, ok := mapper.contexts[0].Deadline(); !ok {
 		t.Fatal("handler did not propagate serving deadline to response mapper")
@@ -233,6 +248,52 @@ func TestRecommendationHandlerMapsResponseMapperFailureToHTTP500(t *testing.T) {
 	}
 	if len(mapper.contexts) != 1 {
 		t.Fatalf("mapper calls=%d, want one", len(mapper.contexts))
+	}
+	if len(service.finalized) != 0 {
+		t.Fatalf("finalize calls=%d after mapping failure, want none", len(service.finalized))
+	}
+}
+
+func TestRecommendationHandlerFinalizesOnlySuccessfullyMappedPosts(t *testing.T) {
+	service := &fakeRecommendationService{result: recommendation.ServeResult{
+		RequestID: "request", Now: time.Now().UTC(), Selected: []recommendation.SelectedCandidate{
+			{Post: models.Post{Model: gorm.Model{ID: 7}}},
+			{Post: models.Post{Model: gorm.Model{ID: 8}}},
+		},
+	}}
+	mapper := &fakeRecommendationResponseMapper{result: []RecommendedPostResponse{{Post: postResponse{ID: 8}}}}
+	handler := newRecommendationHandlerForTest(t, service, mapper, 0)
+	ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/recommendations/posts")
+	ctx.Set("user_id", uint(42))
+	handler.GetPostRecommendations(ctx)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if len(service.finalized) != 1 || len(service.finalized[0]) != 1 || service.finalized[0][0].Post.ID != 8 {
+		t.Fatalf("finalized selections=%#v, want only successfully mapped post 8", service.finalized)
+	}
+}
+
+func TestRecommendationHandlerMapsCursorErrors(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		code int
+		body string
+	}{
+		{name: "invalid", err: recommendation.ErrInvalidCursor, code: http.StatusBadRequest, body: "INVALID_CURSOR"},
+		{name: "expired", err: recommendation.ErrCursorExpired, code: http.StatusGone, body: "CURSOR_EXPIRED"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service := &fakeRecommendationService{err: test.err}
+			handler := newRecommendationHandlerForTest(t, service, &fakeRecommendationResponseMapper{}, 0)
+			ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/recommendations/posts?cursor=token")
+			ctx.Set("user_id", uint(42))
+			handler.GetPostRecommendations(ctx)
+			if recorder.Code != test.code || !strings.Contains(recorder.Body.String(), test.body) {
+				t.Fatalf("status=%d body=%s want %d containing %q", recorder.Code, recorder.Body.String(), test.code, test.body)
+			}
+		})
 	}
 }
 

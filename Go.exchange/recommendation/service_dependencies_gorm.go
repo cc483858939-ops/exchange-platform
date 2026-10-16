@@ -28,8 +28,13 @@ func NewGormServiceDependencies(db *gorm.DB, redisClient *redis.Client) (Service
 		return ServiceDependencies{}, err
 	}
 	var history HistoryStore
+	var snapshots SnapshotStore
 	if redisClient != nil {
 		history, err = NewRedisHistoryStore(redisClient)
+		if err != nil {
+			return ServiceDependencies{}, err
+		}
+		snapshots, err = NewRedisSnapshotStore(redisClient)
 		if err != nil {
 			return ServiceDependencies{}, err
 		}
@@ -43,5 +48,6 @@ func NewGormServiceDependencies(db *gorm.DB, redisClient *redis.Client) (Service
 			Candidates: candidates, Profiles: profiles, History: history, OnboardingInterests: candidates,
 		},
 		ServingVersions: versionProvider,
+		Snapshots:       snapshots,
 	}, nil
 }

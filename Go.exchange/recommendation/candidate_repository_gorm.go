@@ -453,6 +453,63 @@ func (r *GormCandidateRepository) HydrateCandidates(ctx context.Context, serving
 	return result, nil
 }
 
+// LoadEligibleSnapshotCandidates rehydrates only cached candidate IDs and
+// reapplies the same current-user visibility, mute, negative-feedback, and
+// interaction filters used by recall queries.
+func (r *GormCandidateRepository) LoadEligibleSnapshotCandidates(ctx context.Context, input CandidateQuery, candidates []Candidate) ([]RankedCandidate, error) {
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	db, err := recommendationContextDB(ctx, r.db)
+	if err != nil {
+		return nil, fmt.Errorf("load eligible snapshot candidates: %w", err)
+	}
+	ids := make([]uint, 0, len(candidates))
+	byID := make(map[uint]Candidate, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.PostID == 0 {
+			continue
+		}
+		if _, exists := byID[candidate.PostID]; exists {
+			continue
+		}
+		ids = append(ids, candidate.PostID)
+		byID[candidate.PostID] = candidate
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	query := db.Model(&models.Post{}).Select(recommendationPublicPostColumns).Where("posts.id IN ?", ids)
+	query = r.eligibilityQuery(db, query, input)
+	var posts []models.Post
+	if err := query.Preload("Author", func(tx *gorm.DB) *gorm.DB { return tx.Select("id, username, display_name, avatar_url") }).Find(&posts).Error; err != nil {
+		return nil, fmt.Errorf("load eligible snapshot posts: %w", err)
+	}
+	validIDs := make([]uint, 0, len(posts))
+	for _, post := range posts {
+		if post.AuthorID != 0 && post.Author.ID == post.AuthorID {
+			validIDs = append(validIDs, post.ID)
+		}
+	}
+	embeddings, err := r.LoadPostEmbeddings(ctx, validIDs, input.ServingVersion)
+	if err != nil {
+		return nil, err
+	}
+	postsByID := make(map[uint]models.Post, len(posts))
+	for _, post := range posts {
+		postsByID[post.ID] = post
+	}
+	result := make([]RankedCandidate, 0, len(validIDs))
+	for _, id := range ids {
+		post, exists := postsByID[id]
+		if !exists || post.AuthorID == 0 || post.Author.ID != post.AuthorID {
+			continue
+		}
+		result = append(result, RankedCandidate{Candidate: byID[id], Post: post, Embedding: embeddings[id]})
+	}
+	return result, nil
+}
+
 func (r *GormCandidateRepository) LoadPostEmbeddings(ctx context.Context, postIDs []uint, version string) (map[uint][]float32, error) {
 	result := make(map[uint][]float32)
 	if len(postIDs) == 0 {

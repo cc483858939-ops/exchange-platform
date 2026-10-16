@@ -42,6 +42,9 @@ func (PrometheusMetrics) RecordHistoryLoadFailure(viewer ViewerKind) {
 		metrics.RecordRecommendationServedHistoryLoadFailure()
 	}
 }
+func (PrometheusMetrics) RecordSnapshotOutcome(outcome string) {
+	metrics.RecordRecommendationSnapshotOutcome(outcome)
+}
 func (PrometheusMetrics) RecordTracePersistFailure() {
 	metrics.RecordRecommendationTracePersistFailure()
 }

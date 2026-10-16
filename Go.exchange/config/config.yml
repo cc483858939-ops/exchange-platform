@@ -98,6 +98,13 @@ recommendation:
   served_history_limit: 1000
   guest_served_history_limit: 2000
   guest_served_history_ttl_hours: 24
+  snapshot:
+    enabled: true
+    ttl_seconds: 120
+    max_candidates: 500
+    preselect_pages: 2
+    default_page_size: 20
+    max_page_size: 50
   diversity:
     enabled: true
     author_window_size: 8
