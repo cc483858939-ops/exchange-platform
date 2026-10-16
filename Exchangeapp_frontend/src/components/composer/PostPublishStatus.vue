@@ -22,8 +22,9 @@
       type="button"
       @click="requestAbandon"
     >
-      Discard attempt
+      {{ operation.failureKind === 'validation_error' ? 'Edit and try again' : 'Discard attempt' }}
     </button>
+    <span v-if="abandonError" class="post-publish-status__error" role="alert">{{ abandonError }}</span>
   </aside>
 
   <ConfirmDialog
@@ -78,6 +79,10 @@ const requestAbandon = () => {
   if (operation.value?.phase !== 'failed') return;
   abandonOperationID.value = operation.value.id;
   abandonError.value = '';
+  if (operation.value.failureKind === 'validation_error') {
+    void confirmAbandon();
+    return;
+  }
   abandonConfirmationOpen.value = true;
 };
 
@@ -131,6 +136,8 @@ const confirmAbandon = async () => {
 .post-publish-status__message {
   min-width: 0;
 }
+
+.post-publish-status__error { color: var(--color-danger); }
 
 .post-publish-status__retry {
   flex: 0 0 auto;

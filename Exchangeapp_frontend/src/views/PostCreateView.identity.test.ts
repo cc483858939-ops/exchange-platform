@@ -373,6 +373,17 @@ describe('PostCreateView identity and text publishing', () => {
     expect(textarea.selectionStart).toBe('Hello @alice_2'.length);
   });
 
+  it('sends more than five mention tokens to the backend for effective-user validation', async () => {
+    wrapper = mountPage();
+    const content = '@alice @bob @missing1 @missing2 @missing3 @missing4';
+    await wrapper.get('#post-content').setValue(content);
+    await wrapper.get('#composer-form').trigger('submit');
+    await flushPromises();
+
+    expect(mocks.createPost).toHaveBeenCalledTimes(1);
+    expect(mocks.createPost.mock.calls[0]?.[0]).toMatchObject({ content });
+  });
+
   it('keeps Post actionable while succeeded-operation cleanup is pending', async () => {
     const draft = usePostDraftStore();
     draft.setContent('Post after cleanup');

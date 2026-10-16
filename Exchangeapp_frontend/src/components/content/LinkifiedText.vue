@@ -31,6 +31,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue';
+import { ElMessage } from 'element-plus';
 import { useRouter, type RouteLocationRaw } from 'vue-router';
 import { linkifyText } from '../../utils/linkifyText';
 import { resolveMentionUsername } from '../../services/mentionService';
@@ -67,12 +68,14 @@ const openMention = async (username: string) => {
     }
     if (!user) {
       mentionStatus.value = `Couldn’t find an active account for @${username}.`;
+      ElMessage.warning('This account is no longer available.');
       return;
     }
     await router.push({ name: 'UserProfile', params: { id: String(user.id) } });
   } catch {
     if (!controller.signal.aborted) {
       mentionStatus.value = `Couldn’t open @${username}. Try again.`;
+      ElMessage.error('Couldn’t open this profile. Try again.');
     }
   } finally {
     resolutionControllers.delete(username);

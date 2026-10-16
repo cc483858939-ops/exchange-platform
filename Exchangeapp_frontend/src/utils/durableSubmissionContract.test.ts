@@ -6,6 +6,7 @@ import {
   hasValidDurableSubmissionFailureShape,
   isDurableSubmissionFailureKind,
   isPostIdempotencyConflictError,
+  isPostMentionLimitValidationError,
 } from './durableSubmissionContract';
 import { matchesDurableAuthOwner } from '../auth/authRequestBinding';
 
@@ -15,6 +16,7 @@ describe('durable submission contract', () => {
     ['publishing', null, true, false, false],
     ['succeeded', null, true, false, false],
     ['failed', 'retryable', true, true, true],
+    ['failed', 'validation_error', true, false, true],
     ['failed', 'idempotency_conflict', true, false, true],
     ['failed', 'auth_context_changed', true, false, true],
     ['failed', null, false, false, false],
@@ -34,6 +36,7 @@ describe('durable submission contract', () => {
   it('validates only the canonical failure kinds', () => {
     expect(isDurableSubmissionFailureKind(null)).toBe(true);
     expect(isDurableSubmissionFailureKind('retryable')).toBe(true);
+    expect(isDurableSubmissionFailureKind('validation_error')).toBe(true);
     expect(isDurableSubmissionFailureKind('idempotency_conflict')).toBe(true);
     expect(isDurableSubmissionFailureKind('auth_context_changed')).toBe(true);
     expect(isDurableSubmissionFailureKind('unknown')).toBe(false);
@@ -41,8 +44,8 @@ describe('durable submission contract', () => {
   });
 
   it.each([
-    ['publishing', true],
     ['uploading', true],
+    ['publishing', true],
     ['failed', true],
     ['succeeded', false],
   ])('marks phase %s as eligible for a failure transition: %s', (phase, expected) => {
@@ -72,5 +75,29 @@ describe('durable submission contract', () => {
       response: { status: 400, data: { code: 'POST_IDEMPOTENCY_CONFLICT' } },
     })).toBe(false);
     expect(isPostIdempotencyConflictError(null)).toBe(false);
+  });
+
+  it('recognizes only the explicit mention-limit 400 response', () => {
+    expect(isPostMentionLimitValidationError({
+      response: { status: 400, data: { error: 'a post can mention at most 5 different users' } },
+    })).toBe(true);
+    expect(isPostMentionLimitValidationError({
+      response: { status: 400, data: { error: 'invalid post content' } },
+    })).toBe(false);
+    expect(isPostMentionLimitValidationError({
+      response: { status: 422, data: { error: 'a post can mention at most 5 different users' } },
+    })).toBe(false);
+    expect(isPostMentionLimitValidationError({
+      response: {
+        status: 400,
+        data: { error: 'a post can mention at most 5 different users', code: 'POST_IDEMPOTENCY_CONFLICT' },
+      },
+    })).toBe(false);
+  });
+
+  it('allows the mention validation failure shape but never retries it', () => {
+    expect(hasValidDurableSubmissionFailureShape('failed', 'validation_error')).toBe(true);
+    expect(canRetryDurableSubmission('failed', 'validation_error')).toBe(false);
+    expect(canAbandonDurableSubmission('failed', 'validation_error')).toBe(true);
   });
 });

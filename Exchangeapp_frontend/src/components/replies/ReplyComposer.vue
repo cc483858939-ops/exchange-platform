@@ -41,7 +41,11 @@
           :active-index="mentionSuggestions.activeIndex.value"
           :listbox-id="mentionSuggestions.listboxId"
           :prefix="mentionSuggestions.prefix.value"
+          :editor-identity="mentionEditorIdentity"
+          :editor-text="content"
+          :active-context="mentionSuggestions.activeContext.value"
           @select="selectMention"
+          @close="closeMentionSearch"
         />
       </div>
     </div>
@@ -84,9 +88,6 @@
       <span v-if="exceedsMaxLength" class="reply-composer__validation" role="alert">
         {{ contentLength }}/{{ maxContentLength }} characters. Please shorten your reply.
       </span>
-      <span v-if="mentionError" class="reply-composer__validation" role="alert">
-        {{ mentionError }}
-      </span>
       <button
         class="reply-composer__submit"
         type="submit"
@@ -108,11 +109,12 @@ import AppIcon from '../icons/AppIcon.vue';
 import UserAvatar from '../users/UserAvatar.vue';
 import MentionSuggestions from '../mentions/MentionSuggestions.vue';
 import { insertTextAtSelection } from '../../utils/textareaInsertion';
-import { extractMentionTokens, replaceMentionAtCaret } from '../../utils/mentionText';
+import { replaceMentionAtCaret } from '../../utils/mentionText';
 import { useMentionSuggestions } from '../../composables/useMentionSuggestions';
 
 const props = withDefaults(defineProps<{
   author?: PublicAuthor | null;
+  editorIdentity?: string;
   disabled?: boolean;
   modelValue?: string;
   submitting?: boolean;
@@ -122,6 +124,7 @@ const props = withDefaults(defineProps<{
   draftActionBusy?: boolean;
 }>(), {
   author: null,
+  editorIdentity: '',
   disabled: false,
   modelValue: '',
   submitting: false,
@@ -141,7 +144,6 @@ const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const emojiButton = ref<HTMLButtonElement | null>(null);
 const emojiPickerOpen = ref(false);
 const mentionCompositionActive = ref(false);
-const mentionError = ref('');
 const selectionStart = ref<number | null>(null);
 const selectionEnd = ref<number | null>(null);
 const emojiPickerId = 'reply-emoji-picker';
@@ -155,6 +157,7 @@ const contentLength = computed(() => Array.from(trimmedContent.value).length);
 const exceedsMaxLength = computed(() => contentLength.value > maxContentLength);
 const emojiPickerDisabled = computed(() => props.disabled || props.submitting);
 const mentionSuggestions = useMentionSuggestions();
+const mentionEditorIdentity = computed(() => props.editorIdentity || `${props.author?.id ?? ''}:reply`);
 let suppressedMentionSelection: { value: string; caret: number } | null = null;
 
 const syncTextareaSelection = () => {
@@ -260,6 +263,11 @@ const handleMentionCompositionEnd = () => {
   void nextTick(() => updateMentionSuggestions(false));
 };
 
+const closeMentionSearch = () => {
+  mentionSuggestions.close();
+  void focusTextareaAtSelection();
+};
+
 const focusTextareaAtSelection = async () => {
   await nextTick();
   const textarea = textareaRef.value;
@@ -318,7 +326,6 @@ const insertEmoji = async (emoji: string) => {
 
 const handleTextareaInput = () => {
   syncTextareaSelection();
-  mentionError.value = '';
   resizeTextarea();
 };
 
@@ -359,11 +366,6 @@ const submitReply = () => {
   emojiPickerOpen.value = false;
   mentionSuggestions.close();
   if (props.disabled || props.submitting || !trimmedContent.value || exceedsMaxLength.value) {
-    return;
-  }
-
-  if (new Set(extractMentionTokens(content.value).map(token => token.username)).size > 5) {
-    mentionError.value = 'A post can mention at most 5 different users.';
     return;
   }
 

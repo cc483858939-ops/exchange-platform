@@ -1801,6 +1801,66 @@ describe('postPublish store', () => {
     expect(mocks.createPost).toHaveBeenCalledTimes(1);
   });
 
+  it('persists the exact mention-limit validation failure without retrying and preserves the draft for safe recovery', async () => {
+    mocks.createPost.mockRejectedValueOnce({
+      response: { status: 400, data: { error: 'a post can mention at most 5 different users' } },
+    });
+    const draft = usePostDraftStore();
+    draft.setContent('@alice @bob @carol @dana @erin @frank');
+    const store = usePostPublishStore();
+    const result = await store.startOrRetryDraft();
+    expect(result.status).toBe('accepted');
+    if (result.status !== 'accepted') throw new Error('publish was not accepted');
+    await flushPromises();
+
+    expect(result.operation).toMatchObject({
+      phase: 'failed',
+      failureKind: 'validation_error',
+      error: expect.stringContaining('at most 5 different valid users'),
+    });
+    expect(mocks.publishRecords.get(7)).toMatchObject({
+      phase: 'failed',
+      failureKind: 'validation_error',
+    });
+    await expect(store.retry(result.operation.id)).resolves.toBe(false);
+    await expect(store.startOrRetryDraft()).resolves.toEqual({
+      status: 'blocked',
+      reason: 'unresolved_publish',
+    });
+    expect(mocks.createPost).toHaveBeenCalledTimes(1);
+    expect(draft.content).toBe('@alice @bob @carol @dana @erin @frank');
+
+    draft.setContent('@alice @bob corrected');
+    expect(await store.abandonFailedOperation(result.operation.id)).toBe(true);
+    expect(draft.content).toBe('@alice @bob corrected');
+    expect(draft.publishOperationID).toBeNull();
+    const corrected = await store.startOrRetryDraft();
+    expect(corrected.status).toBe('accepted');
+    if (corrected.status !== 'accepted') throw new Error('corrected post was not accepted');
+    expect(corrected.operation.id).not.toBe(result.operation.id);
+    await flushPromises();
+    expect(mocks.createPost).toHaveBeenCalledTimes(2);
+  });
+
+  it('restores a persisted mention validation failure without replaying it', async () => {
+    const operation = persistedFailedOperation({
+      content: '@alice @bob @carol @dana @erin @frank',
+      failureKind: 'validation_error',
+      error: 'A post can mention at most 5 different valid users. Edit the draft before trying again.',
+    });
+    mocks.publishRecords.set(7, operation);
+    const draft = usePostDraftStore();
+    draft.setContent(operation.content);
+    const store = usePostPublishStore();
+
+    await store.activateViewer(7);
+
+    expect(store.latestOperation).toMatchObject({ phase: 'failed', failureKind: 'validation_error' });
+    expect(mocks.createPost).not.toHaveBeenCalled();
+    expect(draft.content).toBe(operation.content);
+    await expect(store.retry(operation.id)).resolves.toBe(false);
+  });
+
   it('keeps a durable success checkpoint when source-draft cleanup fails', async () => {
     const draft = usePostDraftStore();
     draft.setContent('Saved before publish');

@@ -36,6 +36,7 @@ import {
   canMarkDurableSubmissionFailed,
   canRetryDurableSubmission,
   isPostIdempotencyConflictError,
+  isPostMentionLimitValidationError,
 } from '../utils/durableSubmissionContract';
 import {
   createPostDraftSnapshot,
@@ -84,6 +85,7 @@ const publishFailureMessage = 'Couldn’t confirm this post. Retry safely.';
 const publishPersistenceMessage = 'Couldn’t save publish progress on this device. Retry.';
 const publishRecoveryUnavailableMessage = 'Couldn’t restore the pending post from this device. Publishing is paused to prevent duplicate submissions.';
 const publishConflictMessage = 'This post can’t be retried safely.';
+const publishMentionLimitMessage = 'A post can mention at most 5 different valid users. Edit the draft before trying again.';
 
 class SupersededPublishOperationError extends Error {}
 class PublishPersistenceError extends Error {}
@@ -517,6 +519,8 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     operation.failureKind = failureKind;
     operation.error = failureKind === 'idempotency_conflict'
       ? publishConflictMessage
+      : failureKind === 'validation_error'
+        ? publishMentionLimitMessage
       : error instanceof PublishPersistenceError
         ? publishPersistenceMessage
         : publishFailureMessage;
@@ -566,13 +570,18 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     } catch (error) {
       if (error instanceof SupersededPublishOperationError) return;
       const conflict = posting && isPostIdempotencyConflictError(error);
+      const mentionLimit = posting && isPostMentionLimitValidationError(error);
       const authContextChanged = error instanceof PublishAuthContextChangedError
         || (error instanceof Error && error.name === 'AuthSessionChangedError')
         || !operationMatchesCurrentSession(operation);
       await markFailed(
         operation,
         error,
-        authContextChanged ? 'auth_context_changed' : conflict ? 'idempotency_conflict' : 'retryable',
+        authContextChanged
+          ? 'auth_context_changed'
+          : conflict
+            ? 'idempotency_conflict'
+            : mentionLimit ? 'validation_error' : 'retryable',
       );
     } finally {
       runningOperationIDs.delete(operation.id);

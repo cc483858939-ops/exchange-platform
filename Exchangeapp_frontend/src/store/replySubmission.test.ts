@@ -346,6 +346,70 @@ describe('replySubmission store', () => {
     expect(mocks.createClientOperationID).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps a mention-limit validation failure non-retryable and releases it without losing the reply draft', async () => {
+    mocks.createClientOperationID.mockReturnValueOnce('validation-attempt').mockReturnValueOnce('corrected-attempt');
+    mocks.createPostReply.mockRejectedValueOnce({
+      response: { status: 400, data: { error: 'a post can mention at most 5 different users' } },
+    });
+    drafts().setViewer(7);
+    drafts().setDraft(42, '@alice @bob @carol @dana @erin @frank');
+    const first = await store().startOrRetry(42, drafts().getDraft(42));
+    expect(first.status).toBe('accepted');
+    await flushPromises();
+
+    const operation = store().getOperation(7, 42)!;
+    expect(operation).toMatchObject({
+      phase: 'failed',
+      failureKind: 'validation_error',
+      error: expect.stringContaining('at most 5 different valid users'),
+    });
+    expect(mocks.records.get('7:42')).toMatchObject({ phase: 'failed', failureKind: 'validation_error' });
+    expect(await store().retry(operation.id)).toBe(false);
+    expect(await store().startOrRetry(42, drafts().getDraft(42))).toEqual({
+      status: 'blocked',
+      reason: 'unresolved_reply',
+    });
+    expect(mocks.createPostReply).toHaveBeenCalledTimes(1);
+    expect(drafts().getDraft(42)).toBe('@alice @bob @carol @dana @erin @frank');
+
+    drafts().setDraft(42, '@alice @bob corrected');
+    expect(await store().abandonFailedOperation(operation.id)).toBe(true);
+    expect(drafts().getDraft(42)).toBe('@alice @bob corrected');
+    expect(drafts().getBoundOperationID(42)).toBeNull();
+    const corrected = await store().startOrRetry(42, drafts().getDraft(42));
+    expect(corrected.status).toBe('accepted');
+    if (corrected.status !== 'accepted') throw new Error('corrected reply was not accepted');
+    expect(corrected.operation.id).not.toBe(operation.id);
+    await flushPromises();
+    expect(mocks.createPostReply).toHaveBeenCalledTimes(2);
+  });
+
+  it('restores a persisted mention validation failure without replaying the reply', async () => {
+    const content = '@alice @bob @carol @dana @erin @frank';
+    mocks.records.set('7:42', record({
+      content,
+      phase: 'failed',
+      failureKind: 'validation_error',
+      error: 'A post can mention at most 5 different valid users. Edit the reply before trying again.',
+    }));
+    drafts().setViewer(7);
+    drafts().setDraft(42, content);
+
+    await store().activateViewer(7);
+
+    expect(store().getOperation(7, 42)).toMatchObject({
+      phase: 'failed',
+      failureKind: 'validation_error',
+      error: expect.stringContaining('at most 5 different valid users'),
+    });
+    expect(drafts().getDraft(42)).toBe(content);
+    expect(mocks.createPostReply).not.toHaveBeenCalled();
+    expect(await store().startOrRetry(42, content)).toEqual({
+      status: 'blocked',
+      reason: 'unresolved_reply',
+    });
+  });
+
   it('durably transitions a retry before calling HTTP', async () => {
     mocks.records.set('7:42', record({ phase: 'failed', failureKind: 'retryable' }));
     drafts().setViewer(7);

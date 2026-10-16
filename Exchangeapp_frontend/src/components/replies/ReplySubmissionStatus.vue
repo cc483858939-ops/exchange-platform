@@ -16,6 +16,8 @@
       <p class="reply-submission-status__message" role="status">
         {{ operation.failureKind === 'idempotency_conflict'
           ? 'This reply can’t be retried safely.'
+          : operation.failureKind === 'validation_error'
+            ? (operation.error || 'A post can mention at most 5 different valid users. Edit the reply before trying again.')
           : operation.failureKind === 'auth_context_changed'
             ? 'Your session changed. Discard this attempt and send the reply again.'
           : 'Reply failed. Retry safely.' }}
@@ -32,8 +34,8 @@
           class="reply-submission-status__action reply-submission-status__action--quiet"
           type="button"
           :disabled="busy"
-          @click="emit('discard')"
-        >Discard attempt</button>
+          @click="operation.failureKind === 'validation_error' ? emit('edit') : emit('discard')"
+        >{{ operation.failureKind === 'validation_error' ? 'Edit and try again' : 'Discard attempt' }}</button>
       </div>
     </template>
     <p v-if="error" class="reply-submission-status__error" role="alert">{{ error }}</p>
@@ -47,6 +49,7 @@ defineProps<{
   operation: {
     phase: 'publishing' | 'failed' | 'succeeded';
     failureKind: DurableSubmissionFailureKind;
+    error?: string;
     cleanupPending?: boolean;
   } | null;
   busy?: boolean;
@@ -56,6 +59,7 @@ defineProps<{
 const emit = defineEmits<{
   retry: [];
   discard: [];
+  edit: [];
 }>();
 </script>
 

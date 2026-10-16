@@ -108,8 +108,8 @@ export async function getUserFollowing(userId: number | string, options: UserCon
 	return response.data;
 }
 
-export async function searchUsers(options: UserSearchQuery): Promise<UserConnectionPage> {
-	const response = await apiClient.get<UserConnectionPage>('/users/search', { params: options });
+export async function searchUsers(options: UserSearchQuery, signal?: AbortSignal): Promise<UserConnectionPage> {
+	const response = await apiClient.get<UserConnectionPage>('/users/search', { params: options, signal });
 	return response.data;
 }
 

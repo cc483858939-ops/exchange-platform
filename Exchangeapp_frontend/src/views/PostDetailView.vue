@@ -233,6 +233,7 @@
           :key="postId"
           ref="composerRef"
           :author="replyComposerAuthor"
+          :editor-identity="replyMentionEditorIdentity"
           v-model="replyDraftContent"
           :disabled="replyComposerDisabled"
           :submitting="replySubmitting"
@@ -260,6 +261,7 @@
           :error="replyDiscardOperationID ? '' : replyStatusError"
           @retry="retryCurrentReply"
           @discard="requestDiscardReplyAttempt"
+          @edit="releaseRejectedReplyAttempt"
         />
         <p v-if="replyError" class="reply-error" role="alert">{{ replyError }}</p>
         <p v-if="replyNotice" class="reply-notice" role="status" aria-live="polite">{{ replyNotice }}</p>
@@ -476,12 +478,14 @@
               :error="replyDiscardOperationID ? '' : replyStatusError"
               @retry="retryCurrentReply"
               @discard="requestDiscardReplyAttempt"
+              @edit="releaseRejectedReplyAttempt"
             />
             <ReplyComposer
               v-if="authStore.isAuthenticated"
               :key="postId"
               ref="mediaContextComposerRef"
               :author="replyComposerAuthor"
+              :editor-identity="replyMentionEditorIdentity"
               v-model="replyDraftContent"
               :disabled="replyComposerDisabled"
               :submitting="replySubmitting"
@@ -1053,6 +1057,9 @@ const currentViewerID = computed(() => {
   const id = authStore.currentIdentity?.id;
   return typeof id === 'number' && Number.isFinite(id) && id > 0 ? id : null;
 });
+const replyMentionEditorIdentity = computed(() => (
+  `${currentViewerID.value ?? ''}:${authStore.sessionVersion}:${currentDetailPostID.value ?? ''}`
+));
 const replyComposerAuthor = computed<PublicAuthor | null>(() => {
   const identity = currentIdentity.value;
   const viewerID = currentViewerID.value;
@@ -2062,6 +2069,25 @@ const requestDiscardReplyAttempt = () => {
   if (operation?.phase === 'failed') {
     replyStatusError.value = '';
     replyDiscardOperationID.value = operation.id;
+  }
+};
+
+const releaseRejectedReplyAttempt = async () => {
+  const operation = currentReplyOperation.value;
+  if (
+    !operation
+    || operation.phase !== 'failed'
+    || operation.failureKind !== 'validation_error'
+    || replyStatusBusy.value
+  ) return;
+  replyStatusBusy.value = true;
+  replyStatusError.value = '';
+  try {
+    if (!await replySubmissionStore.abandonFailedOperation(operation.id)) {
+      replyStatusError.value = 'Could not release this rejected reply on this device. Your draft is still safe.';
+    }
+  } finally {
+    replyStatusBusy.value = false;
   }
 };
 

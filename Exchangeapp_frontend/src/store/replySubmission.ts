@@ -27,6 +27,7 @@ import {
   canMarkDurableSubmissionFailed,
   canRetryDurableSubmission,
   isPostIdempotencyConflictError,
+  isPostMentionLimitValidationError,
 } from '../utils/durableSubmissionContract';
 
 export type ReplySubmissionOperation = {
@@ -295,11 +296,16 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
         operation.phase = 'failed';
         const authContextChanged = (error instanceof Error && error.name === 'AuthSessionChangedError')
           || !operationMatchesCurrentSession(operation);
+        const mentionLimit = isPostMentionLimitValidationError(error);
         operation.failureKind = authContextChanged
           ? 'auth_context_changed'
-          : isPostIdempotencyConflictError(error) ? 'idempotency_conflict' : 'retryable';
+          : isPostIdempotencyConflictError(error)
+            ? 'idempotency_conflict'
+            : mentionLimit ? 'validation_error' : 'retryable';
         operation.error = operation.failureKind === 'idempotency_conflict'
           ? 'This reply can’t be retried safely.'
+          : operation.failureKind === 'validation_error'
+            ? 'A post can mention at most 5 different valid users. Edit the reply before trying again.'
           : 'Reply failed. Retry safely.';
         operation.cleanupPending = false;
       }
@@ -484,6 +490,9 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
     if (existing?.phase === 'failed') {
       if (existing.failureKind === 'idempotency_conflict') {
         return { status: 'blocked', reason: 'idempotency_conflict' };
+      }
+      if (!canRetryDurableSubmission(existing.phase, existing.failureKind)) {
+        return { status: 'blocked', reason: 'unresolved_reply' };
       }
       if (canonicalContent !== existing.content) return { status: 'blocked', reason: 'unresolved_reply' };
       const retried = await transitionToPublishing(existing);

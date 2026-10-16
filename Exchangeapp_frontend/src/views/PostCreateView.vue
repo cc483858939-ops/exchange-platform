@@ -90,7 +90,11 @@
               :active-index="mentionSuggestions.activeIndex.value"
               :listbox-id="mentionSuggestions.listboxId"
               :prefix="mentionSuggestions.prefix.value"
+              :editor-identity="mentionEditorIdentity"
+              :editor-text="content"
+              :active-context="mentionSuggestions.activeContext.value"
               @select="selectMention"
+              @close="closeMentionSearch"
             />
 
             <section
@@ -359,7 +363,7 @@ import {
   type LocalImagePreviewGenerator,
 } from '../utils/localImagePreview';
 import { insertTextAtSelection } from '../utils/textareaInsertion';
-import { extractMentionTokens, replaceMentionAtCaret } from '../utils/mentionText';
+import { replaceMentionAtCaret } from '../utils/mentionText';
 import { useMentionSuggestions } from '../composables/useMentionSuggestions';
 import {
   composerIntentKey,
@@ -441,6 +445,9 @@ const currentUserID = computed(() => (
 const composerReturnTo = computed(() => route.fullPath);
 const routeIntent = computed(() => parseComposerIntent(route.query));
 const routeIntentKey = computed(() => composerIntentKey(routeIntent.value));
+const mentionEditorIdentity = computed(() => (
+  `${currentUserID.value ?? ''}:${authStore.sessionVersion}:${routeIntentKey.value}:${postDraft.draftID ?? ''}`
+));
 const routeDraftID = computed(() => (
   routeIntent.value.kind === 'draft' ? routeIntent.value.draftID : null
 ));
@@ -625,6 +632,11 @@ const handleMentionCompositionStart = () => {
 const handleMentionCompositionEnd = () => {
   mentionCompositionActive.value = false;
   void nextTick(() => updateMentionSuggestions(false));
+};
+
+const closeMentionSearch = () => {
+  mentionSuggestions.close();
+  void focusContentInput();
 };
 
 const focusContentInput = async () => {
@@ -1289,11 +1301,6 @@ const submitPost = async () => {
     } else if (previewPreparationBlocked.value) {
       publishError.value = previewPreparationError.value || 'Wait for image previews to finish before posting.';
     }
-    return;
-  }
-
-  if (new Set(extractMentionTokens(content.value).map(token => token.username)).size > 5) {
-    publishError.value = 'A post can mention at most 5 different users.';
     return;
   }
 

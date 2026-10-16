@@ -7,6 +7,12 @@ import LinkifiedText from './LinkifiedText.vue';
 const mocks = vi.hoisted(() => ({
   routerPush: vi.fn(),
   resolveMentionUsername: vi.fn(),
+  messageWarning: vi.fn(),
+  messageError: vi.fn(),
+}));
+
+vi.mock('element-plus', () => ({
+  ElMessage: { warning: mocks.messageWarning, error: mocks.messageError },
 }));
 
 vi.mock('vue-router', async importOriginal => {
@@ -40,6 +46,8 @@ describe('LinkifiedText', () => {
     const wrapper = mountLinkifiedText('Thanks @alice and https://example.com/@not-a-user');
 
     expect(mocks.resolveMentionUsername).not.toHaveBeenCalled();
+    mocks.messageWarning.mockReset();
+    mocks.messageError.mockReset();
     expect(wrapper.findAll('.linkified-text__mention')).toHaveLength(1);
     await wrapper.get('.linkified-text__mention').trigger('click');
 
@@ -56,6 +64,31 @@ describe('LinkifiedText', () => {
 
     expect(mocks.routerPush).not.toHaveBeenCalled();
     expect(wrapper.text()).toContain('Couldn’t find an active account for @missing.');
+    expect(mocks.messageWarning).toHaveBeenCalledWith('This account is no longer available.');
+    wrapper.unmount();
+  });
+
+  it('shows visible retry feedback for a profile lookup failure and guards duplicate clicks', async () => {
+    let rejectRequest!: (error: Error) => void;
+    mocks.routerPush.mockReset();
+    mocks.resolveMentionUsername.mockReset().mockReturnValue(new Promise((_, reject) => {
+      rejectRequest = reject;
+    }));
+    mocks.messageError.mockReset();
+    const wrapper = mountLinkifiedText('@alice');
+    const mention = wrapper.get('.linkified-text__mention');
+
+    await mention.trigger('click');
+    await mention.trigger('click');
+    expect(mention.attributes('disabled')).toBeDefined();
+    expect(mocks.resolveMentionUsername).toHaveBeenCalledTimes(1);
+    rejectRequest(new Error('network failure'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(wrapper.text()).toContain('Couldn’t open @alice. Try again.');
+    expect(mocks.messageError).toHaveBeenCalledWith('Couldn’t open this profile. Try again.');
+    expect(mocks.routerPush).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 

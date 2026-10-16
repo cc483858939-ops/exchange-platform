@@ -1,5 +1,6 @@
 export type DurableSubmissionFailureKind =
   | 'retryable'
+  | 'validation_error'
   | 'idempotency_conflict'
   | 'auth_context_changed'
   | null;
@@ -9,6 +10,7 @@ export const isDurableSubmissionFailureKind = (
 ): value is DurableSubmissionFailureKind => (
   value === null
   || value === 'retryable'
+  || value === 'validation_error'
   || value === 'idempotency_conflict'
   || value === 'auth_context_changed'
 );
@@ -50,4 +52,17 @@ export const isPostIdempotencyConflictError = (error: unknown): boolean => {
   }).response;
   return response?.status === 409
     && response.data?.code === 'POST_IDEMPOTENCY_CONFLICT';
+};
+
+export const isPostMentionLimitValidationError = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') return false;
+  const response = (error as {
+    response?: {
+      status?: unknown;
+      data?: { error?: unknown; code?: unknown };
+    };
+  }).response;
+  return response?.status === 400
+    && response.data?.code !== 'POST_IDEMPOTENCY_CONFLICT'
+    && response.data?.error === 'a post can mention at most 5 different users';
 };
