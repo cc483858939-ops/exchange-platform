@@ -127,11 +127,21 @@ func (handler *RecommendationHandler) serve(ctx *gin.Context, viewer recommendat
 		recommendationErrorResponse(ctx, err, result.StrategyID)
 		return
 	}
-	attachRecommendationTrackingFacts(recommendations, result.Tracking)
-	if finalizer, ok := handler.service.(recommendation.ServingFinalizer); ok {
-		if err := finalizer.FinalizeServing(servingCtx, result, selectedForMappedRecommendations(result.Selected, recommendations)); err != nil {
+	mappedSelected := selectedForMappedRecommendations(result.Selected, recommendations)
+	if finalizer, ok := handler.service.(recommendation.MappedServingFinalizer); ok {
+		facts, err := finalizer.FinalizeMappedServing(servingCtx, result, mappedSelected)
+		if err != nil {
 			recommendationErrorResponse(ctx, err, result.StrategyID)
 			return
+		}
+		attachRecommendationTrackingFacts(recommendations, facts)
+	} else {
+		attachRecommendationTrackingFacts(recommendations, result.Tracking)
+		if finalizer, ok := handler.service.(recommendation.ServingFinalizer); ok {
+			if err := finalizer.FinalizeServing(servingCtx, result, mappedSelected); err != nil {
+				recommendationErrorResponse(ctx, err, result.StrategyID)
+				return
+			}
 		}
 	}
 	var nextCursor *string

@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"Go.exchange/config"
 	"Go.exchange/models"
 	"Go.exchange/recommendation"
 
@@ -46,6 +48,243 @@ type fakeRecommendationResponseMapper struct {
 	selectedCalls [][]recommendation.SelectedCandidate
 	result        []RecommendedPostResponse
 	err           error
+}
+
+type traceDropEnqueuer struct {
+	result recommendation.TraceEnqueueResult
+	calls  int
+}
+
+func (enqueuer *traceDropEnqueuer) TryEnqueue(recommendation.TracePersistJob) recommendation.TraceEnqueueResult {
+	enqueuer.calls++
+	return enqueuer.result
+}
+
+type controllerRecommendationCandidates struct {
+	items []recommendation.Candidate
+	posts map[uint]models.Post
+	calls map[string]int
+}
+
+func (repo *controllerRecommendationCandidates) recordCall(name string) {
+	if repo.calls == nil {
+		repo.calls = make(map[string]int)
+	}
+	repo.calls[name]++
+}
+
+func (repo *controllerRecommendationCandidates) LoadSemanticCandidates(context.Context, recommendation.CandidateQuery) ([]recommendation.Candidate, error) {
+	repo.recordCall("semantic")
+	return nil, nil
+}
+func (repo *controllerRecommendationCandidates) LoadFollowingCandidates(context.Context, recommendation.CandidateQuery) ([]recommendation.Candidate, error) {
+	repo.recordCall("following")
+	return nil, nil
+}
+func (repo *controllerRecommendationCandidates) LoadRecentCandidates(context.Context, recommendation.CandidateQuery) ([]recommendation.Candidate, error) {
+	repo.recordCall("recent")
+	return append([]recommendation.Candidate(nil), repo.items...), nil
+}
+func (repo *controllerRecommendationCandidates) LoadTrendingCandidates(context.Context, recommendation.CandidateQuery) ([]recommendation.Candidate, error) {
+	repo.recordCall("trending")
+	return nil, nil
+}
+func (repo *controllerRecommendationCandidates) LoadPublicRecentCandidates(context.Context, recommendation.PublicCandidateQuery) ([]recommendation.Candidate, error) {
+	return nil, nil
+}
+func (repo *controllerRecommendationCandidates) LoadPublicTrendingCandidates(context.Context, recommendation.PublicCandidateQuery) ([]recommendation.Candidate, error) {
+	return nil, nil
+}
+func (repo *controllerRecommendationCandidates) HydrateCandidates(_ context.Context, _ string, candidates []recommendation.Candidate, _ time.Time) ([]recommendation.RankedCandidate, error) {
+	items := make([]recommendation.RankedCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		items = append(items, recommendation.RankedCandidate{
+			Candidate: candidate, Post: repo.posts[candidate.PostID],
+			Breakdown: recommendation.ScoreBreakdown{BaseScore: 1, FinalScore: 1},
+		})
+	}
+	return items, nil
+}
+func (*controllerRecommendationCandidates) LoadPostEmbeddings(context.Context, []uint, string) (map[uint][]float32, error) {
+	return map[uint][]float32{}, nil
+}
+func (repo *controllerRecommendationCandidates) LoadEligibleSnapshotCandidates(ctx context.Context, query recommendation.CandidateQuery, candidates []recommendation.Candidate) ([]recommendation.RankedCandidate, error) {
+	eligible, _, err := repo.LoadSnapshotPage(ctx, query, candidates, nil)
+	return eligible, err
+}
+func (repo *controllerRecommendationCandidates) LoadSnapshotPage(_ context.Context, _ recommendation.CandidateQuery, candidates []recommendation.Candidate, contextPostIDs []uint) ([]recommendation.RankedCandidate, map[uint][]float32, error) {
+	items := make([]recommendation.RankedCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		post, exists := repo.posts[candidate.PostID]
+		if !exists || post.ID == 0 || post.AuthorID == 0 {
+			continue
+		}
+		items = append(items, recommendation.RankedCandidate{Candidate: candidate, Post: post})
+	}
+	return items, map[uint][]float32{}, nil
+}
+
+type controllerRecommendationProfiles struct{ now time.Time }
+
+func (repo controllerRecommendationProfiles) Load(context.Context, recommendation.ProfileLoadQuery) (recommendation.ProfileLoadResult, error) {
+	return recommendation.ProfileLoadResult{Profile: recommendation.Profile{
+		ProfileStatus: recommendation.ProfileStatusMiss, ComputedAt: repo.now,
+		AuthorAffinity: map[uint]float64{}, FollowingAuthorIDs: map[uint]struct{}{},
+	}}, nil
+}
+func (controllerRecommendationProfiles) LoadAuthorContext(context.Context, recommendation.AuthorContextQuery) (recommendation.AuthorContext, error) {
+	return recommendation.AuthorContext{Affinity: map[uint]float64{}, FollowingAuthorIDs: map[uint]struct{}{}}, nil
+}
+func (controllerRecommendationProfiles) LoadPostAffinityInputs(context.Context, []uint) ([]recommendation.PostAffinityInput, error) {
+	return nil, nil
+}
+
+type controllerRecommendationHistory struct{}
+
+func (controllerRecommendationHistory) LoadUserHistory(context.Context, uint, recommendation.HistoryWindow) (recommendation.ServedHistory, error) {
+	return recommendation.ServedHistory{}, nil
+}
+func (controllerRecommendationHistory) RecordUserServed(context.Context, uint, []uint, recommendation.HistoryWindow) error {
+	return nil
+}
+func (controllerRecommendationHistory) LoadGuestHistory(context.Context, string, recommendation.HistoryWindow) (recommendation.ServedHistory, error) {
+	return recommendation.ServedHistory{}, nil
+}
+func (controllerRecommendationHistory) RecordGuestServed(context.Context, string, []uint, recommendation.HistoryWindow) error {
+	return nil
+}
+
+type controllerPageHistory struct {
+	mu     sync.Mutex
+	values [][]uint
+}
+
+func (history *controllerPageHistory) LoadUserHistory(context.Context, uint, recommendation.HistoryWindow) (recommendation.ServedHistory, error) {
+	return recommendation.ServedHistory{}, nil
+}
+func (history *controllerPageHistory) RecordUserServed(_ context.Context, _ uint, postIDs []uint, _ recommendation.HistoryWindow) error {
+	history.mu.Lock()
+	defer history.mu.Unlock()
+	history.values = append(history.values, append([]uint(nil), postIDs...))
+	return nil
+}
+func (*controllerPageHistory) LoadGuestHistory(context.Context, string, recommendation.HistoryWindow) (recommendation.ServedHistory, error) {
+	return recommendation.ServedHistory{}, nil
+}
+func (*controllerPageHistory) RecordGuestServed(context.Context, string, []uint, recommendation.HistoryWindow) error {
+	return nil
+}
+func (history *controllerPageHistory) recordedPages() [][]uint {
+	history.mu.Lock()
+	defer history.mu.Unlock()
+	result := make([][]uint, len(history.values))
+	for index := range history.values {
+		result[index] = append([]uint(nil), history.values[index]...)
+	}
+	return result
+}
+
+type controllerRecommendationVersion struct{}
+
+func (controllerRecommendationVersion) LoadServingVersion(context.Context) (string, error) {
+	return "post_embedding_v1", nil
+}
+
+type controllerMemorySnapshotStore struct {
+	mu        sync.Mutex
+	snapshots map[string]recommendation.CandidatePoolSnapshot
+}
+
+func newControllerMemorySnapshotStore() *controllerMemorySnapshotStore {
+	return &controllerMemorySnapshotStore{snapshots: make(map[string]recommendation.CandidatePoolSnapshot)}
+}
+func (store *controllerMemorySnapshotStore) Create(_ context.Context, snapshot recommendation.CandidatePoolSnapshot, _ time.Duration, _ int) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	snapshot.Revision = 1
+	store.snapshots[snapshot.ID] = snapshot
+	return nil
+}
+func (store *controllerMemorySnapshotStore) Load(_ context.Context, id string) (recommendation.CandidatePoolSnapshot, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	snapshot, exists := store.snapshots[id]
+	if !exists {
+		return recommendation.CandidatePoolSnapshot{}, recommendation.ErrCursorExpired
+	}
+	return cloneControllerSnapshot(snapshot), nil
+}
+func (store *controllerMemorySnapshotStore) CompareAndSwap(_ context.Context, id string, expected int64, snapshot recommendation.CandidatePoolSnapshot, _ int) (bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	current, exists := store.snapshots[id]
+	if !exists {
+		return false, recommendation.ErrCursorExpired
+	}
+	if current.Revision != expected {
+		return false, nil
+	}
+	store.snapshots[id] = cloneControllerSnapshot(snapshot)
+	return true, nil
+}
+func cloneControllerSnapshot(snapshot recommendation.CandidatePoolSnapshot) recommendation.CandidatePoolSnapshot {
+	snapshot.Candidates = append([]recommendation.CachedCandidate(nil), snapshot.Candidates...)
+	snapshot.UsedPostIDs = append([]uint(nil), snapshot.UsedPostIDs...)
+	snapshot.Pages = append([]recommendation.CachedPage(nil), snapshot.Pages...)
+	for index := range snapshot.Pages {
+		snapshot.Pages[index].Items = append([]recommendation.CachedCandidate(nil), snapshot.Pages[index].Items...)
+		snapshot.Pages[index].ReturnedPostIDs = append([]uint(nil), snapshot.Pages[index].ReturnedPostIDs...)
+	}
+	return snapshot
+}
+
+type filteringRecommendationResponseMapper struct {
+	filterPosition int
+	mappedPageIDs  [][]uint
+}
+
+func (mapper *filteringRecommendationResponseMapper) Map(_ context.Context, _ uint, selected []recommendation.SelectedCandidate, _ time.Time) ([]RecommendedPostResponse, error) {
+	selectedIDs := make([]uint, 0, len(selected))
+	for _, item := range selected {
+		selectedIDs = append(selectedIDs, item.Post.ID)
+	}
+	for _, mappedIDs := range mapper.mappedPageIDs {
+		if equalControllerIDs(selectedIDs, mappedIDs) {
+			return mapRecommendationPostResponses(selected), nil
+		}
+	}
+
+	result := make([]RecommendedPostResponse, 0, len(selected))
+	for index, item := range selected {
+		if index == mapper.filterPosition {
+			continue
+		}
+		result = append(result, RecommendedPostResponse{Post: postResponse{ID: item.Post.ID}})
+	}
+	mappedIDs := make([]uint, 0, len(result))
+	for _, item := range result {
+		mappedIDs = append(mappedIDs, item.Post.ID)
+	}
+	mapper.mappedPageIDs = append(mapper.mappedPageIDs, mappedIDs)
+	return result, nil
+}
+
+func mapRecommendationPostResponses(selected []recommendation.SelectedCandidate) []RecommendedPostResponse {
+	result := make([]RecommendedPostResponse, 0, len(selected))
+	for _, item := range selected {
+		result = append(result, RecommendedPostResponse{Post: postResponse{ID: item.Post.ID}})
+	}
+	return result
+}
+
+type captureTraceEnqueuer struct {
+	calls []recommendation.TracePersistJob
+}
+
+func (enqueuer *captureTraceEnqueuer) TryEnqueue(job recommendation.TracePersistJob) recommendation.TraceEnqueueResult {
+	job.Results = append([]models.RecommendationResultTrace(nil), job.Results...)
+	enqueuer.calls = append(enqueuer.calls, job)
+	return recommendation.TraceEnqueueQueued
 }
 
 func (fake *fakeRecommendationResponseMapper) Map(ctx context.Context, _ uint, selected []recommendation.SelectedCandidate, _ time.Time) ([]RecommendedPostResponse, error) {
@@ -115,6 +354,203 @@ func TestRecommendationHandlerUsesInjectedServiceAndMapsRequest(t *testing.T) {
 	if !strings.Contains(recorder.Body.String(), `"request_id":"serving-request"`) || !strings.Contains(recorder.Body.String(), `"depleted":true`) {
 		t.Fatalf("response=%s", recorder.Body.String())
 	}
+}
+
+func TestRecommendationTraceQueueDropKeepsHTTPResponseSuccessful(t *testing.T) {
+	for _, outcome := range []recommendation.TraceEnqueueResult{
+		recommendation.TraceEnqueueDroppedFull,
+		recommendation.TraceEnqueueDroppedStopping,
+	} {
+		t.Run(string(outcome), func(t *testing.T) {
+			now := time.Date(2026, 10, 16, 10, 0, 0, 0, time.UTC)
+			candidate := recommendation.Candidate{PostID: 17, FromRecent: true, RecentRank: 1, SourceCount: 1}
+			candidates := &controllerRecommendationCandidates{
+				items: []recommendation.Candidate{candidate},
+				posts: map[uint]models.Post{17: {Model: gorm.Model{ID: 17, CreatedAt: now}, AuthorID: 71, Content: "recommendation"}},
+			}
+			cfg := recommendation.DefaultConfig()
+			cfg.Snapshot.Enabled = false
+			enqueuer := &traceDropEnqueuer{result: outcome}
+			service, err := recommendation.NewService(recommendation.ServiceDependencies{
+				DataDependencies: recommendation.DataDependencies{
+					Candidates: candidates, Profiles: controllerRecommendationProfiles{now: now},
+					History: controllerRecommendationHistory{},
+				},
+				ServingVersions: controllerRecommendationVersion{}, TraceEnqueuer: enqueuer,
+			}, recommendation.ServiceConfig{Recommendation: cfg})
+			if err != nil {
+				t.Fatal(err)
+			}
+			mapper := &fakeRecommendationResponseMapper{result: []RecommendedPostResponse{{Post: postResponse{ID: 17}}}}
+			handler := newRecommendationHandlerForTest(t, service, mapper, 0)
+			ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/recommendations/posts")
+			ctx.Set("user_id", uint(42))
+			handler.GetPostRecommendations(ctx)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("trace drop %s changed HTTP status=%d body=%s", outcome, recorder.Code, recorder.Body.String())
+			}
+			if enqueuer.calls != 1 || !strings.Contains(recorder.Body.String(), `"id":17`) {
+				t.Fatalf("enqueue calls=%d response=%s", enqueuer.calls, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestRecommendationSnapshotHTTPChainCommitsMappedPageAndStableRetry(t *testing.T) {
+	now := time.Date(2026, 10, 16, 10, 0, 0, 0, time.UTC)
+	posts := make(map[uint]models.Post, 40)
+	candidates := make([]recommendation.Candidate, 0, 40)
+	for id := uint(1); id <= 40; id++ {
+		candidates = append(candidates, recommendation.Candidate{PostID: id, FromRecent: true, RecentRank: int(id), SourceCount: 1})
+		posts[id] = models.Post{Model: gorm.Model{ID: id, CreatedAt: now.Add(-time.Duration(id) * time.Minute)}, AuthorID: id + 1000, Content: "post"}
+	}
+	repository := &controllerRecommendationCandidates{items: candidates, posts: posts}
+	history := &controllerPageHistory{}
+	traces := &captureTraceEnqueuer{}
+	snapshots := newControllerMemorySnapshotStore()
+	cfg := recommendation.DefaultConfig()
+	cfg.Snapshot = config.RecommendationSnapshotConfig{Enabled: true, TTLSeconds: 120, MaxCandidates: 40, PreselectPages: 1, DefaultPageSize: 5, MaxPageSize: 5}
+	cfg.OutOfNetworkMinRatio = 0
+	cfg.Exploration.Ratio = 0
+	cfg.Diversity.Enabled = false
+	trackingKey := []byte(strings.Repeat("http-tracking-key", 3))
+	service, err := recommendation.NewService(recommendation.ServiceDependencies{
+		DataDependencies: recommendation.DataDependencies{
+			Candidates: repository, Profiles: controllerRecommendationProfiles{now: now}, History: history,
+		},
+		ServingVersions: controllerRecommendationVersion{}, Snapshots: snapshots, TraceEnqueuer: traces,
+	}, recommendation.ServiceConfig{
+		Recommendation: cfg, SnapshotSigningKey: []byte(strings.Repeat("snapshot-signing-key", 2)),
+		Tracking: recommendation.TrackingConfig{Enabled: true, RolloutPercent: 100, SigningKey: trackingKey, TokenTTL: 24 * time.Hour},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := newRecommendationHandlerForTest(t, service, &filteringRecommendationResponseMapper{filterPosition: 2}, 0)
+	request := func(cursor string) (postRecommendationPageResponse, string, int) {
+		path := "/api/recommendations/posts?limit=5"
+		if cursor != "" {
+			path += "&cursor=" + cursor
+		}
+		ctx, recorder := newRecommendationHTTPContext(http.MethodGet, path)
+		ctx.Set("user_id", uint(42))
+		handler.GetPostRecommendations(ctx)
+		var response postRecommendationPageResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode response %s: %v", recorder.Body.String(), err)
+		}
+		return response, recorder.Body.String(), recorder.Code
+	}
+	first, _, status := request("")
+	if status != http.StatusOK || len(first.Items) != 4 || first.NextCursor == nil {
+		t.Fatalf("first page status=%d items=%d next=%v", status, len(first.Items), first.NextCursor)
+	}
+	firstIDs := make([]uint, len(first.Items))
+	seenIDs := make(map[uint]struct{}, 20)
+	for index, item := range first.Items {
+		firstIDs[index] = item.Post.ID
+		seenIDs[item.Post.ID] = struct{}{}
+		if item.Tracking == nil || item.Tracking.Position != index+1 {
+			t.Fatalf("first page item %d tracking=%#v", index, item.Tracking)
+		}
+		claims, err := recommendation.VerifyTrackingToken(item.Tracking.Token, trackingKey)
+		if err != nil || claims.PostID != item.Post.ID || claims.Position != index+1 {
+			t.Fatalf("first page tracking claims=%#v err=%v", claims, err)
+		}
+	}
+	if len(traces.calls) != 1 || len(traces.calls[0].Results) != len(first.Items) {
+		t.Fatalf("trace jobs=%d results=%d want one job and %d results", len(traces.calls), len(traces.calls[0].Results), len(first.Items))
+	}
+	for index, result := range traces.calls[0].Results {
+		if result.PostID != firstIDs[index] || result.Position != index+1 {
+			t.Fatalf("trace[%d]=%#v does not match mapped response", index, result)
+		}
+	}
+	recorded := history.recordedPages()
+	if len(recorded) != 1 || !equalControllerIDs(recorded[0], firstIDs) {
+		t.Fatalf("history=%v want mapped IDs %v", recorded, firstIDs)
+	}
+
+	cursor := *first.NextCursor
+	second, secondBody, status := request(cursor)
+	if status != http.StatusOK || len(second.Items) != 4 {
+		t.Fatalf("second page status=%d items=%d body=%s", status, len(second.Items), secondBody)
+	}
+	for index, item := range second.Items {
+		if _, duplicate := seenIDs[item.Post.ID]; duplicate {
+			t.Fatalf("post %d repeated across mapped pages", item.Post.ID)
+		}
+		seenIDs[item.Post.ID] = struct{}{}
+		if item.Tracking == nil || item.Tracking.Position != index+1 {
+			t.Fatalf("second page item %d tracking=%#v", index, item.Tracking)
+		}
+	}
+	secondRetry, retryBody, status := request(cursor)
+	if status != http.StatusOK || secondBody != retryBody || second.RequestID != secondRetry.RequestID {
+		t.Fatalf("same cursor retry changed page: status=%d first=%s retry=%s", status, secondBody, retryBody)
+	}
+	if len(traces.calls) != 2 || len(history.recordedPages()) != 2 {
+		t.Fatalf("trace jobs=%d history pages=%d, want one per committed page despite retry", len(traces.calls), len(history.recordedPages()))
+	}
+	for index, result := range traces.calls[1].Results {
+		if result.Position != index+1 || result.PostID != second.Items[index].Post.ID {
+			t.Fatalf("retried trace[%d]=%#v response=%#v", index, result, second.Items[index])
+		}
+	}
+	delete(repository.posts, second.Items[0].Post.ID)
+	staleRetry, staleBody, status := request(cursor)
+	if status != http.StatusGone || len(staleRetry.Items) != 0 {
+		t.Fatalf("page with invalidated committed content status=%d items=%d body=%s", status, len(staleRetry.Items), staleBody)
+	}
+	if len(traces.calls) != 2 || len(history.recordedPages()) != 2 {
+		t.Fatalf("invalidated retry created side effects: trace jobs=%d history pages=%d", len(traces.calls), len(history.recordedPages()))
+	}
+	cursor = *second.NextCursor
+	for pageIndex := 2; pageIndex < 5; pageIndex++ {
+		page, body, pageStatus := request(cursor)
+		if pageStatus != http.StatusOK || len(page.Items) != 4 || page.NextCursor == nil {
+			t.Fatalf("page %d status=%d items=%d next=%v body=%s", pageIndex, pageStatus, len(page.Items), page.NextCursor, body)
+		}
+		for index, item := range page.Items {
+			if _, duplicate := seenIDs[item.Post.ID]; duplicate {
+				t.Fatalf("post %d repeated across mapped pages", item.Post.ID)
+			}
+			seenIDs[item.Post.ID] = struct{}{}
+			if item.Tracking == nil || item.Tracking.Position != index+1 {
+				t.Fatalf("page %d item %d tracking=%#v", pageIndex, index, item.Tracking)
+			}
+		}
+		traceJob := traces.calls[pageIndex]
+		if len(traceJob.Results) != len(page.Items) {
+			t.Fatalf("page %d trace results=%d response items=%d", pageIndex, len(traceJob.Results), len(page.Items))
+		}
+		for index, traceResult := range traceJob.Results {
+			if traceResult.PostID != page.Items[index].Post.ID || traceResult.Position != index+1 {
+				t.Fatalf("page %d trace[%d]=%#v response=%#v", pageIndex, index, traceResult, page.Items[index])
+			}
+		}
+		cursor = *page.NextCursor
+	}
+	if len(seenIDs) != 20 || len(traces.calls) != 5 || len(history.recordedPages()) != 5 {
+		t.Fatalf("five mapped pages: unique posts=%d trace jobs=%d history pages=%d", len(seenIDs), len(traces.calls), len(history.recordedPages()))
+	}
+	for _, source := range []string{"semantic", "following", "recent", "trending"} {
+		if repository.calls[source] != 1 {
+			t.Fatalf("%s recall calls=%d want 1", source, repository.calls[source])
+		}
+	}
+}
+
+func equalControllerIDs(left, right []uint) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestPublicRecommendationHandlerNormalizesGuestSessionHeader(t *testing.T) {

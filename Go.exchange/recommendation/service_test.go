@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +38,7 @@ type serviceTestCandidateRepository struct {
 	publicTrend              []Candidate
 	softRecent               []Candidate
 	posts                    map[uint]models.Post
+	embeddings               map[uint][]float32
 	loadErr                  error
 	hydrateErr               error
 	publicCalls              int
@@ -45,6 +47,9 @@ type serviceTestCandidateRepository struct {
 	snapshotEligibilityCalls int
 	snapshotCandidateIDsRead int
 	embeddingReadCalls       int
+	snapshotEmbeddingIDsRead int
+	snapshotDatabaseQueries  int
+	snapshotPageCandidateIDs []int
 }
 
 func (repository *serviceTestCandidateRepository) addCall(value string) {
@@ -108,7 +113,13 @@ func (repository *serviceTestCandidateRepository) HydrateCandidates(_ context.Co
 }
 func (repository *serviceTestCandidateRepository) LoadPostEmbeddings(_ context.Context, postIDs []uint, _ string) (map[uint][]float32, error) {
 	repository.embeddingReadCalls++
-	return map[uint][]float32{}, nil
+	embeddings := make(map[uint][]float32, len(postIDs))
+	for _, postID := range postIDs {
+		if embedding, exists := repository.embeddings[postID]; exists {
+			embeddings[postID] = append([]float32(nil), embedding...)
+		}
+	}
+	return embeddings, nil
 }
 
 type serviceTestProfileRepository struct {
@@ -134,15 +145,18 @@ func (*serviceTestProfileRepository) LoadPostAffinityInputs(context.Context, []u
 }
 
 type serviceTestHistoryStore struct {
-	calls           *[]string
-	user            ServedHistory
-	guest           ServedHistory
-	loadErr         error
-	recordErr       error
-	lastUserIDs     []uint
-	lastGuestIDs    []uint
-	lastUserWindow  HistoryWindow
-	lastGuestWindow HistoryWindow
+	mu                 sync.Mutex
+	calls              *[]string
+	user               ServedHistory
+	guest              ServedHistory
+	loadErr            error
+	recordErr          error
+	lastUserIDs        []uint
+	lastGuestIDs       []uint
+	lastUserWindow     HistoryWindow
+	lastGuestWindow    HistoryWindow
+	pageReceipts       map[string]struct{}
+	pageRecordAttempts int
 }
 
 func (store *serviceTestHistoryStore) LoadUserHistory(_ context.Context, _ uint, window HistoryWindow) (ServedHistory, error) {
@@ -159,6 +173,22 @@ func (store *serviceTestHistoryStore) RecordUserServed(_ context.Context, _ uint
 	store.lastUserIDs = append([]uint(nil), postIDs...)
 	store.lastUserWindow = window
 	return store.recordErr
+}
+func (store *serviceTestHistoryStore) RecordUserServedForPage(ctx context.Context, userID uint, pageKey string, postIDs []uint, window HistoryWindow) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.pageRecordAttempts++
+	if store.pageReceipts == nil {
+		store.pageReceipts = make(map[string]struct{})
+	}
+	if _, exists := store.pageReceipts[pageKey]; exists {
+		return nil
+	}
+	if err := store.RecordUserServed(ctx, userID, postIDs, window); err != nil {
+		return err
+	}
+	store.pageReceipts[pageKey] = struct{}{}
+	return nil
 }
 func (store *serviceTestHistoryStore) LoadGuestHistory(_ context.Context, _ string, window HistoryWindow) (ServedHistory, error) {
 	if store.calls != nil {
@@ -222,7 +252,7 @@ func serviceTestConfig() config.RecommendationConfig {
 	}
 }
 
-func newServiceTestService(t *testing.T, deps ServiceDependencies, cfg ServiceConfig) VerificationService {
+func newServiceTestService(t testing.TB, deps ServiceDependencies, cfg ServiceConfig) VerificationService {
 	t.Helper()
 	service, err := NewService(deps, cfg)
 	if err != nil {

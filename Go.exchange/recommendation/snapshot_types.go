@@ -29,7 +29,16 @@ type CachedPage struct {
 	GenerationLatencyMS int64             `json:"generation_latency_ms"`
 	Items               []CachedCandidate `json:"items"`
 	ReturnedPostIDs     []uint            `json:"returned_post_ids,omitempty"`
-	Finalized           bool              `json:"finalized"`
+	// Committed freezes the mapper-approved IDs before any page side effect.
+	Committed bool `json:"committed,omitempty"`
+	// HistoryRecorded means the page-keyed history receipt was confirmed.
+	HistoryRecorded bool `json:"history_recorded,omitempty"`
+	// TraceAttempted is claimed before enqueue. A process crash between the
+	// claim and enqueue can lose a trace; trace delivery remains best-effort.
+	TraceAttempted bool `json:"trace_attempted,omitempty"`
+	// Finalized means history and trace side-effect attempts are complete; it
+	// does not imply successful asynchronous trace persistence.
+	Finalized bool `json:"finalized"`
 }
 
 type CandidatePoolSnapshot struct {
@@ -59,6 +68,10 @@ type SnapshotStore interface {
 
 type SnapshotCandidateRepository interface {
 	LoadEligibleSnapshotCandidates(ctx context.Context, query CandidateQuery, candidates []Candidate) ([]RankedCandidate, error)
+}
+
+type SnapshotPageRepository interface {
+	LoadSnapshotPage(ctx context.Context, query CandidateQuery, candidates []Candidate, contextPostIDs []uint) ([]RankedCandidate, map[uint][]float32, error)
 }
 
 type servingFinalization struct {

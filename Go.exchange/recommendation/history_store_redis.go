@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	userHistoryKeyPrefix  = "recommendation:user:served:v1:"
-	guestHistoryKeyPrefix = "recommendation:guest:served:v1:"
+	userHistoryKeyPrefix        = "recommendation:user:served:v1:"
+	guestHistoryKeyPrefix       = "recommendation:guest:served:v1:"
+	pageHistoryReceiptKeyPrefix = "recommendation:user:served-page:v1:"
 )
 
 type RedisHistoryStore struct {
@@ -56,6 +57,48 @@ func (s *RedisHistoryStore) RecordUserServed(ctx context.Context, userID uint, p
 		return fmt.Errorf("record user served history: %w", err)
 	}
 	return recordServedHistory(ctx, client, userHistoryKey(userID), postIDs, window, strconv.FormatInt(window.SoftStart.Unix(), 10))
+}
+
+func (s *RedisHistoryStore) RecordUserServedForPage(ctx context.Context, userID uint, pageKey string, postIDs []uint, window HistoryWindow) error {
+	if userID == 0 || strings.TrimSpace(pageKey) == "" || len(historyMembers(postIDs, 0)) == 0 {
+		return nil
+	}
+	if window.Now.IsZero() || window.Limit <= 0 || window.TTL <= 0 {
+		return errors.New("recommendation page history window is invalid")
+	}
+	client, err := recommendationRedisContext(ctx, s.client)
+	if err != nil {
+		return fmt.Errorf("record user served page history: %w", err)
+	}
+	members := historyMembers(postIDs, float64(window.Now.UTC().Unix()))
+	receiptKey := userPageHistoryReceiptKey(pageKey)
+	args := []interface{}{
+		strconv.FormatInt(window.SoftStart.Unix(), 10), window.Limit,
+		window.TTL.Milliseconds(),
+	}
+	for _, member := range members {
+		args = append(args, member.Score, member.Member)
+	}
+	const recordPageScript = `
+if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end
+local limit = tonumber(ARGV[2])
+local ttl_ms = tonumber(ARGV[3])
+for index = 4, #ARGV, 2 do
+  redis.call('ZADD', KEYS[1], ARGV[index], ARGV[index + 1])
+end
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+local cardinality = redis.call('ZCARD', KEYS[1])
+if cardinality > limit then
+  redis.call('ZREMRANGEBYRANK', KEYS[1], 0, cardinality - limit - 1)
+end
+redis.call('PEXPIRE', KEYS[1], ttl_ms)
+redis.call('SET', KEYS[2], '1', 'PX', ttl_ms)
+return 1
+`
+	if _, err := client.Eval(recordPageScript, []string{userHistoryKey(userID), receiptKey}, args...).Int(); err != nil {
+		return fmt.Errorf("record user served page history: %w", err)
+	}
+	return nil
 }
 
 func (s *RedisHistoryStore) LoadGuestHistory(ctx context.Context, sessionID string, window HistoryWindow) (ServedHistory, error) {
@@ -107,6 +150,11 @@ func userHistoryKey(userID uint) string {
 func guestHistoryKey(sessionID string) string {
 	digest := sha256.Sum256([]byte(sessionID))
 	return guestHistoryKeyPrefix + hex.EncodeToString(digest[:])
+}
+
+func userPageHistoryReceiptKey(pageKey string) string {
+	digest := sha256.Sum256([]byte(pageKey))
+	return pageHistoryReceiptKeyPrefix + hex.EncodeToString(digest[:])
 }
 
 func parseServedHistory(entries []redis.Z, window HistoryWindow) ServedHistory {

@@ -140,6 +140,36 @@ func TestRedisHistoryStoreUserIntegration(t *testing.T) {
 	}
 }
 
+func TestRedisHistoryStoreRecordsCommittedPageOnceIntegration(t *testing.T) {
+	client := openHistoryIntegrationRedis(t)
+	store, err := NewRedisHistoryStore(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userID := uint(time.Now().UnixNano())
+	pageKey := uuid.NewString() + ":0"
+	historyKey := userHistoryKey(userID)
+	receiptKey := userPageHistoryReceiptKey(pageKey)
+	t.Cleanup(func() {
+		if err := client.Del(historyKey, receiptKey).Err(); err != nil {
+			t.Errorf("delete page history test keys: %v", err)
+		}
+	})
+
+	first := time.Now().UTC().Truncate(time.Second)
+	window := testHistoryWindow(first, 20, 24*time.Hour)
+	if err := store.RecordUserServedForPage(context.Background(), userID, pageKey, []uint{7101, 7102}, window); err != nil {
+		t.Fatalf("record committed page history: %v", err)
+	}
+	window.Now = first.Add(time.Minute)
+	if err := store.RecordUserServedForPage(context.Background(), userID, pageKey, []uint{7101, 7103}, window); err != nil {
+		t.Fatalf("retry committed page history: %v", err)
+	}
+	assertHistoryScore(t, client, historyKey, "7101", first)
+	assertHistoryScore(t, client, historyKey, "7102", first)
+	assertHistoryMissing(t, client, historyKey, "7103")
+}
+
 func TestRedisHistoryStoreGuestIntegration(t *testing.T) {
 	client := openHistoryIntegrationRedis(t)
 	store, err := NewRedisHistoryStore(client)

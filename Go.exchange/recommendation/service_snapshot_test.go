@@ -23,6 +23,18 @@ type memorySnapshotStore struct {
 	snapshots map[string]CandidatePoolSnapshot
 }
 
+func equalFloat32Slices(left, right []float32) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func newMemorySnapshotStore() *memorySnapshotStore {
 	return &memorySnapshotStore{snapshots: make(map[string]CandidatePoolSnapshot)}
 }
@@ -66,18 +78,40 @@ func (store *memorySnapshotStore) CompareAndSwap(_ context.Context, id string, e
 	return true, nil
 }
 
-func (repository *serviceTestCandidateRepository) LoadEligibleSnapshotCandidates(_ context.Context, _ CandidateQuery, candidates []Candidate) ([]RankedCandidate, error) {
+func (repository *serviceTestCandidateRepository) LoadEligibleSnapshotCandidates(ctx context.Context, query CandidateQuery, candidates []Candidate) ([]RankedCandidate, error) {
+	eligible, _, err := repository.LoadSnapshotPage(ctx, query, candidates, nil)
+	return eligible, err
+}
+
+func (repository *serviceTestCandidateRepository) LoadSnapshotPage(_ context.Context, _ CandidateQuery, candidates []Candidate, contextPostIDs []uint) ([]RankedCandidate, map[uint][]float32, error) {
 	repository.snapshotEligibilityCalls++
 	repository.snapshotCandidateIDsRead += len(candidates)
+	repository.embeddingReadCalls++
+	repository.snapshotEmbeddingIDsRead += len(candidates) + len(contextPostIDs)
+	if len(contextPostIDs) > 0 {
+		repository.snapshotPageCandidateIDs = append(repository.snapshotPageCandidateIDs, len(candidates))
+	}
+	if len(candidates) > 0 {
+		repository.snapshotDatabaseQueries += 2 // posts plus author preload
+	}
+	if len(candidates)+len(contextPostIDs) > 0 {
+		repository.snapshotDatabaseQueries++ // one batched embedding query
+	}
 	items := make([]RankedCandidate, 0, len(candidates))
+	contextEmbeddings := make(map[uint][]float32, len(contextPostIDs))
+	for _, postID := range contextPostIDs {
+		if embedding, exists := repository.embeddings[postID]; exists {
+			contextEmbeddings[postID] = append([]float32(nil), embedding...)
+		}
+	}
 	for _, candidate := range candidates {
 		post, exists := repository.posts[candidate.PostID]
 		if !exists || post.ID == 0 || post.AuthorID == 0 {
 			continue
 		}
-		items = append(items, RankedCandidate{Candidate: candidate, Post: post})
+		items = append(items, RankedCandidate{Candidate: candidate, Post: post, Embedding: append([]float32(nil), repository.embeddings[candidate.PostID]...)})
 	}
-	return items, nil
+	return items, contextEmbeddings, nil
 }
 
 type unavailableSnapshotStore struct{ SnapshotStore }
@@ -86,8 +120,346 @@ func (unavailableSnapshotStore) Load(context.Context, string) (CandidatePoolSnap
 	return CandidatePoolSnapshot{}, fmt.Errorf("%w: redis unavailable", ErrSnapshotUnavailable)
 }
 
+type snapshotCASConflictOnce struct {
+	SnapshotStore
+	mu        sync.Mutex
+	conflicts int
+}
+
+func (store *snapshotCASConflictOnce) CompareAndSwap(ctx context.Context, id string, revision int64, snapshot CandidatePoolSnapshot, maxBytes int) (bool, error) {
+	store.mu.Lock()
+	if store.conflicts == 0 {
+		store.conflicts++
+		store.mu.Unlock()
+		return false, nil
+	}
+	store.mu.Unlock()
+	return store.SnapshotStore.CompareAndSwap(ctx, id, revision, snapshot, maxBytes)
+}
+
+type snapshotCASFailure struct {
+	SnapshotStore
+	err error
+}
+
+func (store snapshotCASFailure) CompareAndSwap(context.Context, string, int64, CandidatePoolSnapshot, int) (bool, error) {
+	return false, store.err
+}
+
+func firstSnapshotResult(t *testing.T, service *RecommendationService, now time.Time) ServeResult {
+	t.Helper()
+	result, err := service.Serve(context.Background(), ServeRequest{
+		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 20,
+		RequestID: uuid.NewString(), Now: now,
+	})
+	if err != nil {
+		t.Fatalf("serve first snapshot page: %v", err)
+	}
+	return result
+}
+
+func TestRecommendationTraceQueueFullDoesNotFailServing(t *testing.T) {
+	for _, outcome := range []TraceEnqueueResult{TraceEnqueueDroppedFull, TraceEnqueueDroppedStopping} {
+		t.Run(string(outcome), func(t *testing.T) {
+			service, _, now := newSnapshotTestService(t, newMemorySnapshotStore())
+			enqueuer := &serviceTestTraceEnqueuer{result: outcome}
+			service.dependencies.TraceEnqueuer = enqueuer
+			result := firstSnapshotResult(t, service, now)
+			if len(result.Selected) == 0 {
+				t.Fatal("recommendation page was empty")
+			}
+			facts, err := service.FinalizeMappedServing(context.Background(), result, result.Selected)
+			if err != nil {
+				t.Fatalf("dropped trace prevented page finalization: %v", err)
+			}
+			if len(result.Selected) != len(enqueuer.job.Results) || enqueuer.enqueueCalls != 1 {
+				t.Fatalf("selected=%d trace results=%d enqueue calls=%d", len(result.Selected), len(enqueuer.job.Results), enqueuer.enqueueCalls)
+			}
+			if len(facts) != 0 {
+				t.Fatalf("tracking facts unexpectedly enabled: %d", len(facts))
+			}
+		})
+	}
+}
+
+func TestRecommendationFinalizeCASConflictDoesNotDuplicateSideEffects(t *testing.T) {
+	base := newMemorySnapshotStore()
+	store := &snapshotCASConflictOnce{SnapshotStore: base}
+	service, _, now := newSnapshotTestService(t, store)
+	history := service.dependencies.History.(*serviceTestHistoryStore)
+	traces := &serviceTestTraceEnqueuer{}
+	service.dependencies.TraceEnqueuer = traces
+	result := firstSnapshotResult(t, service, now)
+	if _, err := service.FinalizeMappedServing(context.Background(), result, result.Selected); err != nil {
+		t.Fatalf("finalize after one CAS conflict: %v", err)
+	}
+	if history.pageRecordAttempts != 1 || traces.enqueueCalls != 1 {
+		t.Fatalf("history page writes=%d trace enqueues=%d, want one each", history.pageRecordAttempts, traces.enqueueCalls)
+	}
+	snapshot, err := base.Load(context.Background(), result.PoolID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, ok := snapshotPageAt(snapshot, 0)
+	if !ok || !snapshotPageCommitted(page) || !equalUintSlices(page.ReturnedPostIDs, selectedPostIDs(result.Selected)) {
+		t.Fatalf("committed page=%#v", page)
+	}
+}
+
+func TestRecommendationFinalizeRedisFailureDoesNotRecordUncommittedPage(t *testing.T) {
+	base := newMemorySnapshotStore()
+	store := snapshotCASFailure{SnapshotStore: base, err: errors.New("redis write failed")}
+	service, _, now := newSnapshotTestService(t, store)
+	history := service.dependencies.History.(*serviceTestHistoryStore)
+	traces := &serviceTestTraceEnqueuer{}
+	service.dependencies.TraceEnqueuer = traces
+	result := firstSnapshotResult(t, service, now)
+	if _, err := service.FinalizeMappedServing(context.Background(), result, result.Selected); err == nil {
+		t.Fatal("expected Redis CAS error")
+	}
+	if history.pageRecordAttempts != 0 || traces.enqueueCalls != 0 {
+		t.Fatalf("uncommitted page had side effects: history=%d trace=%d", history.pageRecordAttempts, traces.enqueueCalls)
+	}
+	snapshot, err := base.Load(context.Background(), result.PoolID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ := snapshotPageAt(snapshot, 0)
+	if snapshotPageCommitted(page) {
+		t.Fatalf("page unexpectedly committed after CAS failure: %#v", page)
+	}
+}
+
+func TestRecommendationFinalizeRetryKeepsStableReturnedIDs(t *testing.T) {
+	store := newMemorySnapshotStore()
+	service, _, now := newSnapshotTestService(t, store)
+	history := service.dependencies.History.(*serviceTestHistoryStore)
+	traces := &serviceTestTraceEnqueuer{}
+	service.dependencies.TraceEnqueuer = traces
+	result := firstSnapshotResult(t, service, now)
+	firstReturned := result.Selected[:15]
+	if _, err := service.FinalizeMappedServing(context.Background(), result, firstReturned); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.FinalizeMappedServing(context.Background(), result, firstReturned); err != nil {
+		t.Fatalf("same mapped page retry: %v", err)
+	}
+	if _, err := service.FinalizeMappedServing(context.Background(), result, result.Selected[10:]); !errors.Is(err, ErrCursorExpired) {
+		t.Fatalf("changed mapped page error=%v, want cursor expired", err)
+	}
+	snapshot, err := store.Load(context.Background(), result.PoolID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ := snapshotPageAt(snapshot, 0)
+	wantIDs := selectedPostIDs(firstReturned)
+	if !equalUintSlices(page.ReturnedPostIDs, wantIDs) || !equalUintSlices(history.lastUserIDs, wantIDs) {
+		t.Fatalf("committed IDs=%v history IDs=%v want=%v", page.ReturnedPostIDs, history.lastUserIDs, wantIDs)
+	}
+	if traces.enqueueCalls != 1 || history.pageRecordAttempts != 1 {
+		t.Fatalf("trace enqueues=%d history page writes=%d want one each", traces.enqueueCalls, history.pageRecordAttempts)
+	}
+}
+
+func TestRecommendationCommittedPageRecoversHistorySideEffect(t *testing.T) {
+	store := newMemorySnapshotStore()
+	service, _, now := newSnapshotTestService(t, store)
+	history := service.dependencies.History.(*serviceTestHistoryStore)
+	history.recordErr = errors.New("history temporarily unavailable")
+	traces := &serviceTestTraceEnqueuer{}
+	service.dependencies.TraceEnqueuer = traces
+	result := firstSnapshotResult(t, service, now)
+	if _, err := service.FinalizeMappedServing(context.Background(), result, result.Selected); err != nil {
+		t.Fatalf("best-effort history failure changed successful response: %v", err)
+	}
+	snapshot, err := store.Load(context.Background(), result.PoolID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ := snapshotPageAt(snapshot, 0)
+	if !snapshotPageCommitted(page) || page.HistoryRecorded || page.TraceAttempted || traces.enqueueCalls != 0 {
+		t.Fatalf("failed history left invalid state page=%#v trace calls=%d", page, traces.enqueueCalls)
+	}
+	history.recordErr = nil
+	if _, err := service.FinalizeMappedServing(context.Background(), result, result.Selected); err != nil {
+		t.Fatalf("recover committed page history: %v", err)
+	}
+	if _, err := service.FinalizeMappedServing(context.Background(), result, result.Selected); err != nil {
+		t.Fatalf("repeat recovered page: %v", err)
+	}
+	snapshot, err = store.Load(context.Background(), result.PoolID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ = snapshotPageAt(snapshot, 0)
+	if !page.HistoryRecorded || !page.TraceAttempted || !page.Finalized || traces.enqueueCalls != 1 {
+		t.Fatalf("recovered page=%#v trace calls=%d", page, traces.enqueueCalls)
+	}
+	if history.pageRecordAttempts != 2 {
+		t.Fatalf("history attempts=%d want failed attempt plus recovery once", history.pageRecordAttempts)
+	}
+}
+
+func TestRecommendationConcurrentFinalizeUsesSingleCommittedPage(t *testing.T) {
+	store := newMemorySnapshotStore()
+	service, _, now := newSnapshotTestService(t, store)
+	history := service.dependencies.History.(*serviceTestHistoryStore)
+	traces := &serviceTestTraceEnqueuer{}
+	service.dependencies.TraceEnqueuer = traces
+	result := firstSnapshotResult(t, service, now)
+	errs := make(chan error, 2)
+	var wait sync.WaitGroup
+	for index := 0; index < 2; index++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			_, err := service.FinalizeMappedServing(context.Background(), result, result.Selected)
+			errs <- err
+		}()
+	}
+	wait.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent finalize: %v", err)
+		}
+	}
+	if history.pageRecordAttempts < 1 || history.pageRecordAttempts > 2 || traces.enqueueCalls != 1 {
+		t.Fatalf("history attempts=%d trace enqueues=%d", history.pageRecordAttempts, traces.enqueueCalls)
+	}
+	snapshot, err := store.Load(context.Background(), result.PoolID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ := snapshotPageAt(snapshot, 0)
+	if !page.Finalized || !equalUintSlices(page.ReturnedPostIDs, selectedPostIDs(result.Selected)) {
+		t.Fatalf("concurrent page=%#v", page)
+	}
+}
+
+func TestRecommendationPreselectedPagePreservesCrossPageSemanticDiversity(t *testing.T) {
+	now := time.Date(2026, 10, 16, 10, 0, 0, 0, time.UTC)
+	vectorA := []float32{1, 0}
+	vectorB := []float32{0.995, 0.01}
+	if similarity := CosineSimilarity(vectorA, vectorB); similarity <= 0.92 {
+		t.Fatalf("fixture similarity=%f, want > 0.92", similarity)
+	}
+	page := CachedPage{Index: 0, Items: []CachedCandidate{{
+		Candidate: Candidate{PostID: 100}, PostID: 100, AuthorID: 10, CreatedAt: now,
+		Breakdown: ScoreBreakdown{BaseScore: 10},
+	}}}
+	embeddings := map[uint][]float32{100: vectorA}
+	preselectedPrior := selectedContextFromPages([]CachedPage{page}, embeddings)
+	dynamicPrior := selectedContextFromPages([]CachedPage{page}, embeddings)
+	if len(preselectedPrior) != 1 || len(preselectedPrior[0].Embedding) != len(vectorA) {
+		t.Fatalf("preselected prior embedding=%v", preselectedPrior)
+	}
+	if len(dynamicPrior) != 1 || !equalFloat32Slices(preselectedPrior[0].Embedding, dynamicPrior[0].Embedding) {
+		t.Fatalf("preselected and dynamic prior contexts differ: %v vs %v", preselectedPrior, dynamicPrior)
+	}
+	cfg := testSelectionConfig(DefaultConfig())
+	cfg.OutOfNetworkMinRatio = 0
+	cfg.Exploration.Ratio = 0
+	cfg.Diversity.Enabled = true
+	cfg.Diversity.AuthorWindowSize = 8
+	cfg.Diversity.MaxSameAuthorInWindow = 8
+	cfg.Diversity.SemanticDuplicateThreshold = 0.92
+	cfg.Diversity.SemanticDuplicatePenalty = 200
+	candidates := []RankedCandidate{
+		{Candidate: Candidate{PostID: 101}, Post: models.Post{Model: gorm.Model{ID: 101}, AuthorID: 20}, Embedding: vectorB, Breakdown: ScoreBreakdown{BaseScore: 100}},
+		{Candidate: Candidate{PostID: 102}, Post: models.Post{Model: gorm.Model{ID: 102}, AuthorID: 30}, Embedding: []float32{0, 1}, Breakdown: ScoreBreakdown{BaseScore: 1}},
+	}
+	if penalty := diversityPenalty(candidates[0], preselectedPrior, cfg.Diversity); penalty != cfg.Diversity.SemanticDuplicatePenalty {
+		t.Fatalf("cross-page semantic penalty=%v, want %v", penalty, cfg.Diversity.SemanticDuplicatePenalty)
+	}
+	requestID := "fixed-page-seed"
+	preselected := SelectNextPage(SelectionInput{Candidates: candidates, Limit: 1, Now: now, Phase: SelectionPhaseFresh, RequestID: requestID, Config: cfg}, preselectedPrior)
+	dynamic := SelectNextPage(SelectionInput{Candidates: candidates, Limit: 1, Now: now, Phase: SelectionPhaseFresh, RequestID: requestID, Config: cfg}, dynamicPrior)
+	if len(preselected) != 1 || preselected[0].Post.ID != 102 {
+		t.Fatalf("preselected second page=%v, want distinct post 102", selectedPostIDs(preselected))
+	}
+	if !equalUintSlices(selectedPostIDs(preselected), selectedPostIDs(dynamic)) {
+		t.Fatalf("preselected/dynamic results differ with same page seed: %v vs %v", selectedPostIDs(preselected), selectedPostIDs(dynamic))
+	}
+	withoutEmbedding := selectedContextFromPages([]CachedPage{page}, nil)
+	withoutPenalty := SelectNextPage(SelectionInput{Candidates: candidates, Limit: 1, Now: now, Phase: SelectionPhaseFresh, RequestID: requestID, Config: cfg}, withoutEmbedding)
+	if len(withoutPenalty) != 1 || withoutPenalty[0].Post.ID != 101 {
+		t.Fatalf("missing-embedding control=%v, want high-score duplicate 101", selectedPostIDs(withoutPenalty))
+	}
+}
+
+func TestRecommendationTrackingPositionsFollowMappedResponse(t *testing.T) {
+	store := newMemorySnapshotStore()
+	service, _, now := newSnapshotTestService(t, store)
+	key := []byte(strings.Repeat("tracking-test-key", 3))
+	service.config.Tracking = TrackingConfig{Enabled: true, RolloutPercent: 100, SigningKey: key, TokenTTL: 24 * time.Hour}
+	traces := &serviceTestTraceEnqueuer{}
+	service.dependencies.TraceEnqueuer = traces
+	result := firstSnapshotResult(t, service, now)
+	if len(result.Selected) != 20 {
+		t.Fatalf("candidate page size=%d want 20", len(result.Selected))
+	}
+	filtered := append([]SelectedCandidate(nil), result.Selected[:2]...)
+	filtered = append(filtered, result.Selected[3:]...)
+	facts, err := service.FinalizeMappedServing(context.Background(), result, filtered)
+	if err != nil {
+		t.Fatalf("finalize mapped page: %v", err)
+	}
+	if len(facts) != 19 || len(traces.job.Results) != 19 {
+		t.Fatalf("tracking facts=%d trace results=%d, want 19", len(facts), len(traces.job.Results))
+	}
+	for index, item := range filtered {
+		fact := facts[index]
+		if fact.PostID != item.Post.ID || fact.Position != index+1 {
+			t.Fatalf("tracking[%d]=%#v does not match post=%d position=%d", index, fact, item.Post.ID, index+1)
+		}
+		claims, err := VerifyTrackingToken(fact.Token, key)
+		if err != nil {
+			t.Fatalf("verify token for post %d: %v", fact.PostID, err)
+		}
+		if claims.PostID != item.Post.ID || claims.Position != index+1 || claims.RequestID != result.RequestID {
+			t.Fatalf("tracking claims=%#v want post=%d position=%d request=%s", claims, item.Post.ID, index+1, result.RequestID)
+		}
+		trace := traces.job.Results[index]
+		if trace.PostID != item.Post.ID || trace.Position != fact.Position {
+			t.Fatalf("trace[%d]=post %d position %d, tracking post %d position %d", index, trace.PostID, trace.Position, fact.PostID, fact.Position)
+		}
+		if fact.PostID == result.Selected[2].Post.ID {
+			t.Fatalf("filtered post %d received tracking", fact.PostID)
+		}
+	}
+}
+
+func TestRecommendationRetryKeepsStableTrackingClaims(t *testing.T) {
+	service, _, now := newSnapshotTestService(t, newMemorySnapshotStore())
+	key := []byte(strings.Repeat("tracking-retry-key", 3))
+	service.config.Tracking = TrackingConfig{Enabled: true, RolloutPercent: 100, SigningKey: key, TokenTTL: 24 * time.Hour}
+	traces := &serviceTestTraceEnqueuer{}
+	service.dependencies.TraceEnqueuer = traces
+	result := firstSnapshotResult(t, service, now)
+	first, err := service.FinalizeMappedServing(context.Background(), result, result.Selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry := result
+	retry.Profile.ProfileAgeMS += int64(time.Minute / time.Millisecond)
+	second, err := service.FinalizeMappedServing(context.Background(), retry, retry.Selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != len(second) || traces.enqueueCalls != 1 {
+		t.Fatalf("first tracking=%d retry tracking=%d trace calls=%d", len(first), len(second), traces.enqueueCalls)
+	}
+	for index := range first {
+		if first[index] != second[index] {
+			t.Fatalf("tracking claim changed on retry at %d: %#v vs %#v", index, first[index], second[index])
+		}
+	}
+}
+
 func TestRecommendationSnapshotReuses500CandidatePoolAcrossFivePages(t *testing.T) {
-	service, candidates, now := newSnapshotTestService(t, newMemorySnapshotStore())
+	store := newMemorySnapshotStore()
+	service, candidates, now := newSnapshotTestService(t, store)
 	exporter, provider := newRecommendationTracingTestProvider(t)
 	previousTracing := TracingEnabled()
 	SetTracingEnabled(true)
@@ -101,6 +473,7 @@ func TestRecommendationSnapshotReuses500CandidatePoolAcrossFivePages(t *testing.
 	var allIDs []uint
 	var snapshotPageDurations []time.Duration
 	cursor := ""
+	var snapshotID string
 	for pageIndex := 0; pageIndex < 5; pageIndex++ {
 		pageCtx, root := provider.Tracer("snapshot-test").Start(context.Background(), "page")
 		pageStarted := time.Now()
@@ -115,6 +488,9 @@ func TestRecommendationSnapshotReuses500CandidatePoolAcrossFivePages(t *testing.
 		snapshotPageDurations = append(snapshotPageDurations, time.Since(pageStarted))
 		if pageIndex == 0 && len(result.CandidateSummary.Candidates) != 500 {
 			t.Fatalf("snapshot candidate count=%d want 500", len(result.CandidateSummary.Candidates))
+		}
+		if pageIndex == 0 {
+			snapshotID = result.PoolID
 		}
 		if pageIndex > 0 && !result.CacheHit {
 			t.Fatalf("page %d was not served from its candidate snapshot", pageIndex)
@@ -178,10 +554,50 @@ func TestRecommendationSnapshotReuses500CandidatePoolAcrossFivePages(t *testing.
 			t.Fatalf("legacy %s recall calls=%d want 5", source, countString(*legacyCandidates.calls, source))
 		}
 	}
-	t.Logf("simulated 5-page latency: candidate-pool p50=%s p95=%s total=%s; full-recompute p50=%s p95=%s total=%s; batched snapshot eligibility reads=%d candidate IDs=%d",
+	snapshot, err := store.Load(context.Background(), snapshotID)
+	if err != nil {
+		t.Fatalf("load measured snapshot: %v", err)
+	}
+	snapshotBytes, err := marshalSnapshot(snapshot, defaultSnapshotMaxBytes)
+	if err != nil {
+		t.Fatalf("marshal measured snapshot: %v", err)
+	}
+	encodedSnapshotBytes := len(snapshotBytes)
+	t.Logf("simulated 5-page latency: candidate-pool p50=%s p95=%s total=%s; full-recompute p50=%s p95=%s total=%s; dynamic-page eligible candidate IDs=%v total-read=%d; embedding rows=%d in %d batches; modeled DB queries=%d; Redis snapshot bytes=%d",
 		medianDuration(snapshotPageDurations), percentileDuration(snapshotPageDurations, .95), sumDurations(snapshotPageDurations),
 		medianDuration(legacyPageDurations), percentileDuration(legacyPageDurations, .95), sumDurations(legacyPageDurations),
-		candidates.snapshotEligibilityCalls, candidates.snapshotCandidateIDsRead)
+		candidates.snapshotPageCandidateIDs, candidates.snapshotCandidateIDsRead, candidates.snapshotEmbeddingIDsRead,
+		candidates.embeddingReadCalls, candidates.snapshotDatabaseQueries, encodedSnapshotBytes)
+}
+
+func BenchmarkRecommendationSnapshotDynamicNextPages(b *testing.B) {
+	var candidateIDs, embeddingIDs, databaseQueries int
+	b.ReportAllocs()
+	b.ResetTimer()
+	for iteration := 0; iteration < b.N; iteration++ {
+		store := newMemorySnapshotStore()
+		service, candidates, now := newSnapshotTestService(b, store)
+		cursor := ""
+		for pageIndex := 0; pageIndex < 5; pageIndex++ {
+			result, err := service.Serve(context.Background(), ServeRequest{
+				Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 20, Cursor: cursor,
+				RequestID: uuid.NewString(), Now: now.Add(time.Duration(pageIndex) * time.Second),
+			})
+			if err != nil {
+				b.Fatalf("page %d: %v", pageIndex, err)
+			}
+			cursor = result.NextCursor
+		}
+		candidateIDs += candidates.snapshotCandidateIDsRead
+		embeddingIDs += candidates.snapshotEmbeddingIDsRead
+		databaseQueries += candidates.snapshotDatabaseQueries
+	}
+	b.StopTimer()
+	if b.N > 0 {
+		b.ReportMetric(float64(candidateIDs)/float64(b.N), "snapshot-candidate-ids/op")
+		b.ReportMetric(float64(embeddingIDs)/float64(b.N), "embedding-rows/op")
+		b.ReportMetric(float64(databaseQueries)/float64(b.N), "snapshot-db-queries/op")
+	}
 }
 
 func TestRecommendationSnapshotHonorsConfiguredMaximumPageSize(t *testing.T) {
@@ -273,7 +689,7 @@ func TestRecommendationSnapshotRejectsCursorReuseByAnotherUserAndFallsBackWhenRe
 	}
 }
 
-func newSnapshotTestService(t *testing.T, store SnapshotStore) (*RecommendationService, *serviceTestCandidateRepository, time.Time) {
+func newSnapshotTestService(t testing.TB, store SnapshotStore) (*RecommendationService, *serviceTestCandidateRepository, time.Time) {
 	t.Helper()
 	now := time.Now().UTC().Truncate(time.Second)
 	calls := make([]string, 0)

@@ -202,16 +202,6 @@ func (service *RecommendationService) Serve(ctx context.Context, request ServeRe
 		}
 	}
 
-	if request.Viewer.Kind == ViewerAuthenticated {
-		tracking, trackingErr := BuildTrackingFacts(result, service.config.Tracking)
-		if trackingErr != nil {
-			log.Printf("[RecommendationTelemetry] omit tracking metadata: %v", trackingErr)
-		} else {
-			result.Tracking = tracking
-		}
-		service.metrics.AddTrackingResults("tracked", len(result.Tracking))
-		service.metrics.AddTrackingResults("untracked", len(result.Selected)-len(result.Tracking))
-	}
 	generationDuration := time.Since(started)
 	if result.traceGenerationDuration <= 0 {
 		result.traceGenerationDuration = generationDuration

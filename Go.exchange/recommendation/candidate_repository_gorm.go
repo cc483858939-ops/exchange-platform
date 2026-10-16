@@ -457,12 +457,17 @@ func (r *GormCandidateRepository) HydrateCandidates(ctx context.Context, serving
 // reapplies the same current-user visibility, mute, negative-feedback, and
 // interaction filters used by recall queries.
 func (r *GormCandidateRepository) LoadEligibleSnapshotCandidates(ctx context.Context, input CandidateQuery, candidates []Candidate) ([]RankedCandidate, error) {
-	if len(candidates) == 0 {
-		return nil, nil
+	eligible, _, err := r.LoadSnapshotPage(ctx, input, candidates, nil)
+	return eligible, err
+}
+
+func (r *GormCandidateRepository) LoadSnapshotPage(ctx context.Context, input CandidateQuery, candidates []Candidate, contextPostIDs []uint) ([]RankedCandidate, map[uint][]float32, error) {
+	if len(candidates) == 0 && len(contextPostIDs) == 0 {
+		return nil, map[uint][]float32{}, nil
 	}
 	db, err := recommendationContextDB(ctx, r.db)
 	if err != nil {
-		return nil, fmt.Errorf("load eligible snapshot candidates: %w", err)
+		return nil, nil, fmt.Errorf("load eligible snapshot candidates: %w", err)
 	}
 	ids := make([]uint, 0, len(candidates))
 	byID := make(map[uint]Candidate, len(candidates))
@@ -476,14 +481,13 @@ func (r *GormCandidateRepository) LoadEligibleSnapshotCandidates(ctx context.Con
 		ids = append(ids, candidate.PostID)
 		byID[candidate.PostID] = candidate
 	}
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	query := db.Model(&models.Post{}).Select(recommendationPublicPostColumns).Where("posts.id IN ?", ids)
-	query = r.eligibilityQuery(db, query, input)
 	var posts []models.Post
-	if err := query.Preload("Author", func(tx *gorm.DB) *gorm.DB { return tx.Select("id, username, display_name, avatar_url") }).Find(&posts).Error; err != nil {
-		return nil, fmt.Errorf("load eligible snapshot posts: %w", err)
+	if len(ids) > 0 {
+		query := db.Model(&models.Post{}).Select(recommendationPublicPostColumns).Where("posts.id IN ?", ids)
+		query = r.eligibilityQuery(db, query, input)
+		if err := query.Preload("Author", func(tx *gorm.DB) *gorm.DB { return tx.Select("id, username, display_name, avatar_url") }).Find(&posts).Error; err != nil {
+			return nil, nil, fmt.Errorf("load eligible snapshot posts: %w", err)
+		}
 	}
 	validIDs := make([]uint, 0, len(posts))
 	for _, post := range posts {
@@ -491,9 +495,32 @@ func (r *GormCandidateRepository) LoadEligibleSnapshotCandidates(ctx context.Con
 			validIDs = append(validIDs, post.ID)
 		}
 	}
-	embeddings, err := r.LoadPostEmbeddings(ctx, validIDs, input.ServingVersion)
+	embeddingIDs := make([]uint, 0, len(validIDs)+len(contextPostIDs))
+	embeddingSeen := make(map[uint]struct{}, len(validIDs)+len(contextPostIDs))
+	for _, id := range validIDs {
+		if _, exists := embeddingSeen[id]; !exists {
+			embeddingSeen[id] = struct{}{}
+			embeddingIDs = append(embeddingIDs, id)
+		}
+	}
+	for _, id := range contextPostIDs {
+		if id == 0 {
+			continue
+		}
+		if _, exists := embeddingSeen[id]; !exists {
+			embeddingSeen[id] = struct{}{}
+			embeddingIDs = append(embeddingIDs, id)
+		}
+	}
+	embeddings, err := r.LoadPostEmbeddings(ctx, embeddingIDs, input.ServingVersion)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	contextEmbeddings := make(map[uint][]float32, len(contextPostIDs))
+	for _, id := range contextPostIDs {
+		if embedding, exists := embeddings[id]; exists {
+			contextEmbeddings[id] = embedding
+		}
 	}
 	postsByID := make(map[uint]models.Post, len(posts))
 	for _, post := range posts {
@@ -507,7 +534,7 @@ func (r *GormCandidateRepository) LoadEligibleSnapshotCandidates(ctx context.Con
 		}
 		result = append(result, RankedCandidate{Candidate: byID[id], Post: post, Embedding: embeddings[id]})
 	}
-	return result, nil
+	return result, contextEmbeddings, nil
 }
 
 func (r *GormCandidateRepository) LoadPostEmbeddings(ctx context.Context, postIDs []uint, version string) (map[uint][]float32, error) {

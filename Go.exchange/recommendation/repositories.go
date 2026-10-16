@@ -166,6 +166,12 @@ type HistoryStore interface {
 	RecordGuestServed(ctx context.Context, sessionID string, postIDs []uint, window HistoryWindow) error
 }
 
+// PageHistoryStore records a committed recommendation page at most once.
+// The page key is stable for the lifetime of a candidate-pool snapshot.
+type PageHistoryStore interface {
+	RecordUserServedForPage(ctx context.Context, userID uint, pageKey string, postIDs []uint, window HistoryWindow) error
+}
+
 type TraceRepository interface {
 	PersistServing(ctx context.Context, request models.RecommendationRequest, results []models.RecommendationResultTrace) error
 }

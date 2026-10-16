@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"Go.exchange/models"
@@ -18,6 +19,8 @@ import (
 )
 
 const candidateSnapshotStrategyVersion = "select-next-page-v1"
+
+var traceDropLogCount uint64
 
 func (service *RecommendationService) cursorCodec() (*CursorCodec, error) {
 	if !service.config.Recommendation.Snapshot.Enabled || service.dependencies.Snapshots == nil {
@@ -82,13 +85,24 @@ func (service *RecommendationService) createInitialSnapshot(ctx context.Context,
 	pageZero := cachedPageFromSelected(0, request.RequestID, now, generationDuration, result.Selected)
 	snapshot.Pages = append(snapshot.Pages, pageZero)
 	snapshot.UsedPostIDs = append(snapshot.UsedPostIDs, cachedPagePostIDs(pageZero)...)
+	embeddings := make(map[uint][]float32, len(result.freshRankedCandidates)+len(result.softRankedCandidates))
+	for _, item := range result.freshRankedCandidates {
+		if item.Post.ID != 0 && len(item.Embedding) > 0 {
+			embeddings[item.Post.ID] = item.Embedding
+		}
+	}
+	for _, item := range result.softRankedCandidates {
+		if item.Post.ID != 0 && len(item.Embedding) > 0 {
+			embeddings[item.Post.ID] = item.Embedding
+		}
+	}
 
 	preselect := service.config.Recommendation.Snapshot.PreselectPages
 	if preselect < 1 {
 		preselect = 1
 	}
 	for pageIndex := 1; pageIndex < preselect && pageIndex*request.Limit < maxCandidates; pageIndex++ {
-		prior := selectedContextFromPages(snapshot.Pages, nil)
+		prior := selectedContextFromPages(snapshot.Pages, embeddings)
 		pageRequestID := uuid.NewString()
 		selected := selectRankedPage(
 			result.freshRankedCandidates, result.softRankedCandidates, prior,
@@ -155,6 +169,10 @@ func (service *RecommendationService) serveSnapshotCursor(ctx context.Context, r
 	}
 	if _, ok := service.dependencies.Candidates.(SnapshotCandidateRepository); !ok {
 		return ServeResult{}, request, fmt.Errorf("%w: candidate repository cannot revalidate cached candidates", ErrSnapshotUnavailable)
+	}
+	snapshot, err = service.recoverCommittedSnapshotHistory(ctx, request, snapshot)
+	if err != nil {
+		return ServeResult{}, request, err
 	}
 
 	pageIndex := payload.PageIndex
@@ -243,9 +261,31 @@ func (service *RecommendationService) selectSnapshotPage(ctx context.Context, re
 		cacheByID[cached.PostID] = cached
 		candidates = append(candidates, cached.Candidate)
 	}
-	eligible, err := service.loadEligibleSnapshotCandidates(ctx, request, servingVersion, profile, candidates)
-	if err != nil {
-		return CachedPage{}, err
+	var eligible []RankedCandidate
+	var prior []SelectedCandidate
+	var err error
+	if repository, ok := service.dependencies.Candidates.(SnapshotPageRepository); ok {
+		contextIDs := selectedSnapshotContextIDs(*snapshot, pageIndex)
+		query := CandidateQuery{
+			UserID: request.Viewer.UserID, ServingVersion: servingVersion, Now: request.Now,
+			MaterializedInteractionsReady: profile.MaterializedInteractionsReady,
+			InteractedPostIDs:             profile.InteractedPostIDs,
+		}
+		var contextEmbeddings map[uint][]float32
+		eligible, contextEmbeddings, err = repository.LoadSnapshotPage(ctx, query, candidates, contextIDs)
+		if err != nil {
+			return CachedPage{}, err
+		}
+		prior = selectedContextFromPages(snapshot.Pages, contextEmbeddings)
+	} else {
+		eligible, err = service.loadEligibleSnapshotCandidates(ctx, request, servingVersion, profile, candidates)
+		if err != nil {
+			return CachedPage{}, err
+		}
+		prior, err = service.selectedSnapshotContext(ctx, *snapshot, pageIndex, servingVersion)
+		if err != nil {
+			return CachedPage{}, err
+		}
 	}
 	ranked := make([]RankedCandidate, 0, len(eligible))
 	eligibleIDs := make(map[uint]struct{}, len(eligible))
@@ -279,10 +319,6 @@ func (service *RecommendationService) selectSnapshotPage(ctx context.Context, re
 		} else {
 			fresh = append(fresh, item)
 		}
-	}
-	prior, err := service.selectedSnapshotContext(ctx, *snapshot, pageIndex, servingVersion)
-	if err != nil {
-		return CachedPage{}, err
 	}
 	selected := selectRankedPage(fresh, soft, prior, snapshot.PageSize, request.Now, requestID, selectionConfig(service.config.Recommendation))
 	return cachedPageFromSelected(pageIndex, requestID, request.Now, 0, selected), nil
@@ -335,7 +371,7 @@ func (service *RecommendationService) materializeSnapshotPage(ctx context.Contex
 		request.Now = page.ServedAt.UTC()
 	}
 	wanted := make(map[uint]struct{}, len(page.Items))
-	if page.Finalized {
+	if snapshotPageCommitted(page) {
 		for _, id := range page.ReturnedPostIDs {
 			wanted[id] = struct{}{}
 		}
@@ -419,15 +455,20 @@ func (service *RecommendationService) loadEligibleSnapshotCandidates(ctx context
 }
 
 func (service *RecommendationService) FinalizeServing(ctx context.Context, result ServeResult, returned []SelectedCandidate) error {
+	_, err := service.FinalizeMappedServing(ctx, result, returned)
+	return err
+}
+
+func (service *RecommendationService) FinalizeMappedServing(ctx context.Context, result ServeResult, returned []SelectedCandidate) ([]TrackingFact, error) {
 	if ctx == nil {
-		return errors.New("recommendation finalization context is nil")
+		return nil, errors.New("recommendation finalization context is nil")
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	meta := result.finalization
 	if meta == nil {
-		return nil
+		return result.Tracking, nil
 	}
 	if meta.traceContext != nil {
 		ctx = trace.ContextWithSpan(ctx, trace.SpanFromContext(meta.traceContext))
@@ -437,86 +478,231 @@ func (service *RecommendationService) FinalizeServing(ctx context.Context, resul
 	request.RequestID = result.RequestID
 	request.Now = result.Now.UTC()
 	finalResult := result
+	finalResult.RequestID = request.RequestID
+	finalResult.Now = request.Now
 	finalResult.Selected = selected
-	trackingIDs := make(map[uint]struct{}, len(selected))
-	for _, item := range selected {
-		trackingIDs[item.Post.ID] = struct{}{}
-	}
-	finalResult.Tracking = finalTrackingFacts(result.Tracking, trackingIDs)
 
 	if meta.snapshotID != "" && meta.pageIndex >= 0 {
-		finalized := false
-		for attempt := 0; attempt < 8; attempt++ {
-			snapshot, err := service.dependencies.Snapshots.Load(ctx, meta.snapshotID)
-			if err != nil {
-				return err
-			}
-			page, exists := snapshotPageAt(snapshot, meta.pageIndex)
-			if !exists {
-				return ErrSnapshotUnavailable
-			}
-			if page.Finalized {
-				return nil
-			}
-			service.recordHistory(ctx, request, selected)
-			if request.Viewer.Kind == ViewerAuthenticated && service.dependencies.TraceEnqueuer != nil {
-				if queued := service.enqueueServingTrace(ctx, request, finalResult, meta.generationDuration); queued != TraceEnqueueQueued {
-					return fmt.Errorf("recommendation trace enqueue failed: %s", queued)
+		page, err := service.commitMappedPage(ctx, meta.snapshotID, meta.pageIndex, selected)
+		if err != nil {
+			return nil, err
+		}
+		request.RequestID = page.RequestID
+		if !page.ServedAt.IsZero() {
+			request.Now = page.ServedAt.UTC()
+		}
+		finalResult.RequestID = request.RequestID
+		finalResult.Now = request.Now
+
+		historyReady := page.HistoryRecorded
+		if !historyReady {
+			if err := service.recordCommittedPageHistory(ctx, request, meta.snapshotID, page); err != nil {
+				log.Printf("[Recommendation] committed page history recovery pending for snapshot %s page %d: %v", meta.snapshotID, meta.pageIndex, err)
+			} else {
+				page, _, err = service.updateSnapshotPage(ctx, meta.snapshotID, meta.pageIndex,
+					func(current CachedPage) bool { return current.HistoryRecorded },
+					func(current *CachedPage) { current.HistoryRecorded = true; current.Finalized = current.TraceAttempted },
+				)
+				if err != nil {
+					log.Printf("[Recommendation] committed page history receipt update pending for snapshot %s page %d: %v", meta.snapshotID, meta.pageIndex, err)
+				} else {
+					historyReady = true
 				}
-			}
-			page.Finalized = true
-			page.ReturnedPostIDs = selectedPostIDs(selected)
-			updated := cloneSnapshot(snapshot)
-			for index := range updated.Pages {
-				if updated.Pages[index].Index == meta.pageIndex {
-					updated.Pages[index] = page
-					break
-				}
-			}
-			returnedSet := make(map[uint]struct{}, len(page.ReturnedPostIDs))
-			for _, id := range page.ReturnedPostIDs {
-				returnedSet[id] = struct{}{}
-			}
-			used := updated.UsedPostIDs[:0]
-			for _, id := range updated.UsedPostIDs {
-				isPageItem := false
-				for _, item := range page.Items {
-					if item.PostID == id {
-						isPageItem = true
-						break
-					}
-				}
-				if !isPageItem {
-					used = append(used, id)
-					continue
-				}
-				if _, returned := returnedSet[id]; returned {
-					used = append(used, id)
-				}
-			}
-			updated.UsedPostIDs = used
-			updated.Revision = snapshot.Revision + 1
-			committed, err := service.dependencies.Snapshots.CompareAndSwap(ctx, snapshot.ID, snapshot.Revision, updated, defaultSnapshotMaxBytes)
-			if err != nil {
-				return err
-			}
-			if committed {
-				finalized = true
-				break
 			}
 		}
-		if !finalized {
-			return fmt.Errorf("%w: finalize recommendation page contention", ErrSnapshotUnavailable)
+
+		if historyReady {
+			page, enqueueTrace, err := service.updateSnapshotPage(ctx, meta.snapshotID, meta.pageIndex,
+				func(current CachedPage) bool { return current.TraceAttempted },
+				func(current *CachedPage) { current.TraceAttempted = true; current.Finalized = current.HistoryRecorded },
+			)
+			if err != nil {
+				log.Printf("[RecommendationTrace] committed page trace claim pending for snapshot %s page %d: %v", meta.snapshotID, meta.pageIndex, err)
+			} else if enqueueTrace {
+				finalResult.RequestID = page.RequestID
+				service.enqueueServingTraceBestEffort(ctx, request, finalResult, meta.generationDuration)
+			}
 		}
 	} else {
 		service.recordHistory(ctx, request, selected)
-		if queued := service.enqueueServingTrace(ctx, request, finalResult, meta.generationDuration); queued != "" && queued != TraceEnqueueQueued {
-			log.Printf("[RecommendationTrace] serving trace enqueue failed: %s", queued)
+		service.enqueueServingTraceBestEffort(ctx, request, finalResult, meta.generationDuration)
+	}
+	var tracking []TrackingFact
+	if request.Viewer.Kind == ViewerAuthenticated {
+		var trackingErr error
+		tracking, trackingErr = BuildTrackingFacts(finalResult, service.config.Tracking)
+		if trackingErr != nil {
+			log.Printf("[RecommendationTelemetry] omit tracking metadata: %v", trackingErr)
+			tracking = nil
 		}
+		service.metrics.AddTrackingResults("tracked", len(tracking))
+		service.metrics.AddTrackingResults("untracked", len(selected)-len(tracking))
 	}
 	service.metrics.ObserveResultCount(len(selected))
 	service.recordResultMetrics(selected)
-	return nil
+	return tracking, nil
+}
+
+func (service *RecommendationService) commitMappedPage(ctx context.Context, snapshotID string, pageIndex int, returned []SelectedCandidate) (CachedPage, error) {
+	returnedIDs := selectedPostIDs(returned)
+	for attempt := 0; attempt < 8; attempt++ {
+		snapshot, err := service.dependencies.Snapshots.Load(ctx, snapshotID)
+		if err != nil {
+			return CachedPage{}, err
+		}
+		page, exists := snapshotPageAt(snapshot, pageIndex)
+		if !exists {
+			return CachedPage{}, ErrSnapshotUnavailable
+		}
+		if snapshotPageCommitted(page) {
+			if !samePostIDs(returnedIDs, page.ReturnedPostIDs) {
+				return CachedPage{}, fmt.Errorf("%w: committed recommendation page content changed", ErrCursorExpired)
+			}
+			return page, nil
+		}
+		allowed := make(map[uint]struct{}, len(page.Items))
+		for _, item := range page.Items {
+			allowed[item.PostID] = struct{}{}
+		}
+		for _, id := range returnedIDs {
+			if _, exists := allowed[id]; !exists {
+				return CachedPage{}, fmt.Errorf("%w: mapped page contains post outside the prepared page", ErrSnapshotUnavailable)
+			}
+		}
+		page.Committed = true
+		page.ReturnedPostIDs = append([]uint(nil), returnedIDs...)
+		updated := cloneSnapshot(snapshot)
+		for index := range updated.Pages {
+			if updated.Pages[index].Index == pageIndex {
+				updated.Pages[index] = page
+				break
+			}
+		}
+		returnedSet := make(map[uint]struct{}, len(returnedIDs))
+		for _, id := range returnedIDs {
+			returnedSet[id] = struct{}{}
+		}
+		used := updated.UsedPostIDs[:0]
+		for _, id := range updated.UsedPostIDs {
+			isPageItem := false
+			for _, item := range page.Items {
+				if item.PostID == id {
+					isPageItem = true
+					break
+				}
+			}
+			if !isPageItem {
+				used = append(used, id)
+				continue
+			}
+			if _, included := returnedSet[id]; included {
+				used = append(used, id)
+			}
+		}
+		updated.UsedPostIDs = used
+		updated.Revision = snapshot.Revision + 1
+		committed, err := service.dependencies.Snapshots.CompareAndSwap(ctx, snapshotID, snapshot.Revision, updated, defaultSnapshotMaxBytes)
+		if err != nil {
+			return CachedPage{}, err
+		}
+		if committed {
+			return page, nil
+		}
+	}
+	return CachedPage{}, fmt.Errorf("%w: finalize recommendation page contention", ErrSnapshotUnavailable)
+}
+
+func samePostIDs(left, right []uint) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func (service *RecommendationService) updateSnapshotPage(ctx context.Context, snapshotID string, pageIndex int, complete func(CachedPage) bool, update func(*CachedPage)) (CachedPage, bool, error) {
+	for attempt := 0; attempt < 8; attempt++ {
+		snapshot, err := service.dependencies.Snapshots.Load(ctx, snapshotID)
+		if err != nil {
+			return CachedPage{}, false, err
+		}
+		page, exists := snapshotPageAt(snapshot, pageIndex)
+		if !exists {
+			return CachedPage{}, false, ErrSnapshotUnavailable
+		}
+		if complete(page) {
+			return page, false, nil
+		}
+		update(&page)
+		updated := cloneSnapshot(snapshot)
+		for index := range updated.Pages {
+			if updated.Pages[index].Index == pageIndex {
+				updated.Pages[index] = page
+				break
+			}
+		}
+		updated.Revision = snapshot.Revision + 1
+		committed, err := service.dependencies.Snapshots.CompareAndSwap(ctx, snapshotID, snapshot.Revision, updated, defaultSnapshotMaxBytes)
+		if err != nil {
+			return CachedPage{}, false, err
+		}
+		if committed {
+			return page, true, nil
+		}
+	}
+	return CachedPage{}, false, fmt.Errorf("%w: update recommendation page contention", ErrSnapshotUnavailable)
+}
+
+func (service *RecommendationService) recordCommittedPageHistory(ctx context.Context, request ServeRequest, snapshotID string, page CachedPage) error {
+	if request.Viewer.Kind != ViewerAuthenticated || request.Viewer.UserID == 0 || len(page.ReturnedPostIDs) == 0 || service.dependencies.History == nil {
+		return nil
+	}
+	window := userHistoryWindow(request.Now, service.config.Recommendation)
+	if history, ok := service.dependencies.History.(PageHistoryStore); ok {
+		return history.RecordUserServedForPage(ctx, request.Viewer.UserID, fmt.Sprintf("%s:%d", snapshotID, page.Index), page.ReturnedPostIDs, window)
+	}
+	// Production Redis history uses the page-keyed atomic receipt. This fallback
+	// keeps alternate stores usable but does not promise cross-process deduplication.
+	return service.dependencies.History.RecordUserServed(ctx, request.Viewer.UserID, page.ReturnedPostIDs, window)
+}
+
+func (service *RecommendationService) recoverCommittedSnapshotHistory(ctx context.Context, request ServeRequest, snapshot CandidatePoolSnapshot) (CandidatePoolSnapshot, error) {
+	recovered := false
+	for _, page := range snapshot.Pages {
+		if !snapshotPageCommitted(page) || page.HistoryRecorded {
+			continue
+		}
+		recoveryRequest := request
+		recoveryRequest.RequestID = page.RequestID
+		if !page.ServedAt.IsZero() {
+			recoveryRequest.Now = page.ServedAt.UTC()
+		}
+		if err := service.recordCommittedPageHistory(ctx, recoveryRequest, snapshot.ID, page); err != nil {
+			if ctx.Err() != nil {
+				return snapshot, ctx.Err()
+			}
+			log.Printf("[Recommendation] committed page history recovery deferred for snapshot %s page %d: %v", snapshot.ID, page.Index, err)
+			continue
+		}
+		recovered = true
+		if _, _, err := service.updateSnapshotPage(ctx, snapshot.ID, page.Index,
+			func(current CachedPage) bool { return current.HistoryRecorded },
+			func(current *CachedPage) { current.HistoryRecorded = true; current.Finalized = current.TraceAttempted },
+		); err != nil {
+			if ctx.Err() != nil {
+				return snapshot, ctx.Err()
+			}
+			log.Printf("[Recommendation] committed page history receipt recovery deferred for snapshot %s page %d: %v", snapshot.ID, page.Index, err)
+		}
+	}
+	if !recovered {
+		return snapshot, nil
+	}
+	return service.dependencies.Snapshots.Load(ctx, snapshot.ID)
 }
 
 func (service *RecommendationService) enqueueServingTrace(ctx context.Context, request ServeRequest, result ServeResult, generationDuration time.Duration) TraceEnqueueResult {
@@ -528,6 +714,19 @@ func (service *RecommendationService) enqueueServingTrace(ctx context.Context, r
 		Request: traceRequest,
 		Results: buildResultTraces(traceRequest, result.Selected, request.Now, service.config.Recommendation),
 	})
+}
+
+func (service *RecommendationService) enqueueServingTraceBestEffort(ctx context.Context, request ServeRequest, result ServeResult, generationDuration time.Duration) {
+	queued := service.enqueueServingTrace(ctx, request, result, generationDuration)
+	if queued == "" || queued == TraceEnqueueQueued {
+		return
+	}
+	// The dispatcher records bounded enqueue outcome metrics. A log line keeps
+	// queue pressure visible without making optional trace persistence part of
+	// the recommendation response's success path.
+	if atomic.AddUint64(&traceDropLogCount, 1)%100 == 1 {
+		log.Printf("[RecommendationTrace] serving trace enqueue dropped: %s", queued)
+	}
 }
 
 func uniqueSelected(input []SelectedCandidate) []SelectedCandidate {
@@ -558,20 +757,10 @@ func finalTrackingFacts(facts []TrackingFact, ids map[uint]struct{}) []TrackingF
 
 func (service *RecommendationService) selectedSnapshotContext(ctx context.Context, snapshot CandidatePoolSnapshot, pageIndex int, servingVersion string) ([]SelectedCandidate, error) {
 	items := make([]CachedCandidate, 0)
-	ids := make([]uint, 0)
+	ids := selectedSnapshotContextIDs(snapshot, pageIndex)
 	for _, page := range snapshot.Pages {
-		if page.Index >= pageIndex {
-			continue
-		}
-		returned := snapshotPageReturnedSet(page)
-		for _, item := range page.Items {
-			if page.Finalized {
-				if _, exists := returned[item.PostID]; !exists {
-					continue
-				}
-			}
-			items = append(items, item)
-			ids = append(ids, item.PostID)
+		if page.Index < pageIndex {
+			items = append(items, pageContextItems(page)...)
 		}
 	}
 	embeddings, err := service.dependencies.Candidates.LoadPostEmbeddings(ctx, ids, servingVersion)
@@ -590,6 +779,33 @@ func (service *RecommendationService) selectedSnapshotContext(ctx context.Contex
 		})
 	}
 	return selected, nil
+}
+
+func selectedSnapshotContextIDs(snapshot CandidatePoolSnapshot, pageIndex int) []uint {
+	ids := make([]uint, 0)
+	for _, page := range snapshot.Pages {
+		if page.Index >= pageIndex {
+			continue
+		}
+		for _, item := range pageContextItems(page) {
+			ids = append(ids, item.PostID)
+		}
+	}
+	return ids
+}
+
+func pageContextItems(page CachedPage) []CachedCandidate {
+	items := make([]CachedCandidate, 0, len(page.Items))
+	returned := snapshotPageReturnedSet(page)
+	for _, item := range page.Items {
+		if snapshotPageCommitted(page) {
+			if _, exists := returned[item.PostID]; !exists {
+				continue
+			}
+		}
+		items = append(items, item)
+	}
+	return items
 }
 
 func selectRankedPage(fresh, soft []RankedCandidate, prior []SelectedCandidate, limit int, now time.Time, requestID string, cfg SelectionConfig) []SelectedCandidate {
@@ -725,7 +941,7 @@ func candidateSummaryFromSnapshot(candidates []CachedCandidate, freshOnly bool) 
 }
 
 func snapshotReturnedIDs(page CachedPage) []uint {
-	if page.Finalized {
+	if snapshotPageCommitted(page) {
 		return append([]uint(nil), page.ReturnedPostIDs...)
 	}
 	return cachedPagePostIDs(page)
@@ -761,7 +977,7 @@ func selectedContextFromPages(pages []CachedPage, embeddings map[uint][]float32)
 	for _, page := range pages {
 		returned := snapshotPageReturnedSet(page)
 		for _, item := range page.Items {
-			if page.Finalized {
+			if snapshotPageCommitted(page) {
 				if _, exists := returned[item.PostID]; !exists {
 					continue
 				}
@@ -777,6 +993,10 @@ func selectedContextFromPages(pages []CachedPage, embeddings map[uint][]float32)
 		}
 	}
 	return selected
+}
+
+func snapshotPageCommitted(page CachedPage) bool {
+	return page.Committed || page.Finalized
 }
 
 func snapshotPageReturnedSet(page CachedPage) map[uint]struct{} {

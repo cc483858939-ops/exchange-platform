@@ -66,6 +66,10 @@ func (r *GormTraceRepository) PersistServing(ctx context.Context, request models
 func sameRecommendationTrace(existing, incoming models.RecommendationRequest, existingResults, incomingResults []models.RecommendationResultTrace) bool {
 	existing.CreatedAt = existing.CreatedAt.UTC().Truncate(time.Microsecond)
 	incoming.CreatedAt = incoming.CreatedAt.UTC().Truncate(time.Microsecond)
+	// Profile age is sampled at request time and can naturally advance while a
+	// committed page is being retried. It is diagnostic metadata, not part of
+	// the immutable page identity.
+	existing.ProfileAgeMS = incoming.ProfileAgeMS
 	if !reflect.DeepEqual(existing, incoming) || len(existingResults) != len(incomingResults) {
 		return false
 	}

@@ -79,6 +79,12 @@ type ServingFinalizer interface {
 	FinalizeServing(ctx context.Context, result ServeResult, returned []SelectedCandidate) error
 }
 
+// MappedServingFinalizer finalizes the exact order returned by the response mapper
+// and produces tracking claims for those posts only.
+type MappedServingFinalizer interface {
+	FinalizeMappedServing(ctx context.Context, result ServeResult, returned []SelectedCandidate) ([]TrackingFact, error)
+}
+
 type VerificationRequest struct {
 	UserID          uint
 	Limit           int
