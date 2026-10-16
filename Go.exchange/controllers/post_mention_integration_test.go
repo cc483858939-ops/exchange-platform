@@ -195,9 +195,12 @@ func TestPersistPostMentionsStoresRecentAndOutboxAtomicallyIntegration(t *testin
 	if err := db.Unscoped().First(&rolledBackCapPost, tooManyPost.ID).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("post survived over-limit mention rollback: err=%v", err)
 	}
-	var capRecents int64
-	if err := db.Model(&models.UserMentionRecent{}).Where("user_id = ? AND mentioned_user_id IN ?", actor.ID, capIDs).Count(&capRecents).Error; err != nil || capRecents != 0 {
-		t.Fatalf("over-limit request persisted recent rows=%d err=%v", capRecents, err)
+	var capRecents []models.UserMentionRecent
+	if err := db.Where("user_id = ? AND mentioned_user_id IN ?", actor.ID, capIDs).Find(&capRecents).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(capRecents) != 1 || capRecents[0].MentionedUserID != capUsers[0].ID || !capRecents[0].LastMentionedAt.Equal(firstAt) {
+		t.Fatalf("over-limit request changed recent mentions: %+v", capRecents)
 	}
 }
 
