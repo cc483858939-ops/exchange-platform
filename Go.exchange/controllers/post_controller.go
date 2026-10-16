@@ -17,6 +17,7 @@ import (
 	"Go.exchange/postlanguage"
 	"Go.exchange/postlikeinit"
 	"Go.exchange/postmediaupload"
+	"Go.exchange/postmention"
 	"Go.exchange/ratelimit"
 	"Go.exchange/recommendation"
 
@@ -31,6 +32,7 @@ type createPostRequest struct {
 	ReplyToPostID *uint                    `json:"reply_to_post_id"`
 	QuotePostID   *uint                    `json:"quote_post_id"`
 	Media         []createPostMediaRequest `json:"media"`
+	MentionTokens []string                 `json:"-"`
 
 	ClientPublishID          *uuid.UUID `json:"-"`
 	ClientPublishFingerprint *string    `json:"-"`
@@ -40,6 +42,8 @@ const (
 	createPostRequestMaxBytes = 1 << 20 // 1 MiB JSON request envelope
 	maxReplyContentRunes      = 1000
 )
+
+var errTooManyPostMentions = errors.New("a post can mention at most 5 different users")
 
 var loadPostAuthorForCreate = loadPublicAuthorByID
 var initializePostLikeState = func(ctx context.Context, postID uint) error {
@@ -162,6 +166,16 @@ func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter, enab
 			return
 		}
 	}
+	mentionTokens, err := postmention.ExtractTokens(content)
+	if errors.Is(err, postmention.ErrTooManyCandidates) {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "too many mention candidates"})
+		return
+	}
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid mention text"})
+		return
+	}
+	req.MentionTokens = mentionTokens
 	// A new request consumes quota once. Idempotent replays returned above do
 	// not consume another post_create allowance; failed creates are not refunded
 	// in V1.
@@ -192,6 +206,10 @@ func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter, enab
 	var post models.Post
 	err = persistPostGraphFn(ctx.Request.Context(), &post, userID, content, req, media, now)
 	if err != nil {
+		if errors.Is(err, errTooManyPostMentions) {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 		if hasClientPublishID && isClientPublishUniqueViolation(err) {
 			existing, lookupErr := loadClientPublishPostFn(ctx.Request.Context(), userID, *clientPublishID)
 			if lookupErr == nil {
@@ -379,6 +397,9 @@ func persistPostGraph(ctx context.Context, post *models.Post, userID uint, conte
 				return err
 			}
 		}
+		if err := persistPostMentions(tx, post.ID, userID, req.MentionTokens, now, parentAuthor, quoteTargetAuthor); err != nil {
+			return err
+		}
 		if config.AppConfig != nil && config.AppConfig.Embedding.Enabled {
 			embeddingEvent, err := eventing.NewPostEmbeddingRequestedEnvelope(uuid.NewString(), post.ID, now)
 			if err != nil {
@@ -390,6 +411,73 @@ func persistPostGraph(ctx context.Context, post *models.Post, userID uint, conte
 		}
 		return nil
 	})
+}
+
+func persistPostMentions(tx *gorm.DB, postID, actorID uint, tokens []string, createdAt time.Time, replyAuthorID, quoteAuthorID uint) error {
+	if len(tokens) == 0 {
+		return nil
+	}
+	var users []models.User
+	if err := tx.Select("id", "username").Where("username IN ? AND deleted_at IS NULL", tokens).Find(&users).Error; err != nil {
+		return err
+	}
+	byUsername := make(map[string]uint, len(users))
+	for _, user := range users {
+		byUsername[user.Username] = user.ID
+	}
+	recipients := make([]uint, 0, len(users))
+	seen := make(map[uint]struct{}, len(users))
+	for _, token := range tokens {
+		id := byUsername[token]
+		if id == 0 || id == actorID {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		recipients = append(recipients, id)
+	}
+	if len(recipients) > 5 {
+		return errTooManyPostMentions
+	}
+	if len(recipients) == 0 {
+		return nil
+	}
+	if err := upsertUserMentionRecents(tx, actorID, recipients, createdAt); err != nil {
+		return err
+	}
+	for _, recipientID := range recipients {
+		if recipientID == replyAuthorID || recipientID == quoteAuthorID {
+			continue
+		}
+		envelope, err := eventing.NewPostMentionedEnvelope(uuid.NewString(), eventing.PostMentionedPayload{
+			PostID: postID, ActorID: actorID, RecipientID: recipientID, CreatedAt: createdAt,
+		})
+		if err != nil {
+			return err
+		}
+		if err := addConfiguredActivityOutboxEvent(tx, envelope); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func upsertUserMentionRecents(tx *gorm.DB, actorID uint, recipientIDs []uint, mentionedAt time.Time) error {
+	if len(recipientIDs) == 0 {
+		return nil
+	}
+	recents := make([]models.UserMentionRecent, 0, len(recipientIDs))
+	for _, recipientID := range recipientIDs {
+		recents = append(recents, models.UserMentionRecent{UserID: actorID, MentionedUserID: recipientID, LastMentionedAt: mentionedAt.UTC()})
+	}
+	return tx.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "user_id"}, {Name: "mentioned_user_id"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"last_mentioned_at": gorm.Expr("GREATEST(user_mention_recents.last_mentioned_at, EXCLUDED.last_mentioned_at)"),
+		}),
+	}).Create(&recents).Error
 }
 
 func GetPostByID(ctx *gin.Context) {

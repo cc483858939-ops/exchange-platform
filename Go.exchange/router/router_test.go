@@ -591,6 +591,7 @@ func TestSetupRouterKeepsPublicRecommendationsOpenAndRepresentativeAPIsProtected
 		{http.MethodPost, "/api/posts/engagement-states"},
 		{http.MethodPut, "/api/posts/1/like"},
 		{http.MethodGet, "/api/users/search?q=guest"},
+		{http.MethodGet, "/api/me/mention-suggestions"},
 		{http.MethodGet, "/api/users/suggestions"},
 		{http.MethodGet, "/api/me/notifications"},
 	}
@@ -637,6 +638,7 @@ func TestSetupRouterKeepsPublicPostAndProfileReadsOpen(t *testing.T) {
 		path   string
 	}{
 		{http.MethodGet, "/api/users/search?q=guest"},
+		{http.MethodGet, "/api/me/mention-suggestions"},
 		{http.MethodGet, "/api/users/suggestions"},
 		{http.MethodGet, "/api/users/1/follow"},
 		{http.MethodGet, "/api/users/1/followers"},

@@ -51,6 +51,11 @@ func TestFilterNotificationCandidatesRequiresActiveParticipantsAndValidReplyPost
 		t.Fatal(err)
 	}
 	userIDs = append(userIDs, activeActor.ID)
+	thirdParty := models.User{Username: "notification-filter-third-party-" + uuid.NewString(), Password: "test"}
+	if err := db.Create(&thirdParty).Error; err != nil {
+		t.Fatal(err)
+	}
+	userIDs = append(userIDs, thirdParty.ID)
 	deletedActor := models.User{Username: "notification-filter-deleted-actor-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&deletedActor).Error; err != nil {
 		t.Fatal(err)
@@ -120,6 +125,21 @@ func TestFilterNotificationCandidatesRequiresActiveParticipantsAndValidReplyPost
 		t.Fatal(err)
 	}
 	postIDs = append(postIDs, normalPost.ID)
+	validMention := models.Post{AuthorID: activeActor.ID, Content: "thanks @" + recipient.Username, Visibility: "public"}
+	if err := db.Create(&validMention).Error; err != nil {
+		t.Fatal(err)
+	}
+	postIDs = append(postIDs, validMention.ID)
+	mentionedReply := models.Post{AuthorID: activeActor.ID, ReplyToPostID: &root.ID, ConversationID: &conversationID, Content: "@" + thirdParty.Username, Visibility: "public"}
+	if err := db.Create(&mentionedReply).Error; err != nil {
+		t.Fatal(err)
+	}
+	postIDs = append(postIDs, mentionedReply.ID)
+	suppressedMentionReply := models.Post{AuthorID: activeActor.ID, ReplyToPostID: &root.ID, ConversationID: &conversationID, Content: "@" + recipient.Username, Visibility: "public"}
+	if err := db.Create(&suppressedMentionReply).Error; err != nil {
+		t.Fatal(err)
+	}
+	postIDs = append(postIDs, suppressedMentionReply.ID)
 	deletedActorQuote := models.Post{AuthorID: deletedActor.ID, QuotePostID: &root.ID, Content: "deleted actor quote", Visibility: "public"}
 	if err := db.Create(&deletedActorQuote).Error; err != nil {
 		t.Fatal(err)
@@ -150,6 +170,7 @@ func TestFilterNotificationCandidatesRequiresActiveParticipantsAndValidReplyPost
 	validQuoteID, wrongTargetQuoteID, deletedQuoteID := validQuote.ID, wrongTargetQuote.ID, deletedQuote.ID
 	normalPostID, deletedActorQuoteID := normalPost.ID, deletedActorQuote.ID
 	deletedRecipientQuoteID, softDeletedTargetQuoteID := deletedRecipientQuote.ID, softDeletedTargetQuote.ID
+	validMentionID, mentionedReplyID, suppressedMentionReplyID := validMention.ID, mentionedReply.ID, suppressedMentionReply.ID
 	candidates := []models.Notification{
 		{RecipientID: recipient.ID, ActorID: activeActor.ID, Type: models.NotificationTypeUserFollowed, SourceVersion: 1, DedupeKey: "filter:valid-follow", ActivityAt: now},
 		{RecipientID: recipient.ID, ActorID: deletedActor.ID, Type: models.NotificationTypeUserFollowed, SourceVersion: 1, DedupeKey: "filter:deleted-actor", ActivityAt: now},
@@ -165,19 +186,24 @@ func TestFilterNotificationCandidatesRequiresActiveParticipantsAndValidReplyPost
 		{RecipientID: recipient.ID, ActorID: deletedActor.ID, Type: models.NotificationTypePostQuoted, PostID: &deletedActorQuoteID, SourceVersion: 0, DedupeKey: "filter:deleted-actor-quote", ActivityAt: now},
 		{RecipientID: deletedRecipient.ID, ActorID: activeActor.ID, Type: models.NotificationTypePostQuoted, PostID: &deletedRecipientQuoteID, SourceVersion: 0, DedupeKey: "filter:deleted-recipient-quote", ActivityAt: now},
 		{RecipientID: recipient.ID, ActorID: activeActor.ID, Type: models.NotificationTypePostQuoted, PostID: &softDeletedTargetQuoteID, SourceVersion: 0, DedupeKey: "filter:soft-deleted-target-quote", ActivityAt: now},
+		{RecipientID: recipient.ID, ActorID: activeActor.ID, Type: models.NotificationTypePostMentioned, PostID: &validMentionID, SourceVersion: 0, DedupeKey: "filter:valid-mention", ActivityAt: now},
+		{RecipientID: thirdParty.ID, ActorID: activeActor.ID, Type: models.NotificationTypePostMentioned, PostID: &mentionedReplyID, SourceVersion: 0, DedupeKey: "filter:third-party-reply-mention", ActivityAt: now},
+		{RecipientID: recipient.ID, ActorID: activeActor.ID, Type: models.NotificationTypePostMentioned, PostID: &suppressedMentionReplyID, SourceVersion: 0, DedupeKey: "filter:suppressed-reply-mention", ActivityAt: now},
+		{RecipientID: recipient.ID, ActorID: recipient.ID, Type: models.NotificationTypePostMentioned, PostID: &validMentionID, SourceVersion: 0, DedupeKey: "filter:wrong-mention-actor", ActivityAt: now},
+		{RecipientID: recipient.ID, ActorID: activeActor.ID, Type: models.NotificationTypePostMentioned, PostID: &normalPostID, SourceVersion: 0, DedupeKey: "filter:body-does-not-mention-recipient", ActivityAt: now},
 	}
 	filtered, err := filterNotificationCandidates(db, candidates)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(filtered) != 4 {
-		t.Fatalf("filtered candidates=%d want=4: %+v", len(filtered), filtered)
+	if len(filtered) != 6 {
+		t.Fatalf("filtered candidates=%d want=6: %+v", len(filtered), filtered)
 	}
 	seen := make(map[string]bool, len(filtered))
 	for _, candidate := range filtered {
 		seen[candidate.DedupeKey] = true
 	}
-	for _, key := range []string{"filter:valid-follow", "filter:valid-reply", "filter:valid-quote", "filter:soft-deleted-target-quote"} {
+	for _, key := range []string{"filter:valid-follow", "filter:valid-reply", "filter:valid-quote", "filter:soft-deleted-target-quote", "filter:valid-mention", "filter:third-party-reply-mention"} {
 		if !seen[key] {
 			t.Fatalf("valid candidate %q was filtered: %+v", key, filtered)
 		}
@@ -187,6 +213,7 @@ func TestFilterNotificationCandidatesRequiresActiveParticipantsAndValidReplyPost
 		"filter:wrong-parent-reply", "filter:deleted-reply",
 		"filter:wrong-target-quote", "filter:deleted-quote", "filter:not-a-quote",
 		"filter:deleted-actor-quote", "filter:deleted-recipient-quote",
+		"filter:suppressed-reply-mention", "filter:wrong-mention-actor", "filter:body-does-not-mention-recipient",
 	} {
 		if seen[key] {
 			t.Fatalf("invalid candidate %q survived filtering", key)

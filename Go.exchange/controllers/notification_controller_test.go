@@ -149,14 +149,19 @@ func TestQuotedNotificationVisibilityTracksQuotePostIntegration(t *testing.T) {
 	if err := db.AutoMigrate(&models.User{}, &models.UserMute{}, &models.Post{}, &models.Notification{}); err != nil {
 		t.Fatal(err)
 	}
+	tx := db.Begin()
+	if tx.Error != nil {
+		t.Fatal(tx.Error)
+	}
 	for _, statement := range []string{
 		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS chk_notifications_type",
-		"ALTER TABLE notifications ADD CONSTRAINT chk_notifications_type CHECK (notification_type IN ('post_liked', 'post_replied', 'post_quoted', 'user_followed'))",
+		"ALTER TABLE notifications ADD CONSTRAINT chk_notifications_type CHECK (notification_type IN ('post_liked', 'post_replied', 'post_quoted', 'user_followed', 'post_mentioned'))",
 		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS chk_notifications_shape",
 		`ALTER TABLE notifications ADD CONSTRAINT chk_notifications_shape CHECK (
   (notification_type = 'post_liked' AND post_id IS NOT NULL AND source_version > 0) OR
   (notification_type = 'post_replied' AND post_id IS NOT NULL AND source_version = 0) OR
   (notification_type = 'post_quoted' AND post_id IS NOT NULL AND source_version = 0) OR
+  (notification_type = 'post_mentioned' AND post_id IS NOT NULL AND source_version = 0) OR
   (notification_type = 'user_followed' AND post_id IS NULL AND source_version > 0)
 )`,
 	} {
@@ -231,6 +236,115 @@ func TestQuotedNotificationVisibilityTracksQuotePostIntegration(t *testing.T) {
 	GetMyUnreadNotificationCount(ctx)
 	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &count) != nil || count.UnreadCount != 0 {
 		t.Fatalf("unread after quote deletion status=%d body=%s decoded=%d", recorder.Code, recorder.Body.String(), count.UnreadCount)
+	}
+}
+
+func TestMentionNotificationVisibilityAndReadStateIntegration(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
+	}
+	db, err := testdb.Open(t, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.User{}, &models.UserMute{}, &models.Post{}, &models.Notification{}); err != nil {
+		t.Fatal(err)
+	}
+	tx := db.Begin()
+	if tx.Error != nil {
+		t.Fatal(tx.Error)
+	}
+	originalDB := global.APIDb
+	t.Cleanup(func() {
+		if err := tx.Rollback().Error; err != nil {
+			t.Errorf("rollback mention notification integration transaction: %v", err)
+		}
+		global.APIDb = originalDB
+	})
+	for _, statement := range []string{
+		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS chk_notifications_type",
+		"ALTER TABLE notifications ADD CONSTRAINT chk_notifications_type CHECK (notification_type IN ('post_liked', 'post_replied', 'post_quoted', 'user_followed', 'post_mentioned'))",
+		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS chk_notifications_shape",
+		`ALTER TABLE notifications ADD CONSTRAINT chk_notifications_shape CHECK (
+  (notification_type = 'post_liked' AND post_id IS NOT NULL AND source_version > 0) OR
+  (notification_type = 'post_replied' AND post_id IS NOT NULL AND source_version = 0) OR
+  (notification_type = 'post_quoted' AND post_id IS NOT NULL AND source_version = 0) OR
+  (notification_type = 'post_mentioned' AND post_id IS NOT NULL AND source_version = 0) OR
+  (notification_type = 'user_followed' AND post_id IS NULL AND source_version > 0)
+)`,
+	} {
+		if err := tx.Exec(statement).Error; err != nil {
+			t.Fatalf("prepare mention notification schema: %v", err)
+		}
+	}
+	global.APIDb = tx
+
+	recipient := models.User{Username: "mention-notification-recipient-" + uuid.NewString(), Password: "test"}
+	actor := models.User{Username: "mention-notification-actor-" + uuid.NewString(), Password: "test"}
+	if err := tx.Create(&[]*models.User{&recipient, &actor}).Error; err != nil {
+		t.Fatal(err)
+	}
+	post := models.Post{AuthorID: actor.ID, Content: "hello @" + recipient.Username, Visibility: "public"}
+	if err := tx.Create(&post).Error; err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	postID := post.ID
+	notification := models.Notification{
+		RecipientID: recipient.ID, ActorID: actor.ID, Type: models.NotificationTypePostMentioned,
+		PostID: &postID, DedupeKey: "post_mentioned:" + strconvUint(post.ID) + ":" + strconvUint(recipient.ID),
+		SourceVersion: 0, ActivityAt: now, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := tx.Create(&notification).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, recorder := notificationIntegrationContext(http.MethodGet, "/api/me/notifications", recipient.ID)
+	GetMyNotifications(ctx)
+	var page notificationPageResponse
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &page) != nil || len(page.Items) != 1 || page.Items[0].Type != models.NotificationTypePostMentioned {
+		t.Fatalf("mention list status=%d body=%s page=%+v", recorder.Code, recorder.Body.String(), page)
+	}
+	readUnread := func() int64 {
+		t.Helper()
+		ctx, recorder := notificationIntegrationContext(http.MethodGet, "/api/me/notifications/unread-count", recipient.ID)
+		GetMyUnreadNotificationCount(ctx)
+		var count struct {
+			UnreadCount int64 `json:"unread_count"`
+		}
+		if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &count) != nil {
+			t.Fatalf("unread status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		return count.UnreadCount
+	}
+	if count := readUnread(); count != 1 {
+		t.Fatalf("mention unread count=%d want=1", count)
+	}
+	ctx, recorder = notificationIntegrationContext(http.MethodPut, "/api/me/notifications/"+strconvUint(notification.ID)+"/read", recipient.ID)
+	ctx.Params = gin.Params{{Key: "id", Value: strconvUint(notification.ID)}}
+	MarkMyNotificationRead(ctx)
+	if ctx.Writer.Status() != http.StatusNoContent || readUnread() != 0 {
+		t.Fatalf("mark mention read status=%d unread=%d", ctx.Writer.Status(), readUnread())
+	}
+	if err := tx.Create(&models.UserMute{MuterID: recipient.ID, MutedID: actor.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	ctx, recorder = notificationIntegrationContext(http.MethodGet, "/api/me/notifications", recipient.ID)
+	GetMyNotifications(ctx)
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &page) != nil || len(page.Items) != 0 || readUnread() != 0 {
+		t.Fatalf("muted mention status=%d body=%s page=%+v", recorder.Code, recorder.Body.String(), page)
+	}
+	if err := tx.Where("muter_id = ? AND muted_id = ?", recipient.ID, actor.ID).Delete(&models.UserMute{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Delete(&post).Error; err != nil {
+		t.Fatal(err)
+	}
+	ctx, recorder = notificationIntegrationContext(http.MethodGet, "/api/me/notifications", recipient.ID)
+	GetMyNotifications(ctx)
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &page) != nil || len(page.Items) != 0 || readUnread() != 0 {
+		t.Fatalf("deleted-post mention status=%d body=%s page=%+v", recorder.Code, recorder.Body.String(), page)
 	}
 }
 

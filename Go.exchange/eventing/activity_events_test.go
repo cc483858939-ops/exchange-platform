@@ -67,6 +67,14 @@ func TestActivityEnvelopesUseCanonicalIdentityAndKeys(t *testing.T) {
 			},
 			aggregateType: "user_follow", aggregateID: "13", key: "7:9",
 		},
+		{
+			name:      "mention",
+			eventType: EventTypePostMentioned,
+			makeEnvelope: func(id string) (Envelope, error) {
+				return NewPostMentionedEnvelope(id, PostMentionedPayload{PostID: 88, ActorID: 7, RecipientID: 9, CreatedAt: now})
+			},
+			aggregateType: "post_mention", aggregateID: "88:9", key: "88:9",
+		},
 	}
 
 	for _, test := range tests {

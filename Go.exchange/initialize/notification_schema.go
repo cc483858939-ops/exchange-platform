@@ -62,7 +62,7 @@ func applyNotificationSchema(tx *gorm.DB) error {
 	}
 	statements := []string{
 		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS chk_notifications_type",
-		"ALTER TABLE notifications ADD CONSTRAINT chk_notifications_type CHECK (notification_type IN ('post_liked', 'post_replied', 'post_quoted', 'user_followed'))",
+		"ALTER TABLE notifications ADD CONSTRAINT chk_notifications_type CHECK (notification_type IN ('post_liked', 'post_replied', 'post_quoted', 'user_followed', 'post_mentioned'))",
 		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS chk_notifications_recipient_actor",
 		"ALTER TABLE notifications ADD CONSTRAINT chk_notifications_recipient_actor CHECK (recipient_id <> actor_id)",
 		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS chk_notifications_dedupe_key",
@@ -74,6 +74,7 @@ func applyNotificationSchema(tx *gorm.DB) error {
   (notification_type = 'post_liked' AND post_id IS NOT NULL AND source_version > 0) OR
   (notification_type = 'post_replied' AND post_id IS NOT NULL AND source_version = 0) OR
   (notification_type = 'post_quoted' AND post_id IS NOT NULL AND source_version = 0) OR
+  (notification_type = 'post_mentioned' AND post_id IS NOT NULL AND source_version = 0) OR
   (notification_type = 'user_followed' AND post_id IS NULL AND source_version > 0)
 )`,
 		"ALTER TABLE notifications DROP CONSTRAINT IF EXISTS fk_notifications_recipient",
@@ -88,6 +89,25 @@ func applyNotificationSchema(tx *gorm.DB) error {
 	}
 	if err := applyMigrationStatements(tx, "apply notification schema", statements); err != nil {
 		return fmt.Errorf("apply notification schema: %w", err)
+	}
+	return nil
+}
+
+func applyUserMentionRecentSchema(tx *gorm.DB) error {
+	if tx == nil || !tx.Migrator().HasTable(&models.UserMentionRecent{}) {
+		return errors.New("user_mention_recents table is missing")
+	}
+	statements := []string{
+		"ALTER TABLE user_mention_recents DROP CONSTRAINT IF EXISTS fk_user_mention_recents_user",
+		"ALTER TABLE user_mention_recents ADD CONSTRAINT fk_user_mention_recents_user FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE user_mention_recents DROP CONSTRAINT IF EXISTS fk_user_mention_recents_mentioned_user",
+		"ALTER TABLE user_mention_recents ADD CONSTRAINT fk_user_mention_recents_mentioned_user FOREIGN KEY (mentioned_user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
+		"ALTER TABLE user_mention_recents DROP CONSTRAINT IF EXISTS chk_user_mention_recents_not_self",
+		"ALTER TABLE user_mention_recents ADD CONSTRAINT chk_user_mention_recents_not_self CHECK (user_id <> mentioned_user_id)",
+		"CREATE INDEX IF NOT EXISTS idx_user_mention_recents_recent ON user_mention_recents (user_id, last_mentioned_at DESC, mentioned_user_id)",
+	}
+	if err := applyMigrationStatements(tx, "apply user mention recent schema", statements); err != nil {
+		return fmt.Errorf("apply user mention recent schema: %w", err)
 	}
 	return nil
 }

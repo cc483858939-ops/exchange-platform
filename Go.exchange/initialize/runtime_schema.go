@@ -17,16 +17,16 @@ import (
 )
 
 // RequiredSchemaVersion is the schema version required by this binary.
-// Schema 19 persists the onboarding-interest scoring component in result traces.
-const RequiredSchemaVersion int64 = 19
+// Schema 20 adds persistent recent mention suggestions and mention notifications.
+const RequiredSchemaVersion int64 = 20
 
 // PublishedSchemaCurrentVersion and PublishedSchemaCompatibilityFloor are
 // migration-owned values. They are deliberately separate from the binary's
 // required version so a migration can publish a compatibility interval that
 // spans more than one release.
 const (
-	PublishedSchemaCurrentVersion     int64 = 19
-	PublishedSchemaCompatibilityFloor int64 = 19
+	PublishedSchemaCurrentVersion     int64 = 20
+	PublishedSchemaCompatibilityFloor int64 = 20
 )
 
 const runtimeSchemaStateID uint = 1
@@ -69,6 +69,23 @@ type schemaObjectCanary struct {
 }
 
 var postSchemaObjectCanaries = []schemaObjectCanary{
+	{
+		Table: "notifications",
+		Constraints: []string{
+			"chk_notifications_type",
+			"chk_notifications_shape",
+		},
+		Indexes: []string{"uidx_notifications_dedupe_key", "idx_notifications_recipient_activity"},
+	},
+	{
+		Table: "user_mention_recents",
+		Constraints: []string{
+			"fk_user_mention_recents_user",
+			"fk_user_mention_recents_mentioned_user",
+			"chk_user_mention_recents_not_self",
+		},
+		Indexes: []string{"user_mention_recents_pkey", "idx_user_mention_recents_recent"},
+	},
 	{
 		Table: "posts",
 		Constraints: []string{
@@ -236,6 +253,7 @@ var apiSchemaModels = []interface{}{
 	&models.UserFollow{},
 	&models.UserOnboarding{},
 	&models.UserOnboardingInterest{},
+	&models.UserMentionRecent{},
 	&models.Post{},
 	&models.PostMedia{},
 	&models.PostMediaUpload{},

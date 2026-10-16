@@ -3,10 +3,11 @@ package models
 import "time"
 
 const (
-	NotificationTypePostLiked    = "post_liked"
-	NotificationTypePostReplied  = "post_replied"
-	NotificationTypePostQuoted   = "post_quoted"
-	NotificationTypeUserFollowed = "user_followed"
+	NotificationTypePostLiked     = "post_liked"
+	NotificationTypePostReplied   = "post_replied"
+	NotificationTypePostQuoted    = "post_quoted"
+	NotificationTypeUserFollowed  = "user_followed"
+	NotificationTypePostMentioned = "post_mentioned"
 )
 
 // Notification is a derived, idempotent read model projected from activity

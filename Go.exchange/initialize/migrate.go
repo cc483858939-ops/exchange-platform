@@ -40,6 +40,7 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 			&models.UserMute{},
 			&models.UserOnboarding{},
 			&models.UserOnboardingInterest{},
+			&models.UserMentionRecent{},
 			&models.Post{},
 			&models.PostMedia{},
 			&models.PostMediaUpload{},
@@ -144,6 +145,9 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 			return err
 		}
 		if err := applyNotificationSchema(tx); err != nil {
+			return err
+		}
+		if err := applyUserMentionRecentSchema(tx); err != nil {
 			return err
 		}
 		if err := applyDevDataMirrorConstraints(tx); err != nil {

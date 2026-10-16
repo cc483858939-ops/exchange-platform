@@ -117,6 +117,7 @@ func setupRouter(authController *controllers.AuthController, verifier auth.Acces
 		api.POST("/uploads/profile-avatar", ratelimit.Middleware(applicationLimiter, ratelimit.ActionProfileMediaUpload, ratelimit.FailClosed), controllers.UploadProfileAvatar)
 		api.POST("/uploads/profile-cover", ratelimit.Middleware(applicationLimiter, ratelimit.ActionProfileMediaUpload, ratelimit.FailClosed), controllers.UploadProfileCover)
 		api.GET("/users/search", controllers.SearchUsers)
+		api.GET("/me/mention-suggestions", controllers.GetMyMentionSuggestions)
 		api.GET("/users/suggestions", controllers.GetSuggestedUsers)
 		api.GET("/me/mutes", controllers.GetMyMutedUsers)
 		api.GET("/me/onboarding", controllers.GetMyOnboarding)

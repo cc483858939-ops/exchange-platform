@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -147,6 +148,68 @@ func TestCreatePostIdempotencyReplayConflictScopeAndDeleteIntegration(t *testing
 	createPost(ctx)
 	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), `"code":"POST_IDEMPOTENCY_CONFLICT"`) {
 		t.Fatalf("deleted replay status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestCreatePostMentionIdempotencyReplayDoesNotRefreshRecentOrOutboxIntegration(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openPostEmbeddingOutboxIntegrationDatabase(t)
+	if err := db.AutoMigrate(&models.UserMentionRecent{}); err != nil {
+		t.Fatal(err)
+	}
+	fixture := newPostEmbeddingOutboxFixture(t, db)
+	actorID := fixture.users[0].ID
+	recipient := models.User{Username: "mention-idempotency-recipient-" + uuid.NewString(), Password: "test"}
+	if err := db.Create(&recipient).Error; err != nil {
+		t.Fatal(err)
+	}
+	fixture.users = append(fixture.users, recipient)
+	key := uuid.New()
+	body := `{"content":"hello @` + recipient.Username + `"}`
+	t.Cleanup(func() {
+		for _, post := range fixture.posts {
+			if err := db.Where("aggregate_type = ? AND aggregate_id = ?", "post_mention", strconv.FormatUint(uint64(post.ID), 10)+":"+strconv.FormatUint(uint64(recipient.ID), 10)).Delete(&models.OutboxEvent{}).Error; err != nil {
+				t.Errorf("clean mention outbox for post %d: %v", post.ID, err)
+			}
+		}
+		if err := db.Where("user_id = ? OR mentioned_user_id = ?", actorID, recipient.ID).Delete(&models.UserMentionRecent{}).Error; err != nil {
+			t.Errorf("clean mention recent idempotency rows: %v", err)
+		}
+	})
+
+	previousInitializer := initializePostLikeState
+	initializePostLikeState = func(context.Context, uint) error { return nil }
+	t.Cleanup(func() { initializePostLikeState = previousInitializer })
+	ctx, recorder := newClientPublishIntegrationContext(body, actorID, key)
+	createPost(ctx)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("first mention post status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	first := decodeCreatedPost(t, recorder)
+	trackIntegrationPost(fixture, first.ID)
+
+	sentinelTime := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	if err := db.Model(&models.UserMentionRecent{}).Where("user_id = ? AND mentioned_user_id = ?", actorID, recipient.ID).Update("last_mentioned_at", sentinelTime).Error; err != nil {
+		t.Fatal(err)
+	}
+	ctx, recorder = newClientPublishIntegrationContext(body, actorID, key)
+	createPost(ctx)
+	if recorder.Code != http.StatusOK || recorder.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("mention replay status=%d replay=%q body=%s", recorder.Code, recorder.Header().Get("Idempotency-Replayed"), recorder.Body.String())
+	}
+
+	var postCount int64
+	if err := db.Unscoped().Model(&models.Post{}).Where("author_id = ? AND client_publish_id = ?", actorID, key).Count(&postCount).Error; err != nil || postCount != 1 {
+		t.Fatalf("mention post count=%d err=%v", postCount, err)
+	}
+	var recent models.UserMentionRecent
+	if err := db.Where("user_id = ? AND mentioned_user_id = ?", actorID, recipient.ID).First(&recent).Error; err != nil || !recent.LastMentionedAt.Equal(sentinelTime) {
+		t.Fatalf("idempotent replay refreshed mention recent=%+v err=%v", recent, err)
+	}
+	var eventCount int64
+	aggregateID := strconv.FormatUint(uint64(first.ID), 10) + ":" + strconv.FormatUint(uint64(recipient.ID), 10)
+	if err := db.Model(&models.OutboxEvent{}).Where("aggregate_type = ? AND aggregate_id = ?", "post_mention", aggregateID).Count(&eventCount).Error; err != nil || eventCount != 1 {
+		t.Fatalf("mention outbox event count=%d err=%v", eventCount, err)
 	}
 }
 

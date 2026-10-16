@@ -55,8 +55,15 @@ func TestMigrationStepsSkipRepeatedDDLAndRepairCatalogDriftIntegration(t *testin
 	}
 	firstElapsed, firstDDL := time.Since(firstStart), len(observer.statements)
 	var steps int64
-	if err := tx.Model(&models.MigrationStep{}).Count(&steps).Error; err != nil || steps != 26 {
+	if err := tx.Model(&models.MigrationStep{}).Count(&steps).Error; err != nil || steps != 27 {
 		t.Fatalf("steps=%d err=%v", steps, err)
+	}
+	if !tx.Migrator().HasTable(&models.UserMentionRecent{}) ||
+		!tx.Migrator().HasConstraint(&models.UserMentionRecent{}, "fk_user_mention_recents_user") ||
+		!tx.Migrator().HasConstraint(&models.UserMentionRecent{}, "fk_user_mention_recents_mentioned_user") ||
+		!tx.Migrator().HasConstraint(&models.UserMentionRecent{}, "chk_user_mention_recents_not_self") ||
+		!tx.Migrator().HasIndex(&models.UserMentionRecent{}, "idx_user_mention_recents_recent") {
+		t.Fatal("user mention recent table contract is incomplete")
 	}
 	if !tx.Migrator().HasColumn(&models.RecommendationResultTrace{}, "OnboardingInterestComponent") ||
 		!tx.Migrator().HasConstraint(&models.RecommendationResultTrace{}, "chk_recommendation_result_trace_onboarding_interest_component") {
@@ -65,6 +72,20 @@ func TestMigrationStepsSkipRepeatedDDLAndRepairCatalogDriftIntegration(t *testin
 	user := models.User{Username: "onboarding-constraints-" + fmt.Sprint(time.Now().UnixNano()), Password: "unused"}
 	if err := tx.Create(&user).Error; err != nil {
 		t.Fatal(err)
+	}
+	mentionTarget := models.User{Username: user.Username + "-mention-target", Password: "unused"}
+	if err := tx.Create(&mentionTarget).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Create(&models.UserMentionRecent{UserID: user.ID, MentionedUserID: mentionTarget.ID, LastMentionedAt: time.Now().UTC()}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Unscoped().Delete(&mentionTarget).Error; err != nil {
+		t.Fatal(err)
+	}
+	var deletedMentionRows int64
+	if err := tx.Model(&models.UserMentionRecent{}).Where("user_id = ? AND mentioned_user_id = ?", user.ID, mentionTarget.ID).Count(&deletedMentionRows).Error; err != nil || deletedMentionRows != 0 {
+		t.Fatalf("deleting mentioned user left recent rows=%d err=%v", deletedMentionRows, err)
 	}
 	invalidStepUser := models.User{Username: user.Username + "-invalid-step", Password: "unused"}
 	if err := tx.Create(&invalidStepUser).Error; err != nil {

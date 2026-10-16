@@ -18,6 +18,7 @@ import (
 	"Go.exchange/global"
 	"Go.exchange/metrics"
 	"Go.exchange/models"
+	"Go.exchange/postmention"
 
 	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
@@ -54,6 +55,7 @@ type notificationRecordsApplyFunc func(context.Context, []notificationActivityRe
 
 type notificationPostRow struct {
 	AuthorID      uint
+	Content       string
 	ReplyToPostID *uint
 	QuotePostID   *uint
 }
@@ -426,6 +428,32 @@ func decodeNotificationActivity(message kafka.Message) (notificationActivityReco
 			DedupeKey:     fmt.Sprintf("user_followed:%d:%d", payload.FollowerID, payload.FollowingID),
 			SourceVersion: int64(payload.FollowID), ActivityAt: payload.CreatedAt,
 		}
+	case eventing.EventTypePostMentioned:
+		if envelope.SchemaVersion != 1 || envelope.AggregateType != "post_mention" {
+			return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeUnsupportedSchema, errors.New("unsupported post mention activity schema"))
+		}
+		for _, field := range []string{"post_id", "actor_id", "recipient_id", "created_at"} {
+			if _, exists := payloadObject[field]; !exists {
+				return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("post mention activity payload is incomplete"))
+			}
+		}
+		if len(payloadObject) != 4 {
+			return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("post mention activity payload has unknown fields"))
+		}
+		var payload eventing.PostMentionedPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeDecodePayload, fmt.Errorf("decode post mention activity payload: %w", err))
+		}
+		if payload.PostID == 0 || payload.ActorID == 0 || payload.RecipientID == 0 || payload.ActorID == payload.RecipientID || payload.CreatedAt.IsZero() ||
+			!payload.CreatedAt.Equal(envelope.OccurredAt) || envelope.AggregateID != fmt.Sprintf("%d:%d", payload.PostID, payload.RecipientID) {
+			return notificationActivityRecord{}, permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("invalid post mention activity payload"))
+		}
+		postID := payload.PostID
+		record.Candidate = &models.Notification{
+			RecipientID: payload.RecipientID, ActorID: payload.ActorID, Type: models.NotificationTypePostMentioned,
+			PostID: &postID, DedupeKey: fmt.Sprintf("post_mentioned:%d:%d", payload.PostID, payload.RecipientID),
+			SourceVersion: 0, ActivityAt: payload.CreatedAt,
+		}
 	default:
 		// A well-formed unknown event is a forward-compatible no-op.
 	}
@@ -502,20 +530,58 @@ func filterNotificationCandidates(tx *gorm.DB, candidates []models.Notification)
 	}
 	posts := make(map[uint]notificationPostRow)
 	var postRows []struct {
-		ID            uint  `gorm:"column:id"`
-		AuthorID      uint  `gorm:"column:author_id"`
-		ReplyToPostID *uint `gorm:"column:reply_to_post_id"`
-		QuotePostID   *uint `gorm:"column:quote_post_id"`
+		ID            uint   `gorm:"column:id"`
+		AuthorID      uint   `gorm:"column:author_id"`
+		Content       string `gorm:"column:content"`
+		ReplyToPostID *uint  `gorm:"column:reply_to_post_id"`
+		QuotePostID   *uint  `gorm:"column:quote_post_id"`
 	}
 	if len(postIDs) > 0 {
 		now := time.Now().UTC()
 		if err := notificationPublicPostScope(tx.Table("posts"), now).
-			Select("posts.id, posts.author_id, posts.reply_to_post_id, posts.quote_post_id").
+			Select("posts.id, posts.author_id, posts.content, posts.reply_to_post_id, posts.quote_post_id").
 			Where("posts.id IN ?", uniqueUintIDs(postIDs)).Find(&postRows).Error; err != nil {
 			return nil, err
 		}
 		for _, row := range postRows {
-			posts[row.ID] = notificationPostRow{AuthorID: row.AuthorID, ReplyToPostID: row.ReplyToPostID, QuotePostID: row.QuotePostID}
+			posts[row.ID] = notificationPostRow{AuthorID: row.AuthorID, Content: row.Content, ReplyToPostID: row.ReplyToPostID, QuotePostID: row.QuotePostID}
+		}
+	}
+	mentionTokensByPost := make(map[uint][]string)
+	allMentionTokens := make([]string, 0)
+	seenMentionTokens := make(map[string]struct{})
+	for _, candidate := range candidates {
+		if candidate.Type != models.NotificationTypePostMentioned || candidate.PostID == nil {
+			continue
+		}
+		post, ok := posts[*candidate.PostID]
+		if !ok {
+			continue
+		}
+		tokens, err := postmention.ExtractTokens(post.Content)
+		if err != nil {
+			continue
+		}
+		mentionTokensByPost[*candidate.PostID] = tokens
+		for _, token := range tokens {
+			if _, exists := seenMentionTokens[token]; exists {
+				continue
+			}
+			seenMentionTokens[token] = struct{}{}
+			allMentionTokens = append(allMentionTokens, token)
+		}
+	}
+	mentionedUsers := make(map[string]uint)
+	if len(allMentionTokens) > 0 {
+		var users []struct {
+			ID       uint   `gorm:"column:id"`
+			Username string `gorm:"column:username"`
+		}
+		if err := tx.Model(&models.User{}).Select("id, username").Where("username IN ? AND deleted_at IS NULL", allMentionTokens).Find(&users).Error; err != nil {
+			return nil, err
+		}
+		for _, user := range users {
+			mentionedUsers[user.Username] = user.ID
 		}
 	}
 	referencedPostIDs := make([]uint, 0, len(postRows)*2)
@@ -566,6 +632,14 @@ func filterNotificationCandidates(tx *gorm.DB, candidates []models.Notification)
 				if candidate.SourceVersion != 0 || post.QuotePostID == nil || referencedAuthors[*post.QuotePostID] != candidate.RecipientID {
 					continue
 				}
+			case models.NotificationTypePostMentioned:
+				if candidate.SourceVersion != 0 || candidate.ActorID == candidate.RecipientID || post.AuthorID != candidate.ActorID || !mentionsUser(mentionTokensByPost[*candidate.PostID], candidate.RecipientID, mentionedUsers) {
+					continue
+				}
+				if (post.ReplyToPostID != nil && referencedAuthors[*post.ReplyToPostID] == candidate.RecipientID) ||
+					(post.QuotePostID != nil && referencedAuthors[*post.QuotePostID] == candidate.RecipientID) {
+					continue
+				}
 			default:
 				continue
 			}
@@ -575,6 +649,15 @@ func filterNotificationCandidates(tx *gorm.DB, candidates []models.Notification)
 		filtered = append(filtered, candidate)
 	}
 	return filtered, nil
+}
+
+func mentionsUser(tokens []string, userID uint, users map[string]uint) bool {
+	for _, token := range tokens {
+		if users[token] == userID {
+			return true
+		}
+	}
+	return false
 }
 
 func upsertNotificationCandidates(tx *gorm.DB, candidates []models.Notification) error {

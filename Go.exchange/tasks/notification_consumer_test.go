@@ -197,6 +197,15 @@ func TestDecodeNotificationActivityMapsDomainEvents(t *testing.T) {
 			},
 			typeName: models.NotificationTypeUserFollowed, dedupeKey: "user_followed:7:9", recipient: 9, actor: 7, sourceVers: 13,
 		},
+		{
+			name: "mention",
+			make: func(id string) (eventing.Envelope, error) {
+				return eventing.NewPostMentionedEnvelope(id, eventing.PostMentionedPayload{
+					PostID: 42, ActorID: 7, RecipientID: 9, CreatedAt: now,
+				})
+			},
+			typeName: models.NotificationTypePostMentioned, dedupeKey: "post_mentioned:42:9", postID: 42, recipient: 9, actor: 7,
+		},
 	}
 
 	for _, test := range tests {
@@ -274,6 +283,44 @@ func TestDecodeNotificationActivitySuppressesValidNoOpEvents(t *testing.T) {
 			}
 			if record.Candidate != nil {
 				t.Fatalf("candidate=%+v, want valid no-op", record.Candidate)
+			}
+		})
+	}
+}
+
+func TestDecodePostMentionActivityRejectsInvalidIdentityAndPayload(t *testing.T) {
+	now := time.Now().UTC()
+	valid, err := eventing.NewPostMentionedEnvelope(uuid.NewString(), eventing.PostMentionedPayload{
+		PostID: 42, ActorID: 7, RecipientID: 9, CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*eventing.Envelope)
+	}{
+		{"schema", func(envelope *eventing.Envelope) { envelope.SchemaVersion = 2 }},
+		{"aggregate type", func(envelope *eventing.Envelope) { envelope.AggregateType = "post" }},
+		{"aggregate id", func(envelope *eventing.Envelope) { envelope.AggregateID = "42:10" }},
+		{"self mention", func(envelope *eventing.Envelope) {
+			envelope.Payload = []byte(`{"post_id":42,"actor_id":7,"recipient_id":7,"created_at":"` + now.Format(time.RFC3339Nano) + `"}`)
+		}},
+		{"missing field", func(envelope *eventing.Envelope) {
+			envelope.Payload = []byte(`{"post_id":42,"actor_id":7,"created_at":"` + now.Format(time.RFC3339Nano) + `"}`)
+		}},
+		{"unknown field", func(envelope *eventing.Envelope) {
+			envelope.Payload = []byte(`{"post_id":42,"actor_id":7,"recipient_id":9,"created_at":"` + now.Format(time.RFC3339Nano) + `","extra":true}`)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			envelope := valid
+			envelope.Payload = append([]byte(nil), valid.Payload...)
+			test.mutate(&envelope)
+			_, err := decodeNotificationActivity(notificationMessage(t, envelope))
+			if err == nil || kafkaFailureClassOf(err) != kafkaFailurePermanent {
+				t.Fatalf("decode error=%v class=%q, want permanent rejection", err, kafkaFailureClassOf(err))
 			}
 		})
 	}

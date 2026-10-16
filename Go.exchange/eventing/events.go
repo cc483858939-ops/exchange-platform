@@ -23,6 +23,7 @@ const (
 	EventTypeReplyCreated           = "post.reply.created"
 	EventTypeQuoteCreated           = "post.quote.created"
 	EventTypeUserFollowCreated      = "user_follow.created"
+	EventTypePostMentioned          = "post.mentioned"
 
 	EventTypeRecommendationImpression    = "recommendation.impression"
 	EventTypeRecommendationClick         = "recommendation.click"
@@ -90,6 +91,13 @@ type UserFollowCreatedPayload struct {
 	FollowID    uint      `json:"follow_id"`
 	FollowerID  uint      `json:"follower_id"`
 	FollowingID uint      `json:"following_id"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type PostMentionedPayload struct {
+	PostID      uint      `json:"post_id"`
+	ActorID     uint      `json:"actor_id"`
+	RecipientID uint      `json:"recipient_id"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -372,6 +380,18 @@ func NewUserFollowCreatedEnvelope(eventID string, payload UserFollowCreatedPaylo
 	return newActivityEnvelope(eventID, EventTypeUserFollowCreated, "user_follow", strconv.FormatUint(uint64(payload.FollowID), 10), payload.CreatedAt, body)
 }
 
+func NewPostMentionedEnvelope(eventID string, payload PostMentionedPayload) (Envelope, error) {
+	if payload.PostID == 0 || payload.ActorID == 0 || payload.RecipientID == 0 || payload.ActorID == payload.RecipientID || payload.CreatedAt.IsZero() {
+		return Envelope{}, errors.New("post mention activity payload is invalid")
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return Envelope{}, fmt.Errorf("marshal post mention activity payload: %w", err)
+	}
+	return newActivityEnvelope(eventID, EventTypePostMentioned, "post_mention",
+		fmt.Sprintf("%d:%d", payload.PostID, payload.RecipientID), payload.CreatedAt, body)
+}
+
 func newActivityEnvelope(eventID, eventType, aggregateType, aggregateID string, occurredAt time.Time, payload []byte) (Envelope, error) {
 	if _, err := uuid.Parse(strings.TrimSpace(eventID)); err != nil {
 		return Envelope{}, errors.New("activity event id must be a UUID")
@@ -423,7 +443,7 @@ func TopicForEvent(kafkaConfig config.KafkaConfig, eventType string) (string, er
 		return strings.TrimSpace(kafkaConfig.RecommendationEventsTopic), nil
 	case EventTypePostEmbeddingRequested:
 		return strings.TrimSpace(kafkaConfig.PostEmbeddingTopic), nil
-	case EventTypePostReactionApplied, EventTypeReplyCreated, EventTypeQuoteCreated, EventTypeUserFollowCreated:
+	case EventTypePostReactionApplied, EventTypeReplyCreated, EventTypeQuoteCreated, EventTypeUserFollowCreated, EventTypePostMentioned:
 		return strings.TrimSpace(kafkaConfig.ActivityEventsTopic), nil
 	default:
 		return "", fmt.Errorf("unsupported event type %q", eventType)
@@ -475,6 +495,11 @@ func KeyForEvent(event Envelope) string {
 		var payload UserFollowCreatedPayload
 		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.FollowerID > 0 && payload.FollowingID > 0 {
 			return fmt.Sprintf("%d:%d", payload.FollowerID, payload.FollowingID)
+		}
+	case EventTypePostMentioned:
+		var payload PostMentionedPayload
+		if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.PostID > 0 && payload.RecipientID > 0 {
+			return fmt.Sprintf("%d:%d", payload.PostID, payload.RecipientID)
 		}
 	}
 	return event.AggregateID
