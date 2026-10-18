@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const candidatePoolSnapshotVersion = 1
+const candidatePoolSnapshotVersion = 2
 
 type CachedCandidate struct {
 	Candidate              Candidate         `json:"candidate"`
@@ -55,9 +55,12 @@ type CandidatePoolSnapshot struct {
 	StrategyVersion   string            `json:"strategy_version"`
 	Candidates        []CachedCandidate `json:"candidates"`
 	UsedPostIDs       []uint            `json:"used_post_ids"`
-	Pages             []CachedPage      `json:"pages"`
-	Exhausted         bool              `json:"exhausted"`
-	Revision          int64             `json:"revision"`
+	// MapperRejectedPostIDs are excluded for this short-lived candidate pool,
+	// but are not served-history entries and do not contribute to diversity context.
+	MapperRejectedPostIDs []uint       `json:"mapper_rejected_post_ids,omitempty"`
+	Pages                 []CachedPage `json:"pages"`
+	Exhausted             bool         `json:"exhausted"`
+	Revision              int64        `json:"revision"`
 }
 
 type SnapshotStore interface {

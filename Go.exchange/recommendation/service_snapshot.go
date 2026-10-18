@@ -245,6 +245,9 @@ func (service *RecommendationService) selectSnapshotPage(ctx context.Context, re
 	for _, id := range snapshot.UsedPostIDs {
 		used[id] = struct{}{}
 	}
+	for _, id := range snapshot.MapperRejectedPostIDs {
+		used[id] = struct{}{}
+	}
 	remaining := make([]CachedCandidate, 0, len(snapshot.Candidates))
 	for _, candidate := range snapshot.Candidates {
 		if _, exists := used[candidate.PostID]; !exists {
@@ -328,7 +331,7 @@ func (service *RecommendationService) rebuildSnapshotCandidates(ctx context.Cont
 	if served == nil {
 		served = make(ServedHistory)
 	}
-	for _, id := range snapshot.UsedPostIDs {
+	for _, id := range append(append([]uint(nil), snapshot.UsedPostIDs...), snapshot.MapperRejectedPostIDs...) {
 		served[id] = ServedItem{PostID: id, LastServedAt: snapshot.CreatedAt, Hard: true}
 	}
 	result, err := service.executeUser(ctx, request, servingVersion, served, false)
@@ -345,11 +348,18 @@ func (service *RecommendationService) rebuildSnapshotCandidates(ctx context.Cont
 		limit = 500
 	}
 	seen := make(map[uint]struct{}, limit)
+	rejected := make(map[uint]struct{}, len(snapshot.MapperRejectedPostIDs))
+	for _, id := range snapshot.MapperRejectedPostIDs {
+		rejected[id] = struct{}{}
+	}
 	candidates := make([]CachedCandidate, 0, limit)
 	appendRanked := func(items []RankedCandidate, phase SelectionPhase) {
 		for _, item := range items {
 			if len(candidates) >= limit || item.Post.ID == 0 {
 				return
+			}
+			if _, isRejected := rejected[item.Post.ID]; isRejected {
+				continue
 			}
 			if _, exists := seen[item.Post.ID]; exists {
 				continue
@@ -483,7 +493,8 @@ func (service *RecommendationService) FinalizeMappedServing(ctx context.Context,
 	finalResult.Selected = selected
 
 	if meta.snapshotID != "" && meta.pageIndex >= 0 {
-		page, err := service.commitMappedPage(ctx, meta.snapshotID, meta.pageIndex, selected)
+		mapperRejectedIDs := selectedIDsNotIn(selectedPostIDs(result.Selected), selectedPostIDs(selected))
+		page, err := service.commitMappedPage(ctx, meta.snapshotID, meta.pageIndex, selected, mapperRejectedIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -543,7 +554,7 @@ func (service *RecommendationService) FinalizeMappedServing(ctx context.Context,
 	return tracking, nil
 }
 
-func (service *RecommendationService) commitMappedPage(ctx context.Context, snapshotID string, pageIndex int, returned []SelectedCandidate) (CachedPage, error) {
+func (service *RecommendationService) commitMappedPage(ctx context.Context, snapshotID string, pageIndex int, returned []SelectedCandidate, mapperRejectedIDs []uint) (CachedPage, error) {
 	returnedIDs := selectedPostIDs(returned)
 	for attempt := 0; attempt < 8; attempt++ {
 		snapshot, err := service.dependencies.Snapshots.Load(ctx, snapshotID)
@@ -569,37 +580,50 @@ func (service *RecommendationService) commitMappedPage(ctx context.Context, snap
 				return CachedPage{}, fmt.Errorf("%w: mapped page contains post outside the prepared page", ErrSnapshotUnavailable)
 			}
 		}
+		preparedIDs := cachedPagePostIDs(page)
+		changed := !samePostIDs(preparedIDs, returnedIDs)
+		if changed {
+			for _, later := range snapshot.Pages {
+				if later.Index > pageIndex && snapshotPageCommitted(later) {
+					return CachedPage{}, fmt.Errorf("%w: a later recommendation page is already committed", ErrCursorExpired)
+				}
+			}
+		}
 		page.Committed = true
 		page.ReturnedPostIDs = append([]uint(nil), returnedIDs...)
 		updated := cloneSnapshot(snapshot)
+		pages := updated.Pages[:0]
 		for index := range updated.Pages {
-			if updated.Pages[index].Index == pageIndex {
-				updated.Pages[index] = page
-				break
-			}
-		}
-		returnedSet := make(map[uint]struct{}, len(returnedIDs))
-		for _, id := range returnedIDs {
-			returnedSet[id] = struct{}{}
-		}
-		used := updated.UsedPostIDs[:0]
-		for _, id := range updated.UsedPostIDs {
-			isPageItem := false
-			for _, item := range page.Items {
-				if item.PostID == id {
-					isPageItem = true
-					break
-				}
-			}
-			if !isPageItem {
-				used = append(used, id)
+			laterUncommitted := changed && updated.Pages[index].Index > pageIndex && !snapshotPageCommitted(updated.Pages[index])
+			if laterUncommitted {
 				continue
 			}
-			if _, included := returnedSet[id]; included {
-				used = append(used, id)
+			if updated.Pages[index].Index == pageIndex {
+				updated.Pages[index] = page
+			}
+			pages = append(pages, updated.Pages[index])
+		}
+		updated.Pages = pages
+		if changed {
+			preparedSet := make(map[uint]struct{}, len(preparedIDs))
+			returnedSet := make(map[uint]struct{}, len(returnedIDs))
+			for _, id := range preparedIDs {
+				preparedSet[id] = struct{}{}
+			}
+			for _, id := range returnedIDs {
+				returnedSet[id] = struct{}{}
+			}
+			for _, id := range mapperRejectedIDs {
+				if _, prepared := preparedSet[id]; !prepared {
+					continue
+				}
+				if _, returned := returnedSet[id]; returned {
+					continue
+				}
+				updated.MapperRejectedPostIDs = appendUniqueIDs(updated.MapperRejectedPostIDs, id)
 			}
 		}
-		updated.UsedPostIDs = used
+		updated.UsedPostIDs = snapshotUsedPostIDs(updated.Pages)
 		updated.Revision = snapshot.Revision + 1
 		committed, err := service.dependencies.Snapshots.CompareAndSwap(ctx, snapshotID, snapshot.Revision, updated, defaultSnapshotMaxBytes)
 		if err != nil {
@@ -610,6 +634,32 @@ func (service *RecommendationService) commitMappedPage(ctx context.Context, snap
 		}
 	}
 	return CachedPage{}, fmt.Errorf("%w: finalize recommendation page contention", ErrSnapshotUnavailable)
+}
+
+func selectedIDsNotIn(selectedIDs, excludedIDs []uint) []uint {
+	excluded := make(map[uint]struct{}, len(excludedIDs))
+	for _, id := range excludedIDs {
+		excluded[id] = struct{}{}
+	}
+	result := make([]uint, 0)
+	for _, id := range selectedIDs {
+		if _, found := excluded[id]; !found {
+			result = append(result, id)
+		}
+	}
+	return result
+}
+
+func snapshotUsedPostIDs(pages []CachedPage) []uint {
+	var used []uint
+	for _, page := range pages {
+		if snapshotPageCommitted(page) {
+			used = appendUniqueIDs(used, page.ReturnedPostIDs...)
+			continue
+		}
+		used = appendUniqueIDs(used, cachedPagePostIDs(page)...)
+	}
+	return used
 }
 
 func samePostIDs(left, right []uint) bool {
@@ -872,6 +922,7 @@ func snapshotPageAt(snapshot CandidatePoolSnapshot, pageIndex int) (CachedPage, 
 func cloneSnapshot(snapshot CandidatePoolSnapshot) CandidatePoolSnapshot {
 	snapshot.Candidates = append([]CachedCandidate(nil), snapshot.Candidates...)
 	snapshot.UsedPostIDs = append([]uint(nil), snapshot.UsedPostIDs...)
+	snapshot.MapperRejectedPostIDs = append([]uint(nil), snapshot.MapperRejectedPostIDs...)
 	snapshot.Pages = append([]CachedPage(nil), snapshot.Pages...)
 	for index := range snapshot.Pages {
 		snapshot.Pages[index].Items = append([]CachedCandidate(nil), snapshot.Pages[index].Items...)

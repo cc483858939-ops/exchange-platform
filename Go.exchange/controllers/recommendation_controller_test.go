@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -61,9 +62,10 @@ func (enqueuer *traceDropEnqueuer) TryEnqueue(recommendation.TracePersistJob) re
 }
 
 type controllerRecommendationCandidates struct {
-	items []recommendation.Candidate
-	posts map[uint]models.Post
-	calls map[string]int
+	items                []recommendation.Candidate
+	posts                map[uint]models.Post
+	calls                map[string]int
+	snapshotPageContexts [][]uint
 }
 
 func (repo *controllerRecommendationCandidates) recordCall(name string) {
@@ -113,6 +115,7 @@ func (repo *controllerRecommendationCandidates) LoadEligibleSnapshotCandidates(c
 	return eligible, err
 }
 func (repo *controllerRecommendationCandidates) LoadSnapshotPage(_ context.Context, _ recommendation.CandidateQuery, candidates []recommendation.Candidate, contextPostIDs []uint) ([]recommendation.RankedCandidate, map[uint][]float32, error) {
+	repo.snapshotPageContexts = append(repo.snapshotPageContexts, append([]uint(nil), contextPostIDs...))
 	items := make([]recommendation.RankedCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		post, exists := repo.posts[candidate.PostID]
@@ -230,12 +233,74 @@ func (store *controllerMemorySnapshotStore) CompareAndSwap(_ context.Context, id
 func cloneControllerSnapshot(snapshot recommendation.CandidatePoolSnapshot) recommendation.CandidatePoolSnapshot {
 	snapshot.Candidates = append([]recommendation.CachedCandidate(nil), snapshot.Candidates...)
 	snapshot.UsedPostIDs = append([]uint(nil), snapshot.UsedPostIDs...)
+	snapshot.MapperRejectedPostIDs = append([]uint(nil), snapshot.MapperRejectedPostIDs...)
 	snapshot.Pages = append([]recommendation.CachedPage(nil), snapshot.Pages...)
 	for index := range snapshot.Pages {
 		snapshot.Pages[index].Items = append([]recommendation.CachedCandidate(nil), snapshot.Pages[index].Items...)
 		snapshot.Pages[index].ReturnedPostIDs = append([]uint(nil), snapshot.Pages[index].ReturnedPostIDs...)
 	}
 	return snapshot
+}
+
+func (store *controllerMemorySnapshotStore) onlySnapshot() (recommendation.CandidatePoolSnapshot, bool) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.snapshots) != 1 {
+		return recommendation.CandidatePoolSnapshot{}, false
+	}
+	for _, snapshot := range store.snapshots {
+		return cloneControllerSnapshot(snapshot), true
+	}
+	return recommendation.CandidatePoolSnapshot{}, false
+}
+
+type preselectionHTTPMapper struct {
+	store              *controllerMemorySnapshotStore
+	filterFirstIndex   int
+	reorderFirstPage   bool
+	calls              int
+	inputIDs           [][]uint
+	mappedIDs          [][]uint
+	initialSnapshot    recommendation.CandidatePoolSnapshot
+	hasInitialSnapshot bool
+}
+
+func (mapper *preselectionHTTPMapper) Map(_ context.Context, _ uint, selected []recommendation.SelectedCandidate, _ time.Time) ([]RecommendedPostResponse, error) {
+	inputIDs := recommendationSelectedIDs(selected)
+	if mapper.calls == 0 && mapper.store != nil {
+		mapper.initialSnapshot, mapper.hasInitialSnapshot = mapper.store.onlySnapshot()
+	}
+	mapper.calls++
+	ordered := append([]recommendation.SelectedCandidate(nil), selected...)
+	if mapper.calls == 1 {
+		if mapper.filterFirstIndex >= 0 && mapper.filterFirstIndex < len(ordered) {
+			ordered = append(ordered[:mapper.filterFirstIndex], ordered[mapper.filterFirstIndex+1:]...)
+		}
+		if mapper.reorderFirstPage && len(ordered) >= 3 {
+			ordered[1], ordered[2] = ordered[2], ordered[1]
+		}
+	}
+	mapper.inputIDs = append(mapper.inputIDs, inputIDs)
+	mappedIDs := recommendationSelectedIDs(ordered)
+	mapper.mappedIDs = append(mapper.mappedIDs, mappedIDs)
+	return mapRecommendationPostResponses(ordered), nil
+}
+
+func recommendationSelectedIDs(selected []recommendation.SelectedCandidate) []uint {
+	ids := make([]uint, 0, len(selected))
+	for _, item := range selected {
+		ids = append(ids, item.Post.ID)
+	}
+	return ids
+}
+
+func recommendationTestPage(snapshot recommendation.CandidatePoolSnapshot, pageIndex int) (recommendation.CachedPage, bool) {
+	for _, page := range snapshot.Pages {
+		if page.Index == pageIndex {
+			return page, true
+		}
+	}
+	return recommendation.CachedPage{}, false
 }
 
 type filteringRecommendationResponseMapper struct {
@@ -539,6 +604,277 @@ func TestRecommendationSnapshotHTTPChainCommitsMappedPageAndStableRetry(t *testi
 			t.Fatalf("%s recall calls=%d want 1", source, repository.calls[source])
 		}
 	}
+}
+
+type preselectionHTTPFixture struct {
+	handler   *RecommendationHandler
+	repo      *controllerRecommendationCandidates
+	snapshots *controllerMemorySnapshotStore
+	history   *controllerPageHistory
+	traces    *captureTraceEnqueuer
+	mapper    *preselectionHTTPMapper
+}
+
+func newPreselectionHTTPFixture(t *testing.T, filterFirstIndex int, reorderFirstPage bool) *preselectionHTTPFixture {
+	t.Helper()
+	now := time.Date(2026, 10, 16, 10, 0, 0, 0, time.UTC)
+	posts := make(map[uint]models.Post, 40)
+	candidates := make([]recommendation.Candidate, 0, 40)
+	for id := uint(1); id <= 40; id++ {
+		candidates = append(candidates, recommendation.Candidate{PostID: id, FromRecent: true, RecentRank: int(id), SourceCount: 1})
+		posts[id] = models.Post{Model: gorm.Model{ID: id, CreatedAt: now.Add(-time.Duration(id) * time.Minute)}, AuthorID: id + 1000, Content: "post"}
+	}
+	repository := &controllerRecommendationCandidates{items: candidates, posts: posts}
+	history := &controllerPageHistory{}
+	traces := &captureTraceEnqueuer{}
+	snapshots := newControllerMemorySnapshotStore()
+	cfg := recommendation.DefaultConfig()
+	cfg.Snapshot = config.RecommendationSnapshotConfig{Enabled: true, TTLSeconds: 120, MaxCandidates: 40, PreselectPages: 2, DefaultPageSize: 5, MaxPageSize: 5}
+	cfg.OutOfNetworkMinRatio = 0
+	cfg.Exploration.Ratio = 0
+	cfg.Diversity.Enabled = false
+	trackingKey := []byte(strings.Repeat("preselection-http-tracking", 2))
+	service, err := recommendation.NewService(recommendation.ServiceDependencies{
+		DataDependencies: recommendation.DataDependencies{
+			Candidates: repository, Profiles: controllerRecommendationProfiles{now: now}, History: history,
+		},
+		ServingVersions: controllerRecommendationVersion{}, Snapshots: snapshots, TraceEnqueuer: traces,
+	}, recommendation.ServiceConfig{
+		Recommendation: cfg, SnapshotSigningKey: []byte(strings.Repeat("preselection-snapshot-signing", 2)),
+		Tracking: recommendation.TrackingConfig{Enabled: true, RolloutPercent: 100, SigningKey: trackingKey, TokenTTL: 24 * time.Hour},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapper := &preselectionHTTPMapper{store: snapshots, filterFirstIndex: filterFirstIndex, reorderFirstPage: reorderFirstPage}
+	handler := newRecommendationHandlerForTest(t, service, mapper, 0)
+	return &preselectionHTTPFixture{handler: handler, repo: repository, snapshots: snapshots, history: history, traces: traces, mapper: mapper}
+}
+
+func (fixture *preselectionHTTPFixture) request(t *testing.T, cursor string) (postRecommendationPageResponse, int, string) {
+	t.Helper()
+	path := "/api/recommendations/posts?limit=5"
+	if cursor != "" {
+		path += "&cursor=" + url.QueryEscape(cursor)
+	}
+	ctx, recorder := newRecommendationHTTPContext(http.MethodGet, path)
+	ctx.Set("user_id", uint(42))
+	fixture.handler.GetPostRecommendations(ctx)
+	var response postRecommendationPageResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response %s: %v", recorder.Body.String(), err)
+	}
+	return response, recorder.Code, recorder.Body.String()
+}
+
+func TestRecommendationPreselectedPageRemainsValidWhenFirstPageUnchanged(t *testing.T) {
+	fixture := newPreselectionHTTPFixture(t, -1, false)
+	first, status, body := fixture.request(t, "")
+	if status != http.StatusOK || len(first.Items) != 5 || first.NextCursor == nil {
+		t.Fatalf("first page status=%d items=%d next=%v body=%s", status, len(first.Items), first.NextCursor, body)
+	}
+	if !fixture.mapper.hasInitialSnapshot {
+		t.Fatal("mapper did not observe the initial preselection snapshot")
+	}
+	preparedZero, ok := recommendationTestPage(fixture.mapper.initialSnapshot, 0)
+	if !ok || !equalControllerIDs(recommendationSelectedIDsFromCached(preparedZero), fixture.mapper.mappedIDs[0]) {
+		t.Fatalf("page 0 prepared=%v mapped=%v", recommendationSelectedIDsFromCached(preparedZero), fixture.mapper.mappedIDs[0])
+	}
+	preparedOne, ok := recommendationTestPage(fixture.mapper.initialSnapshot, 1)
+	if !ok || len(preparedOne.Items) != 5 {
+		t.Fatalf("page 1 was not preselected: %#v", preparedOne)
+	}
+
+	stored, err := fixture.snapshots.Load(context.Background(), fixture.mapper.initialSnapshot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageZero, _ := recommendationTestPage(stored, 0)
+	pageOne, ok := recommendationTestPage(stored, 1)
+	if !ok || !pageZero.Committed || !equalControllerIDs(pageZero.ReturnedPostIDs, fixture.mapper.mappedIDs[0]) {
+		t.Fatalf("stored pages after unchanged first result: page0=%#v page1=%#v", pageZero, pageOne)
+	}
+	if pageOne.RequestID != preparedOne.RequestID || !equalControllerIDs(recommendationSelectedIDsFromCached(pageOne), recommendationSelectedIDsFromCached(preparedOne)) {
+		t.Fatalf("unchanged page 0 did not preserve page 1 preselection: before=%#v after=%#v", preparedOne, pageOne)
+	}
+
+	second, status, body := fixture.request(t, *first.NextCursor)
+	if status != http.StatusOK || len(second.Items) != 5 {
+		t.Fatalf("second page status=%d items=%d body=%s", status, len(second.Items), body)
+	}
+	stored, err = fixture.snapshots.Load(context.Background(), fixture.mapper.initialSnapshot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageOne, ok = recommendationTestPage(stored, 1)
+	if !ok || !pageOne.Committed || pageOne.RequestID != preparedOne.RequestID || !equalControllerIDs(recommendationSelectedIDsFromCached(pageOne), recommendationSelectedIDsFromCached(preparedOne)) {
+		t.Fatalf("preselected page 1 was regenerated despite unchanged page 0: %#v", pageOne)
+	}
+	for _, source := range []string{"semantic", "following", "recent", "trending"} {
+		if fixture.repo.calls[source] != 1 {
+			t.Fatalf("%s recall calls=%d, want one full recall", source, fixture.repo.calls[source])
+		}
+	}
+}
+
+func TestRecommendationPreselectedPageInvalidatedAfterMapperFiltering(t *testing.T) {
+	fixture := newPreselectionHTTPFixture(t, 2, false)
+	first, status, body := fixture.request(t, "")
+	if status != http.StatusOK || len(first.Items) != 4 || first.NextCursor == nil {
+		t.Fatalf("filtered first page status=%d items=%d next=%v body=%s", status, len(first.Items), first.NextCursor, body)
+	}
+	preparedOne, ok := recommendationTestPage(fixture.mapper.initialSnapshot, 1)
+	if !ok {
+		t.Fatal("expected page 1 to be preselected before mapping page 0")
+	}
+	preparedZero, _ := recommendationTestPage(fixture.mapper.initialSnapshot, 0)
+	filteredID := recommendationSelectedIDsFromCached(preparedZero)[2]
+	firstIDs := recommendationResponseIDs(first.Items)
+	if containsControllerID(firstIDs, filteredID) {
+		t.Fatalf("filtered post %d appeared in page 0 response %v", filteredID, firstIDs)
+	}
+	if len(fixture.history.recordedPages()) != 1 || !equalControllerIDs(fixture.history.recordedPages()[0], firstIDs) {
+		t.Fatalf("history=%v want actual mapped page %v", fixture.history.recordedPages(), firstIDs)
+	}
+	if len(fixture.traces.calls) != 1 || len(fixture.traces.calls[0].Results) != len(firstIDs) {
+		t.Fatalf("trace jobs=%d results=%d want only %d mapped posts", len(fixture.traces.calls), len(fixture.traces.calls[0].Results), len(firstIDs))
+	}
+	for _, traceResult := range fixture.traces.calls[0].Results {
+		if traceResult.PostID == filteredID {
+			t.Fatalf("mapper-rejected post %d entered trace", filteredID)
+		}
+	}
+
+	stored, err := fixture.snapshots.Load(context.Background(), fixture.mapper.initialSnapshot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageZero, ok := recommendationTestPage(stored, 0)
+	if !ok || !pageZero.Committed || !equalControllerIDs(pageZero.ReturnedPostIDs, firstIDs) {
+		t.Fatalf("committed page 0=%#v want IDs %v", pageZero, firstIDs)
+	}
+	if _, exists := recommendationTestPage(stored, 1); exists {
+		t.Fatal("dependent preselected page 1 was not invalidated")
+	}
+	if !equalControllerIDs(stored.UsedPostIDs, firstIDs) {
+		t.Fatalf("used IDs=%v want only committed page IDs=%v", stored.UsedPostIDs, firstIDs)
+	}
+	if !equalControllerIDs(stored.MapperRejectedPostIDs, []uint{filteredID}) {
+		t.Fatalf("mapper rejected IDs=%v want [%d]", stored.MapperRejectedPostIDs, filteredID)
+	}
+	oldPageOneIDs := recommendationSelectedIDsFromCached(preparedOne)
+	for _, id := range oldPageOneIDs {
+		if containsControllerID(stored.UsedPostIDs, id) {
+			t.Fatalf("invalidated page 1 post %d remains reserved", id)
+		}
+	}
+
+	second, status, body := fixture.request(t, *first.NextCursor)
+	if status != http.StatusOK || len(second.Items) != 5 {
+		t.Fatalf("regenerated page 1 status=%d items=%d body=%s", status, len(second.Items), body)
+	}
+	secondIDs := recommendationResponseIDs(second.Items)
+	for _, id := range secondIDs {
+		if containsControllerID(firstIDs, id) || id == filteredID {
+			t.Fatalf("page 1 repeated committed/rejected post %d; first=%v second=%v", id, firstIDs, secondIDs)
+		}
+	}
+	if fixture.mapper.calls != 2 || len(fixture.repo.snapshotPageContexts) < 2 || !equalControllerIDs(fixture.repo.snapshotPageContexts[1], firstIDs) {
+		t.Fatalf("page 1 reselect context=%v mapped calls=%d want committed page context %v", fixture.repo.snapshotPageContexts, fixture.mapper.calls, firstIDs)
+	}
+	stored, err = fixture.snapshots.Load(context.Background(), fixture.mapper.initialSnapshot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newPageOne, ok := recommendationTestPage(stored, 1)
+	if !ok || !newPageOne.Committed || newPageOne.RequestID == preparedOne.RequestID {
+		t.Fatalf("page 1 was not freshly selected and committed: old=%#v new=%#v", preparedOne, newPageOne)
+	}
+	for _, source := range []string{"semantic", "following", "recent", "trending"} {
+		if fixture.repo.calls[source] != 1 {
+			t.Fatalf("%s recall calls=%d, want one full recall", source, fixture.repo.calls[source])
+		}
+	}
+}
+
+func TestRecommendationPreselectedPageInvalidatedAfterMapperReordering(t *testing.T) {
+	fixture := newPreselectionHTTPFixture(t, -1, true)
+	first, status, body := fixture.request(t, "")
+	if status != http.StatusOK || len(first.Items) != 5 || first.NextCursor == nil {
+		t.Fatalf("reordered first page status=%d items=%d next=%v body=%s", status, len(first.Items), first.NextCursor, body)
+	}
+	preparedZero, _ := recommendationTestPage(fixture.mapper.initialSnapshot, 0)
+	preparedZeroIDs := recommendationSelectedIDsFromCached(preparedZero)
+	preparedOne, ok := recommendationTestPage(fixture.mapper.initialSnapshot, 1)
+	if !ok {
+		t.Fatal("expected a preselected page 1")
+	}
+	firstIDs := recommendationResponseIDs(first.Items)
+	if equalControllerIDs(firstIDs, preparedZeroIDs) || firstIDs[1] != preparedZeroIDs[2] || firstIDs[2] != preparedZeroIDs[1] {
+		t.Fatalf("mapper did not reorder page 0: prepared=%v returned=%v", preparedZeroIDs, firstIDs)
+	}
+	for index, item := range first.Items {
+		if item.Tracking == nil || item.Tracking.Position != index+1 {
+			t.Fatalf("reordered item %d tracking=%#v", index, item.Tracking)
+		}
+	}
+	stored, err := fixture.snapshots.Load(context.Background(), fixture.mapper.initialSnapshot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageZero, _ := recommendationTestPage(stored, 0)
+	if !pageZero.Committed || !equalControllerIDs(pageZero.ReturnedPostIDs, firstIDs) {
+		t.Fatalf("page 0 order was not committed: %#v want %v", pageZero, firstIDs)
+	}
+	if _, exists := recommendationTestPage(stored, 1); exists {
+		t.Fatal("dependent page 1 survived a page 0 reorder")
+	}
+
+	second, status, body := fixture.request(t, *first.NextCursor)
+	if status != http.StatusOK || len(second.Items) != 5 {
+		t.Fatalf("reselected page 1 status=%d items=%d body=%s", status, len(second.Items), body)
+	}
+	if len(fixture.repo.snapshotPageContexts) < 2 || !equalControllerIDs(fixture.repo.snapshotPageContexts[1], firstIDs) {
+		t.Fatalf("page 1 used stale page 0 order: contexts=%v want %v", fixture.repo.snapshotPageContexts, firstIDs)
+	}
+	stored, err = fixture.snapshots.Load(context.Background(), fixture.mapper.initialSnapshot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newPageOne, ok := recommendationTestPage(stored, 1)
+	if !ok || newPageOne.RequestID == preparedOne.RequestID {
+		t.Fatalf("page 1 was not regenerated after reorder: old=%#v new=%#v", preparedOne, newPageOne)
+	}
+	for _, source := range []string{"semantic", "following", "recent", "trending"} {
+		if fixture.repo.calls[source] != 1 {
+			t.Fatalf("%s recall calls=%d, want one full recall", source, fixture.repo.calls[source])
+		}
+	}
+}
+
+func recommendationSelectedIDsFromCached(page recommendation.CachedPage) []uint {
+	ids := make([]uint, 0, len(page.Items))
+	for _, item := range page.Items {
+		ids = append(ids, item.PostID)
+	}
+	return ids
+}
+
+func recommendationResponseIDs(items []RecommendedPostResponse) []uint {
+	ids := make([]uint, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.Post.ID)
+	}
+	return ids
+}
+
+func containsControllerID(ids []uint, want uint) bool {
+	for _, id := range ids {
+		if id == want {
+			return true
+		}
+	}
+	return false
 }
 
 func equalControllerIDs(left, right []uint) bool {

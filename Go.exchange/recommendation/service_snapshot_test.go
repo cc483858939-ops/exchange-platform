@@ -126,6 +126,37 @@ type snapshotCASConflictOnce struct {
 	conflicts int
 }
 
+type snapshotCASRevisionConflictOnce struct {
+	SnapshotStore
+	once     sync.Once
+	mu       sync.Mutex
+	proposed []CandidatePoolSnapshot
+}
+
+func (store *snapshotCASRevisionConflictOnce) CompareAndSwap(ctx context.Context, id string, revision int64, snapshot CandidatePoolSnapshot, maxBytes int) (bool, error) {
+	store.mu.Lock()
+	store.proposed = append(store.proposed, cloneSnapshot(snapshot))
+	store.mu.Unlock()
+	conflicted := false
+	store.once.Do(func() { conflicted = true })
+	if conflicted {
+		current, err := store.SnapshotStore.Load(ctx, id)
+		if err != nil {
+			return false, err
+		}
+		updated := cloneSnapshot(current)
+		updated.Revision = current.Revision + 1
+		if committed, err := store.SnapshotStore.CompareAndSwap(ctx, id, current.Revision, updated, maxBytes); err != nil || !committed {
+			if err != nil {
+				return false, err
+			}
+			return false, errors.New("failed to inject snapshot revision conflict")
+		}
+		return false, nil
+	}
+	return store.SnapshotStore.CompareAndSwap(ctx, id, revision, snapshot, maxBytes)
+}
+
 func (store *snapshotCASConflictOnce) CompareAndSwap(ctx context.Context, id string, revision int64, snapshot CandidatePoolSnapshot, maxBytes int) (bool, error) {
 	store.mu.Lock()
 	if store.conflicts == 0 {
@@ -261,6 +292,131 @@ func TestRecommendationFinalizeRetryKeepsStableReturnedIDs(t *testing.T) {
 	}
 }
 
+func TestRecommendationPreselectedPageInvalidationIsAtomic(t *testing.T) {
+	base := newMemorySnapshotStore()
+	store := &snapshotCASRevisionConflictOnce{SnapshotStore: base}
+	service, repository, now := newSnapshotTestService(t, store)
+	history := service.dependencies.History.(*serviceTestHistoryStore)
+	traces := &serviceTestTraceEnqueuer{}
+	service.dependencies.TraceEnqueuer = traces
+	result := firstSnapshotResult(t, service, now)
+	before, err := base.Load(context.Background(), result.PoolID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPageOne, ok := snapshotPageAt(before, 1)
+	if !ok {
+		t.Fatal("expected second page to be preselected")
+	}
+	returned := append([]SelectedCandidate(nil), result.Selected...)
+	filteredID := returned[len(returned)-1].Post.ID
+	returned = returned[:len(returned)-1]
+	if _, err := service.FinalizeMappedServing(context.Background(), result, returned); err != nil {
+		t.Fatalf("finalize filtered page after a concurrent CAS revision: %v", err)
+	}
+
+	after, err := base.Load(context.Background(), result.PoolID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageZero, ok := snapshotPageAt(after, 0)
+	if !ok || !snapshotPageCommitted(pageZero) || !samePostIDs(pageZero.ReturnedPostIDs, selectedPostIDs(returned)) {
+		t.Fatalf("committed page 0=%#v returned=%v", pageZero, selectedPostIDs(returned))
+	}
+	if _, exists := snapshotPageAt(after, 1); exists {
+		t.Fatal("dependent page 1 survived the same-CAS invalidation")
+	}
+	store.mu.Lock()
+	proposed := append([]CandidatePoolSnapshot(nil), store.proposed...)
+	store.mu.Unlock()
+	if len(proposed) < 2 {
+		t.Fatalf("CAS attempts=%d, want retry after injected conflict", len(proposed))
+	}
+	atomicState := proposed[1]
+	atomicZero, zeroExists := snapshotPageAt(atomicState, 0)
+	if !zeroExists || !snapshotPageCommitted(atomicZero) {
+		t.Fatalf("retry CAS did not include committed page 0: %#v", atomicZero)
+	}
+	if _, exists := snapshotPageAt(atomicState, 1); exists || !samePostIDs(atomicState.UsedPostIDs, selectedPostIDs(returned)) {
+		t.Fatalf("retry CAS did not atomically invalidate page 1 and rebuild reservations: pages=%v used=%v", atomicState.Pages, atomicState.UsedPostIDs)
+	}
+	if !samePostIDs(after.UsedPostIDs, selectedPostIDs(returned)) {
+		t.Fatalf("used IDs=%v want committed IDs=%v", after.UsedPostIDs, selectedPostIDs(returned))
+	}
+	if !samePostIDs(after.MapperRejectedPostIDs, []uint{filteredID}) {
+		t.Fatalf("mapper rejected IDs=%v want [%d]", after.MapperRejectedPostIDs, filteredID)
+	}
+	for _, id := range cachedPagePostIDs(oldPageOne) {
+		if containsUint(after.UsedPostIDs, id) {
+			t.Fatalf("invalidated page ID %d remains reserved", id)
+		}
+	}
+	if history.pageRecordAttempts != 1 || traces.enqueueCalls != 1 {
+		t.Fatalf("invalidation duplicated side effects: history=%d trace=%d", history.pageRecordAttempts, traces.enqueueCalls)
+	}
+
+	request := ServeRequest{Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 20, Cursor: result.NextCursor, Now: now.Add(time.Second)}
+	regenerated, err := service.Serve(context.Background(), request)
+	if err != nil {
+		t.Fatalf("reuse original cursor to regenerate page 1: %v", err)
+	}
+	for _, id := range selectedPostIDs(regenerated.Selected) {
+		if containsUint(selectedPostIDs(returned), id) || id == filteredID {
+			t.Fatalf("regenerated page repeated committed or mapper-rejected post %d", id)
+		}
+	}
+	for _, source := range []string{"semantic", "following", "recent", "trending"} {
+		count := 0
+		for _, call := range *repository.calls {
+			if call == source {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("%s recall calls=%d, want one full recall", source, count)
+		}
+	}
+}
+
+func TestRecommendationPreselectionRejectsInvalidationAfterLaterPageCommit(t *testing.T) {
+	store := newMemorySnapshotStore()
+	service, _, now := newSnapshotTestService(t, store)
+	result := firstSnapshotResult(t, service, now)
+	snapshot, err := store.Load(context.Background(), result.PoolID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageOne, ok := snapshotPageAt(snapshot, 1)
+	if !ok {
+		t.Fatal("expected page 1 preselection")
+	}
+	pageOne.Committed = true
+	pageOne.ReturnedPostIDs = cachedPagePostIDs(pageOne)
+	updated := cloneSnapshot(snapshot)
+	for index := range updated.Pages {
+		if updated.Pages[index].Index == 1 {
+			updated.Pages[index] = pageOne
+		}
+	}
+	updated.Revision++
+	if committed, err := store.CompareAndSwap(context.Background(), snapshot.ID, snapshot.Revision, updated, defaultSnapshotMaxBytes); err != nil || !committed {
+		t.Fatalf("inject later committed page: committed=%v err=%v", committed, err)
+	}
+	returned := append([]SelectedCandidate(nil), result.Selected[:len(result.Selected)-1]...)
+	if _, err := service.FinalizeMappedServing(context.Background(), result, returned); !errors.Is(err, ErrCursorExpired) {
+		t.Fatalf("earlier page changed after later commit: err=%v want expired cursor", err)
+	}
+	current, err := store.Load(context.Background(), result.PoolID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentZero, _ := snapshotPageAt(current, 0)
+	currentOne, _ := snapshotPageAt(current, 1)
+	if snapshotPageCommitted(currentZero) || !snapshotPageCommitted(currentOne) {
+		t.Fatalf("conflicting committed state was rewritten: page0=%#v page1=%#v", currentZero, currentOne)
+	}
+}
+
 func TestRecommendationCommittedPageRecoversHistorySideEffect(t *testing.T) {
 	store := newMemorySnapshotStore()
 	service, _, now := newSnapshotTestService(t, store)
@@ -386,6 +542,49 @@ func TestRecommendationPreselectedPagePreservesCrossPageSemanticDiversity(t *tes
 	if len(withoutPenalty) != 1 || withoutPenalty[0].Post.ID != 101 {
 		t.Fatalf("missing-embedding control=%v, want high-score duplicate 101", selectedPostIDs(withoutPenalty))
 	}
+}
+
+func TestRecommendationPreselectionUsesCommittedAuthorAndSemanticContext(t *testing.T) {
+	now := time.Date(2026, 10, 16, 10, 0, 0, 0, time.UTC)
+	filteredVector := []float32{1, 0}
+	returnedVector := []float32{0, 1}
+	page := CachedPage{
+		Index: 0, Committed: true,
+		Items: []CachedCandidate{
+			{Candidate: Candidate{PostID: 100}, PostID: 100, AuthorID: 10, CreatedAt: now},
+			{Candidate: Candidate{PostID: 101}, PostID: 101, AuthorID: 20, CreatedAt: now},
+		},
+		ReturnedPostIDs: []uint{101},
+	}
+	prior := selectedContextFromPages([]CachedPage{page}, map[uint][]float32{100: filteredVector, 101: returnedVector})
+	if len(prior) != 1 || prior[0].Post.ID != 101 || !equalFloat32Slices(prior[0].Embedding, returnedVector) {
+		t.Fatalf("committed context retained mapper-rejected content: %#v", prior)
+	}
+	cfg := testSelectionConfig(DefaultConfig())
+	cfg.Diversity.Enabled = true
+	cfg.Diversity.AuthorWindowSize = 8
+	cfg.Diversity.MaxSameAuthorInWindow = 1
+	cfg.Diversity.SemanticDuplicateThreshold = 0.92
+	cfg.Diversity.SemanticDuplicatePenalty = 100
+	candidate := RankedCandidate{
+		Candidate: Candidate{PostID: 102}, Post: models.Post{Model: gorm.Model{ID: 102}, AuthorID: 10},
+		Embedding: filteredVector, Breakdown: ScoreBreakdown{BaseScore: 10},
+	}
+	if !authorWindowAllows(candidate, prior, cfg.Diversity) {
+		t.Fatal("filtered page-0 author still constrained the next-page author window")
+	}
+	if penalty := diversityPenalty(candidate, prior, cfg.Diversity); penalty != 0 {
+		t.Fatalf("filtered page-0 embedding still affected semantic diversity: penalty=%v", penalty)
+	}
+}
+
+func containsUint(ids []uint, want uint) bool {
+	for _, id := range ids {
+		if id == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRecommendationTrackingPositionsFollowMappedResponse(t *testing.T) {
