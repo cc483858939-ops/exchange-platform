@@ -85,6 +85,23 @@ func TestHandlerExposesBoundedRecommendationSnapshotOutcomeMetrics(t *testing.T)
 	}
 }
 
+func TestHandlerExposesBoundedRecommendationClickCooldownMetrics(t *testing.T) {
+	for _, outcome := range []string{"acquired", "duplicate", "pending", "redis_error", "commit_error", "released", "unbounded-value"} {
+		RecordRecommendationClickCooldown(outcome)
+	}
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := response.Body.String()
+	for _, outcome := range []string{"acquired", "duplicate", "pending", "redis_error", "commit_error", "released"} {
+		if !strings.Contains(body, `go_exchange_recommendation_click_cooldown_total{outcome="`+outcome+`"}`) {
+			t.Errorf("click cooldown metric missing bounded outcome %q", outcome)
+		}
+	}
+	if strings.Contains(body, `go_exchange_recommendation_click_cooldown_total{outcome="unbounded-value"}`) {
+		t.Fatalf("click cooldown metric exposed an unbounded outcome: %s", body)
+	}
+}
+
 func TestHandlerExposesPipelineMetrics(t *testing.T) {
 	recommendationTelemetryEvents.WithLabelValues("accepted", "impression", "")
 	recommendationTelemetryProjection.WithLabelValues("applied")

@@ -53,6 +53,7 @@ var (
 	userLikeActiveRelations                      = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_user_like_active_relations", Help: "Active User Like relations after successful mutations, without user labels.", Buckets: []float64{0, 1, 10, 100, 1000, 5000, 9999, 10000}})
 	userLikeEvictionDuration                     = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_user_like_eviction_duration_seconds", Help: "Duration of atomic oldest-like eviction and replacement.", Buckets: prometheus.DefBuckets})
 	recommendationTelemetryEvents                = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_telemetry_events_total", Help: "Recommendation telemetry events by ingestion outcome."}, []string{"status", "event_type", "reason"})
+	recommendationClickCooldown                  = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_click_cooldown_total", Help: "Recommendation click cooldown operations by bounded outcome."}, []string{"outcome"})
 	recommendationTelemetryBatchSize             = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_telemetry_batch_size", Help: "Number of recommendation telemetry events per ingestion request.", Buckets: []float64{1, 5, 10, 20, 50}})
 	recommendationTelemetryIngestDuration        = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_recommendation_telemetry_ingest_duration_seconds", Help: "Recommendation telemetry ingestion latency in seconds.", Buckets: prometheus.DefBuckets})
 	recommendationTelemetryProjection            = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_telemetry_projection_total", Help: "Recommendation telemetry projection outcomes."}, []string{"status"})
@@ -106,7 +107,7 @@ func init() {
 		databasePoolCollector,
 		httpRequestsTotal, httpRequestDuration, recommendationHTTPDuration, postEmbeddingEvents, postEmbeddingFailures, postEmbeddingPublishFailures, postEmbeddingProcessingDuration, kafkaConsumerRecovery,
 		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxRowsLastSuccess, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, consumerInboxRowsLastSuccess, notificationProjectionFailures, notificationProjectionLatency, likePipelineDepth, likePipelineDepthLastSuccess, likeClaimDuration, likeQueueOperations, likeLifecycleEvents, postLikeInitJobsBacklog, userLikeRelationsRemoved, userLikeCleanupBatchUsers, userLikeCleanupBatchRelations, userLikeCleanupBatchRemoved, userLikeCleanupBatchDuration, userLikeCleanupCycleDuration, userLikeCleanupLastCycle, userLikeTTLEvents, userLikeRestoreResults, userLikeRestoreDuration, userLikeRestoreRelations, userLikeRestoreInflight, userLikeCapEvents, userLikeActiveRelations, userLikeEvictionDuration,
-		recommendationTelemetryEvents, recommendationTelemetryBatchSize,
+		recommendationTelemetryEvents, recommendationClickCooldown, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests, recommendationSnapshotOutcomes,
 		recommendationRequestLogFailures, recommendationTrackingResults,
 		recommendationCandidateCount, recommendationResultCount, recommendationGenerationDuration, recommendationRecallCandidates, recommendationResultsBySource, recommendationResultsByClass, recommendationResultsBySelection, recommendationServedHistoryFailures, recommendationTracePersistFailures, recommendationTraceEnqueue, recommendationTraceQueueDepth, recommendationTracePersist, recommendationTracePersistDuration, recommendationTraceCleanupFailures, recommendationTraceCleanupRows, recommendationTraceCleanupRuns, recommendationTraceCleanupDuration, recommendationTraceCleanupBacklogLikely,
@@ -130,6 +131,9 @@ func init() {
 	}
 	for _, result := range []string{"success", "error", "lock_skipped"} {
 		recommendationProfileMaterialization.WithLabelValues(result)
+	}
+	for _, outcome := range []string{"acquired", "duplicate", "pending", "redis_error", "commit_error", "released"} {
+		recommendationClickCooldown.WithLabelValues(outcome)
 	}
 	for _, outcome := range []string{"queued", "dropped_full", "dropped_stopping"} {
 		recommendationTraceEnqueue.WithLabelValues(outcome)
@@ -332,6 +336,12 @@ func RecordLikeQueueOperation(queue, operation, outcome string) {
 }
 func RecordRecommendationTelemetryEvent(status, eventType, reason string) {
 	recommendationTelemetryEvents.WithLabelValues(status, eventType, reason).Inc()
+}
+func RecordRecommendationClickCooldown(outcome string) {
+	switch outcome {
+	case "acquired", "duplicate", "pending", "redis_error", "commit_error", "released":
+		recommendationClickCooldown.WithLabelValues(outcome).Inc()
+	}
 }
 func ObserveRecommendationTelemetryBatchSize(size int) {
 	recommendationTelemetryBatchSize.Observe(float64(size))

@@ -64,7 +64,7 @@ func TestSetupRouterCapturesRouteTemplatesAndFiltersNoiseRoutes(t *testing.T) {
 		}
 	})
 
-	engine, err := setupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil, nil, provider, true)
+	engine, err := setupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil, nil, nil, provider, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestHTTPTracingRedactsGinErrorsAndRequestDetails(t *testing.T) {
 		}
 	})
 
-	engine, err := setupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil, nil, provider, true)
+	engine, err := setupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil, nil, nil, provider, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,7 +415,7 @@ func TestSetupRouterTracingDisabledOmitsHTTPMiddleware(t *testing.T) {
 		}
 	})
 
-	engine, err := setupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil, nil, provider, false)
+	engine, err := setupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil, nil, nil, provider, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,7 +481,7 @@ func TestSetupRouterTracingPreservesAuthRateLimitAndTimeoutStatuses(t *testing.T
 		}
 	})
 
-	engine, err := setupRouter(nil, rateLimitRouteVerifier{}, nil, nil, &rateLimitRouteLimiter{}, newRouterRecommendationHandler(t), nil, nil, provider, true)
+	engine, err := setupRouter(nil, rateLimitRouteVerifier{}, nil, nil, &rateLimitRouteLimiter{}, newRouterRecommendationHandler(t), nil, nil, nil, provider, true)
 	if err != nil {
 		t.Fatal(err)
 	}

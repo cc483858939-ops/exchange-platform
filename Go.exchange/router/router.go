@@ -33,10 +33,14 @@ func SetupRouter(authController *controllers.AuthController, verifier auth.Acces
 // SetupRouterWithTracing preserves SetupRouter while allowing the API process
 // to omit HTTP instrumentation entirely when tracing is disabled.
 func SetupRouterWithTracing(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, applicationLimiter ratelimit.Limiter, recommendationHandler *controllers.RecommendationHandler, telemetryRateLimiter controllers.RecommendationTelemetryRateLimiter, tracingEnabled bool, translationServices ...translation.Service) (*gin.Engine, error) {
-	return setupRouter(authController, verifier, publisher, readiness, applicationLimiter, recommendationHandler, telemetryRateLimiter, translationServices, traceProvider(), tracingEnabled)
+	return SetupRouterWithTracingAndClickCooldown(authController, verifier, publisher, readiness, applicationLimiter, recommendationHandler, telemetryRateLimiter, nil, tracingEnabled, translationServices...)
 }
 
-func setupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, applicationLimiter ratelimit.Limiter, recommendationHandler *controllers.RecommendationHandler, telemetryRateLimiter controllers.RecommendationTelemetryRateLimiter, translationServices []translation.Service, tracerProvider trace.TracerProvider, tracingEnabled bool) (*gin.Engine, error) {
+func SetupRouterWithTracingAndClickCooldown(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, applicationLimiter ratelimit.Limiter, recommendationHandler *controllers.RecommendationHandler, telemetryRateLimiter controllers.RecommendationTelemetryRateLimiter, clickCooldown controllers.RecommendationClickCooldown, tracingEnabled bool, translationServices ...translation.Service) (*gin.Engine, error) {
+	return setupRouter(authController, verifier, publisher, readiness, applicationLimiter, recommendationHandler, telemetryRateLimiter, clickCooldown, translationServices, traceProvider(), tracingEnabled)
+}
+
+func setupRouter(authController *controllers.AuthController, verifier auth.AccessTokenVerifier, publisher eventing.BatchPublisher, readiness runtimehealth.APIReadinessProvider, applicationLimiter ratelimit.Limiter, recommendationHandler *controllers.RecommendationHandler, telemetryRateLimiter controllers.RecommendationTelemetryRateLimiter, clickCooldown controllers.RecommendationClickCooldown, translationServices []translation.Service, tracerProvider trace.TracerProvider, tracingEnabled bool) (*gin.Engine, error) {
 	if recommendationHandler == nil {
 		return nil, errors.New("recommendation handler is required")
 	}
@@ -112,7 +116,7 @@ func setupRouter(authController *controllers.AuthController, verifier auth.Acces
 	}
 	{
 		api.GET("/recommendations/posts", withRateLimit(enableApplicationRateLimit, applicationLimiter, ratelimit.ActionRecommendations, ratelimit.FailOpen, userRecommendationHandler)...)
-		api.POST("/recommendation-events", controllers.NewRecommendationEventsHandler(publisher, telemetryRateLimiter))
+		api.POST("/recommendation-events", controllers.NewRecommendationEventsHandler(publisher, telemetryRateLimiter, clickCooldown))
 		api.POST("/post-view-events", controllers.NewPostViewEventsHandler(publisher))
 		api.POST("/uploads/post-media", withRateLimit(enableApplicationRateLimit, applicationLimiter, ratelimit.ActionMediaUpload, ratelimit.FailClosed, controllers.UploadPostMedia)...)
 		api.POST("/uploads/profile-avatar", ratelimit.Middleware(applicationLimiter, ratelimit.ActionProfileMediaUpload, ratelimit.FailClosed), controllers.UploadProfileAvatar)

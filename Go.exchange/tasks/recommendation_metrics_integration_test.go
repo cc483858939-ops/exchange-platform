@@ -86,7 +86,13 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	if err != nil {
 		t.Fatal(err)
 	}
-	messages = append(messages, recommendationMessage(t, click))
+	clickMessage := recommendationMessage(t, click)
+	messages = append(messages, clickMessage, clickMessage)
+	secondClick, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationClick, baseAt.Add(5*time.Minute), clickPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages = append(messages, recommendationMessage(t, secondClick))
 
 	explorationPayload := base
 	explorationPayload.ExplorationOpportunity = true
@@ -141,6 +147,9 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	if err := applyRecommendationMetricsMessagesForIntegration(t, db, kafkaConfig, []kafka.Message{explorationMessage}); err != nil {
 		t.Fatal(err)
 	}
+	if err := applyRecommendationMetricsMessagesForIntegration(t, db, kafkaConfig, []kafka.Message{clickMessage}); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Where("user_id = ?", userID).First(&dirty).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -152,8 +161,8 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	if err := db.Where("strategy_id = ? AND position = ? AND post_id = ?", groupID, 1, postID).First(&metric).Error; err != nil {
 		t.Fatal(err)
 	}
-	if metric.ImpressionCount != 100 || metric.ClickCount != 1 {
-		t.Fatalf("base metric=%#v want impressions=100 clicks=1", metric)
+	if metric.ImpressionCount != 100 || metric.ClickCount != 2 {
+		t.Fatalf("base metric=%#v want impressions=100 clicks=2", metric)
 	}
 	var explorationMetric models.RecommendationDailyMetric
 	if err := db.Where("strategy_id = ? AND exploration_opportunity = ? AND selection_mode = ? AND exploration_reason = ?", groupID, true, eventing.RecommendationSelectionModeExploration, eventing.RecommendationExplorationReasonRecent).First(&explorationMetric).Error; err != nil {
@@ -175,8 +184,8 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	if err := db.Where("user_id = ? AND post_id = ? AND action = ?", userID, postID, eventing.RecommendationBehaviorActionClick).First(&clickBehavior).Error; err != nil {
 		t.Fatal(err)
 	}
-	if clickBehavior.Count != 1 {
-		t.Fatalf("derived click behavior=%#v", clickBehavior)
+	if clickBehavior.Count != 2 {
+		t.Fatalf("derived click behavior=%#v want two distinct click events", clickBehavior)
 	}
 }
 

@@ -150,7 +150,15 @@ func StartHttpServerWithTracing(tokens auth.TokenService, publisher eventing.Bat
 		return nil, fmt.Errorf("initialize recommendation handler: %w", err)
 	}
 	telemetryRateLimiter := controllers.NewRecommendationTelemetryRedisRateLimiter(global.RedisDB)
-	handler, err := router.SetupRouterWithTracing(authController, tokens, publisher, readiness, applicationLimiter, recommendationHandler, telemetryRateLimiter, traceEnabled, translationService)
+	clickCooldownSeconds, err := config.RecommendationTelemetryClickCooldownSeconds()
+	if err != nil {
+		return nil, err
+	}
+	clickCooldown, err := controllers.NewRedisRecommendationClickCooldown(global.RedisDB, time.Duration(clickCooldownSeconds)*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("initialize recommendation click cooldown: %w", err)
+	}
+	handler, err := router.SetupRouterWithTracingAndClickCooldown(authController, tokens, publisher, readiness, applicationLimiter, recommendationHandler, telemetryRateLimiter, clickCooldown, traceEnabled, translationService)
 	if err != nil {
 		return nil, fmt.Errorf("initialize HTTP router: %w", err)
 	}

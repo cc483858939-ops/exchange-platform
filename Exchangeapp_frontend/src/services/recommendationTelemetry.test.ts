@@ -51,6 +51,15 @@ const eventsFromRequest = (request: RequestInit | undefined) =>
     exit_type?: string;
   }>;
 
+const eventsFromPost = (callIndex: number) =>
+  (mocks.post.mock.calls[callIndex][1] as { events: Array<{ event_id: string; event_type: string }> }).events;
+
+const flushMicrotasks = async () => {
+  for (let index = 0; index < 5; index += 1) {
+    await Promise.resolve();
+  }
+};
+
 describe('RecommendationTelemetryClient delivery', () => {
   let client: RecommendationTelemetryClient | null = null;
 
@@ -67,6 +76,7 @@ describe('RecommendationTelemetryClient delivery', () => {
     client?.stop();
     client = null;
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     vi.clearAllMocks();
   });
 
@@ -139,6 +149,74 @@ describe('RecommendationTelemetryClient delivery', () => {
 
     const events = eventsFromRequest(mocks.fetch.mock.calls[0][1] as RequestInit);
     expect(events.filter(event => event.event_type === 'read_end')).toHaveLength(1);
+  });
+
+  it('allows a new click after five minutes without refreshing the earlier window', async () => {
+    let now = 1_000_000;
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    let nextEventID = 0;
+    vi.stubGlobal('crypto', { randomUUID: vi.fn(() => `click-${++nextEventID}`) });
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) => ({
+      data: responseFor(body.events),
+    }));
+    client = new RecommendationTelemetryClient(() => 'Bearer test-token');
+
+    client.recordClick(42, tracking);
+    await flushMicrotasks();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    const firstEvent = eventsFromPost(0)[0];
+
+    now += 60_000;
+    client.recordClick(42, { ...tracking, request_id: 'request-after-one-minute' });
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+
+    now += 240_000;
+    client.recordClick(42, { ...tracking, request_id: 'request-after-five-minutes' });
+    await flushMicrotasks();
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    const secondEvent = eventsFromPost(1)[0];
+    expect(secondEvent.event_type).toBe('click');
+    expect(secondEvent.event_id).not.toBe(firstEvent.event_id);
+    dateNow.mockRestore();
+  });
+
+  it('clears click cooldown state when the session is cleared', async () => {
+    let nextEventID = 0;
+    vi.stubGlobal('crypto', { randomUUID: vi.fn(() => `session-click-${++nextEventID}`) });
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) => ({
+      data: responseFor(body.events),
+    }));
+    client = new RecommendationTelemetryClient(() => 'Bearer test-token');
+
+    client.recordClick(42, tracking);
+    await flushMicrotasks();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    client.clearSession();
+    client.recordClick(42, tracking);
+    await flushMicrotasks();
+
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(eventsFromPost(1)[0].event_id).not.toBe(eventsFromPost(0)[0].event_id);
+  });
+
+  it('retries an already queued click with its original Event ID', async () => {
+    let attempts = 0;
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('temporary failure');
+      return { data: responseFor(body.events) };
+    });
+    client = new RecommendationTelemetryClient(() => 'Bearer test-token');
+
+    client.recordClick(42, tracking);
+    await flushMicrotasks();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    const originalEventID = eventsFromPost(0)[0].event_id;
+
+    await client.flush(false);
+    await flushMicrotasks();
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(eventsFromPost(1)[0].event_id).toBe(originalEventID);
   });
 
   it('keeps route-leave delivery on the normal Axios flush path', async () => {
