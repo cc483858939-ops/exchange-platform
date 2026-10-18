@@ -380,18 +380,16 @@ func (service *RecommendationService) materializeSnapshotPage(ctx context.Contex
 	if !page.ServedAt.IsZero() {
 		request.Now = page.ServedAt.UTC()
 	}
-	wanted := make(map[uint]struct{}, len(page.Items))
+	pageItems := page.Items
 	if snapshotPageCommitted(page) {
-		for _, id := range page.ReturnedPostIDs {
-			wanted[id] = struct{}{}
-		}
-	} else {
-		for _, item := range page.Items {
-			wanted[item.PostID] = struct{}{}
-		}
+		pageItems = pageContextItems(page)
 	}
-	inputs := make([]Candidate, 0, len(wanted))
-	for _, item := range page.Items {
+	wanted := make(map[uint]struct{}, len(pageItems))
+	for _, item := range pageItems {
+		wanted[item.PostID] = struct{}{}
+	}
+	inputs := make([]Candidate, 0, len(pageItems))
+	for _, item := range pageItems {
 		if _, exists := wanted[item.PostID]; !exists {
 			continue
 		}
@@ -405,8 +403,8 @@ func (service *RecommendationService) materializeSnapshotPage(ctx context.Contex
 	for _, item := range eligible {
 		byID[item.Post.ID] = item
 	}
-	selected := make([]SelectedCandidate, 0, len(page.Items))
-	for _, cached := range page.Items {
+	selected := make([]SelectedCandidate, 0, len(pageItems))
+	for _, cached := range pageItems {
 		if _, exists := wanted[cached.PostID]; !exists {
 			continue
 		}
@@ -845,15 +843,18 @@ func selectedSnapshotContextIDs(snapshot CandidatePoolSnapshot, pageIndex int) [
 }
 
 func pageContextItems(page CachedPage) []CachedCandidate {
-	items := make([]CachedCandidate, 0, len(page.Items))
-	returned := snapshotPageReturnedSet(page)
+	if !snapshotPageCommitted(page) {
+		return append([]CachedCandidate(nil), page.Items...)
+	}
+	itemsByID := make(map[uint]CachedCandidate, len(page.Items))
 	for _, item := range page.Items {
-		if snapshotPageCommitted(page) {
-			if _, exists := returned[item.PostID]; !exists {
-				continue
-			}
+		itemsByID[item.PostID] = item
+	}
+	items := make([]CachedCandidate, 0, len(page.ReturnedPostIDs))
+	for _, id := range page.ReturnedPostIDs {
+		if item, exists := itemsByID[id]; exists {
+			items = append(items, item)
 		}
-		items = append(items, item)
 	}
 	return items
 }
@@ -1026,13 +1027,7 @@ func uniqueCachedCandidates(candidates []CachedCandidate) []CachedCandidate {
 func selectedContextFromPages(pages []CachedPage, embeddings map[uint][]float32) []SelectedCandidate {
 	selected := make([]SelectedCandidate, 0)
 	for _, page := range pages {
-		returned := snapshotPageReturnedSet(page)
-		for _, item := range page.Items {
-			if snapshotPageCommitted(page) {
-				if _, exists := returned[item.PostID]; !exists {
-					continue
-				}
-			}
+		for _, item := range pageContextItems(page) {
 			selected = append(selected, SelectedCandidate{
 				Candidate: item.Candidate,
 				Post:      models.Post{Model: gorm.Model{ID: item.PostID, CreatedAt: item.CreatedAt}, AuthorID: item.AuthorID},

@@ -779,7 +779,7 @@ func TestRecommendationPreselectedPageInvalidatedAfterMapperFiltering(t *testing
 			t.Fatalf("page 1 repeated committed/rejected post %d; first=%v second=%v", id, firstIDs, secondIDs)
 		}
 	}
-	if fixture.mapper.calls != 2 || len(fixture.repo.snapshotPageContexts) < 2 || !equalControllerIDs(fixture.repo.snapshotPageContexts[1], firstIDs) {
+	if fixture.mapper.calls != 2 || len(fixture.repo.snapshotPageContexts) < 1 || !equalControllerIDs(fixture.repo.snapshotPageContexts[0], firstIDs) {
 		t.Fatalf("page 1 reselect context=%v mapped calls=%d want committed page context %v", fixture.repo.snapshotPageContexts, fixture.mapper.calls, firstIDs)
 	}
 	stored, err = fixture.snapshots.Load(context.Background(), fixture.mapper.initialSnapshot.ID)
@@ -834,7 +834,7 @@ func TestRecommendationPreselectedPageInvalidatedAfterMapperReordering(t *testin
 	if status != http.StatusOK || len(second.Items) != 5 {
 		t.Fatalf("reselected page 1 status=%d items=%d body=%s", status, len(second.Items), body)
 	}
-	if len(fixture.repo.snapshotPageContexts) < 2 || !equalControllerIDs(fixture.repo.snapshotPageContexts[1], firstIDs) {
+	if len(fixture.repo.snapshotPageContexts) < 1 || !equalControllerIDs(fixture.repo.snapshotPageContexts[0], firstIDs) {
 		t.Fatalf("page 1 used stale page 0 order: contexts=%v want %v", fixture.repo.snapshotPageContexts, firstIDs)
 	}
 	stored, err = fixture.snapshots.Load(context.Background(), fixture.mapper.initialSnapshot.ID)

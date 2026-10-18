@@ -578,6 +578,36 @@ func TestRecommendationPreselectionUsesCommittedAuthorAndSemanticContext(t *test
 	}
 }
 
+func TestRecommendationCommittedPageMaterializationUsesReturnedOrder(t *testing.T) {
+	store := newMemorySnapshotStore()
+	service, _, now := newSnapshotTestService(t, store)
+	result := firstSnapshotResult(t, service, now)
+	returned := append([]SelectedCandidate(nil), result.Selected...)
+	returned[1], returned[2] = returned[2], returned[1]
+	wantIDs := selectedPostIDs(returned)
+	if _, err := service.FinalizeMappedServing(context.Background(), result, returned); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := store.Load(context.Background(), result.PoolID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, ok := snapshotPageAt(snapshot, 0)
+	if !ok {
+		t.Fatal("committed page 0 missing")
+	}
+	rematerialized, _, err := service.materializeSnapshotPage(
+		context.Background(), result.finalization.request, snapshot, page,
+		result.Profile, result.LanguageContext, result.EmbeddingVersion,
+	)
+	if err != nil {
+		t.Fatalf("rematerialize committed page: %v", err)
+	}
+	if !samePostIDs(selectedPostIDs(rematerialized.Selected), wantIDs) {
+		t.Fatalf("rematerialized IDs=%v want committed mapped order=%v", selectedPostIDs(rematerialized.Selected), wantIDs)
+	}
+}
+
 func containsUint(ids []uint, want uint) bool {
 	for _, id := range ids {
 		if id == want {
