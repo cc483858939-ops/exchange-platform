@@ -45,7 +45,7 @@ func TestAPIRecommendationClickCooldownUsesFixedFiveMinuteTTLIntegration(t *test
 		userID = 1
 	}
 	postID := userID + 1
-	key := fmt.Sprintf("recommendation:telemetry:click:cooldown:%d:%d", userID, postID)
+	key := fmt.Sprintf("recommendation:telemetry:click:cooldown:%d:%s:%d", userID, "request-a", postID)
 	t.Cleanup(func() {
 		if err := client.Del(key).Err(); err != nil {
 			t.Errorf("delete recommendation click cooldown test key: %v", err)
@@ -57,7 +57,7 @@ func TestAPIRecommendationClickCooldownUsesFixedFiveMinuteTTLIntegration(t *test
 		t.Fatal(err)
 	}
 	const eventID = "api-runtime-cooldown-test"
-	result, err := store.Acquire(context.Background(), userID, postID, eventID)
+	result, err := store.Acquire(context.Background(), userID, postID, "request-a", eventID)
 	if err != nil || result != controllers.RecommendationClickCooldownAcquired {
 		t.Fatalf("first acquire=%v err=%v want acquired", result, err)
 	}
@@ -65,7 +65,7 @@ func TestAPIRecommendationClickCooldownUsesFixedFiveMinuteTTLIntegration(t *test
 	if err != nil || pendingTTL < 59*time.Second || pendingTTL > 60*time.Second {
 		t.Fatalf("production pending TTL=%s err=%v want about 60s", pendingTTL, err)
 	}
-	if err := store.Commit(context.Background(), userID, postID, eventID); err != nil {
+	if err := store.Commit(context.Background(), userID, postID, "request-a", eventID); err != nil {
 		t.Fatal(err)
 	}
 	committedTTL, err := client.TTL(key).Result()
