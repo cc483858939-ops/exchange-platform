@@ -338,6 +338,28 @@ assert_eq "$BASE_COMMIT" "$compose_head" 'legacy state migrates Compose baseline
 assert_file_value "$BASE_COMMIT" "$LEGACY_STATE_FILE" 'legacy state is preserved'
 finish_case
 
+# 13. Fixed SHA must match origin/main; a newer main is rejected before writes.
+begin_case
+new_repo
+commit_file README.md locked-target
+git -C "$TEST_REPO" update-ref refs/remotes/origin/main "$TEST_TARGET"
+REPO_ROOT="$TEST_REPO"
+DEPLOY_EXPECTED_SHA="$TEST_TARGET"
+read_target_head
+assert_eq "$TEST_TARGET" "$target_head" 'matching locked SHA accepted'
+DEPLOY_EXPECTED_SHA="$BASE_COMMIT"
+if (read_target_head) >/dev/null 2>&1; then
+  printf 'FAIL: main advanced but fixed SHA check passed\n' >&2
+  exit 1
+fi
+DEPLOY_EXPECTED_SHA='main; echo unsafe'
+if (read_target_head) >/dev/null 2>&1; then
+  printf 'FAIL: invalid expected SHA accepted\n' >&2
+  exit 1
+fi
+unset DEPLOY_EXPECTED_SHA
+finish_case
+
 if (( POSIX_MODE == 0 )); then
   printf 'NOTE permission-bit assertions skipped on non-POSIX filesystem\n'
 fi

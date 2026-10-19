@@ -58,6 +58,7 @@ func RunMigrationsWithDB(ctx context.Context, db *gorm.DB) error {
 			&models.PostBehavior{},
 			&models.PostReaction{},
 			&models.RecommendationDailyMetric{},
+			&models.RecommendationCTRClaim{},
 			&models.RecommendationRequest{},
 			&models.RecommendationResultTrace{},
 			&models.UserPostRecoState{},

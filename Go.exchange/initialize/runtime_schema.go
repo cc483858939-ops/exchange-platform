@@ -248,6 +248,16 @@ var postSchemaObjectCanaries = []schemaObjectCanary{
 	},
 }
 
+// Worker-only guarantees: CTR opportunity deduplication depends on this
+// composite primary key, not merely on the ledger table and its columns.
+var workerSchemaObjectCanaries = []schemaObjectCanary{
+	{
+		Table:       "recommendation_ctr_claims",
+		Constraints: []string{"recommendation_ctr_claims_pkey"},
+		Indexes:     []string{"recommendation_ctr_claims_pkey"},
+	},
+}
+
 var apiSchemaModels = []interface{}{
 	&models.User{},
 	&models.UserFollow{},
@@ -281,6 +291,7 @@ var apiSchemaModels = []interface{}{
 var workerSchemaModels = []interface{}{
 	&models.ConsumerInbox{},
 	&models.RecommendationDailyMetric{},
+	&models.RecommendationCTRClaim{},
 }
 
 type schemaMetadataRow struct {
@@ -437,18 +448,22 @@ ORDER BY resolved_relations.table_name, attribute.attnum
 	if err := validateResolvedSchema(canaries, rows); err != nil {
 		return err
 	}
-	return validatePostSchemaObjects(ctx, db)
+	return validatePostSchemaObjects(ctx, db, options.IncludeWorkerTables)
 }
 
-func validatePostSchemaObjects(ctx context.Context, db *gorm.DB) error {
+func validatePostSchemaObjects(ctx context.Context, db *gorm.DB, includeWorkerTables bool) error {
 	if err := ctx.Err(); err != nil {
 		return schemaError("schema_check_timeout")
 	}
-	if len(postSchemaObjectCanaries) == 0 {
+	canaries := append([]schemaObjectCanary(nil), postSchemaObjectCanaries...)
+	if includeWorkerTables {
+		canaries = append(canaries, workerSchemaObjectCanaries...)
+	}
+	if len(canaries) == 0 {
 		return nil
 	}
-	tables := make([]string, 0, len(postSchemaObjectCanaries))
-	for _, canary := range postSchemaObjectCanaries {
+	tables := make([]string, 0, len(canaries))
+	for _, canary := range canaries {
 		tables = append(tables, canary.Table)
 	}
 	const resolvedTables = `
@@ -504,7 +519,7 @@ JOIN pg_indexes AS indexes
 		return schemaError("schema_check_unavailable")
 	}
 
-	return validateSchemaObjects(postSchemaObjectCanaries, constraintRows, indexRows)
+	return validateSchemaObjects(canaries, constraintRows, indexRows)
 }
 
 func validateSchemaObjects(canaries []schemaObjectCanary, constraintRows, indexRows []schemaObjectMetadataRow) error {

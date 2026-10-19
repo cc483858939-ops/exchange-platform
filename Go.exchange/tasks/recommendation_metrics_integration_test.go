@@ -31,13 +31,14 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 		&models.Post{},
 		&models.ConsumerInbox{},
 		&models.RecommendationDailyMetric{},
+		&models.RecommendationCTRClaim{},
 		&models.PostBehavior{},
 		&models.UserRecoProfileDirty{},
 	); err != nil {
 		t.Fatal(err)
 	}
 
-	groupID := "test-rec-metrics-" + uuid.NewString()
+	groupID := "rec-metrics-" + uuid.NewString()
 	kafkaConfig := config.KafkaConfig{RecommendationMetricsGroupID: groupID}
 	user := models.User{
 		Username: "test-rec-metrics-" + uuid.NewString(),
@@ -51,6 +52,7 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	t.Cleanup(func() {
 		db.Unscoped().Where("consumer_name = ?", groupID).Delete(&models.ConsumerInbox{})
 		db.Unscoped().Where("strategy_id LIKE ?", groupID+"%").Delete(&models.RecommendationDailyMetric{})
+		db.Unscoped().Where("user_id = ?", userID).Delete(&models.RecommendationCTRClaim{})
 		db.Unscoped().Where("user_id = ?", userID).Delete(&models.UserRecoProfileDirty{})
 		db.Unscoped().Where("user_id = ? OR post_id = ?", userID, postID).Delete(&models.PostBehavior{})
 		if postID != 0 {
@@ -95,6 +97,7 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	messages = append(messages, recommendationMessage(t, secondClick))
 
 	explorationPayload := base
+	explorationPayload.RequestID = uuid.NewString()
 	explorationPayload.ExplorationOpportunity = true
 	explorationPayload.SelectionMode = eventing.RecommendationSelectionModeExploration
 	explorationPayload.ExplorationReason = eventing.RecommendationExplorationReasonRecent
@@ -106,6 +109,7 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	messages = append(messages, explorationMessage)
 
 	variantPosition := base
+	variantPosition.RequestID = uuid.NewString()
 	variantPosition.Position = 2
 	positionEvent, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationImpression, baseAt, variantPosition)
 	if err != nil {
@@ -114,6 +118,7 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	messages = append(messages, recommendationMessage(t, positionEvent))
 
 	variantStrategy := base
+	variantStrategy.RequestID = uuid.NewString()
 	variantStrategy.StrategyID = groupID + "-strategy-b"
 	strategyEvent, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationImpression, baseAt, variantStrategy)
 	if err != nil {
@@ -121,7 +126,40 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	}
 	messages = append(messages, recommendationMessage(t, strategyEvent))
 
+	// A click before the 1-second viewability threshold must count one
+	// implied impression, even if the impression event arrives later.
+	quickPayload := base
+	quickPayload.RequestID = uuid.NewString()
+	quickPayload.StrategyID = groupID + "-quick-click"
+	quickClick, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationClick, baseAt, quickPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quickImpression, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationImpression, baseAt.Add(time.Second), quickPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages = append(messages, recommendationMessage(t, quickClick), recommendationMessage(t, quickImpression))
+
+	// The click and impression must share the exposure date when they
+	// straddle midnight, rather than creating a numerator on the next day.
+	crossDatePayload := base
+	crossDatePayload.RequestID = uuid.NewString()
+	crossDatePayload.StrategyID = groupID + "-cross-day"
+	beforeMidnight := time.Date(2026, 8, 16, 23, 59, 0, 0, time.UTC)
+	afterMidnight := beforeMidnight.Add(2 * time.Minute)
+	crossImpression, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationImpression, beforeMidnight, crossDatePayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crossClick, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationClick, afterMidnight, crossDatePayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages = append(messages, recommendationMessage(t, crossImpression), recommendationMessage(t, crossClick))
+
 	variantDate := base
+	variantDate.RequestID = uuid.NewString()
 	variantDate.ReceivedAt = baseAt.AddDate(0, 0, 1)
 	dateEvent, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationImpression, baseAt.AddDate(0, 0, 1), variantDate)
 	if err != nil {
@@ -150,6 +188,14 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	if err := applyRecommendationMetricsMessagesForIntegration(t, db, kafkaConfig, []kafka.Message{clickMessage}); err != nil {
 		t.Fatal(err)
 	}
+	// A later batch with a different event ID cannot count the same opportunity again.
+	lateView, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationImpression, baseAt.Add(10*time.Second), quickPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applyRecommendationMetricsMessagesForIntegration(t, db, kafkaConfig, []kafka.Message{recommendationMessage(t, lateView)}); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Where("user_id = ?", userID).First(&dirty).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -161,8 +207,8 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	if err := db.Where("strategy_id = ? AND position = ? AND post_id = ?", groupID, 1, postID).First(&metric).Error; err != nil {
 		t.Fatal(err)
 	}
-	if metric.ImpressionCount != 100 || metric.ClickCount != 2 {
-		t.Fatalf("base metric=%#v want impressions=100 clicks=2", metric)
+	if metric.ImpressionCount != 1 || metric.ClickCount != 1 {
+		t.Fatalf("base metric=%#v want one impression and one click per opportunity", metric)
 	}
 	var explorationMetric models.RecommendationDailyMetric
 	if err := db.Where("strategy_id = ? AND exploration_opportunity = ? AND selection_mode = ? AND exploration_reason = ?", groupID, true, eventing.RecommendationSelectionModeExploration, eventing.RecommendationExplorationReasonRecent).First(&explorationMetric).Error; err != nil {
@@ -172,20 +218,106 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 		t.Fatalf("exploration metric=%#v want one idempotent impression", explorationMetric)
 	}
 
+	var quickMetric models.RecommendationDailyMetric
+	if err := db.Where("strategy_id = ?", groupID+"-quick-click").First(&quickMetric).Error; err != nil {
+		t.Fatal(err)
+	}
+	if quickMetric.ImpressionCount != 1 || quickMetric.ClickCount != 1 {
+		t.Fatalf("quick click metric=%#v want implied impression=1 click=1", quickMetric)
+	}
+
+	var crossDayMetric models.RecommendationDailyMetric
+	if err := db.Where("strategy_id = ? AND metric_date = ?", groupID+"-cross-day", beforeMidnight.Format("2006-01-02")).First(&crossDayMetric).Error; err != nil {
+		t.Fatal(err)
+	}
+	if crossDayMetric.ImpressionCount != 1 || crossDayMetric.ClickCount != 1 {
+		t.Fatalf("cross-day metric=%#v want CTR attributed to impression date", crossDayMetric)
+	}
+
 	var metricRows int64
 	if err := db.Model(&models.RecommendationDailyMetric{}).Where("strategy_id LIKE ?", groupID+"%").Count(&metricRows).Error; err != nil {
 		t.Fatal(err)
 	}
-	if metricRows != 5 {
-		t.Fatalf("metric rows=%d want=5 including ranked/exploration provenance dimensions", metricRows)
+	if metricRows != 7 {
+		t.Fatalf("metric rows=%d want=7 including quick-click and cross-day cohorts", metricRows)
 	}
 
 	var clickBehavior models.PostBehavior
 	if err := db.Where("user_id = ? AND post_id = ? AND action = ?", userID, postID, eventing.RecommendationBehaviorActionClick).First(&clickBehavior).Error; err != nil {
 		t.Fatal(err)
 	}
-	if clickBehavior.Count != 2 {
-		t.Fatalf("derived click behavior=%#v want two distinct click events", clickBehavior)
+	if clickBehavior.Count != 3 {
+		t.Fatalf("derived click behavior=%#v want one click each for three distinct opportunities", clickBehavior)
+	}
+
+	// A click processed on the following UTC day must be re-attributed when
+	// an earlier real impression arrives in a later Kafka transaction.
+	latePayload := base
+	latePayload.RequestID = uuid.NewString()
+	latePayload.StrategyID = groupID + "-late-cross-day"
+	lateExposureAt := time.Date(2026, 8, 16, 23, 59, 59, 0, time.UTC)
+	clickAt := lateExposureAt.Add(3 * time.Second)
+	lateClick, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationClick, clickAt, latePayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applyRecommendationMetricsMessagesForIntegration(t, db, kafkaConfig, []kafka.Message{recommendationMessage(t, lateClick)}); err != nil {
+		t.Fatal(err)
+	}
+	var nextDay models.RecommendationDailyMetric
+	lateStrategy := latePayload.StrategyID
+	if err := db.Where("strategy_id = ? AND metric_date = ?", lateStrategy, clickAt.Format("2006-01-02")).First(&nextDay).Error; err != nil {
+		t.Fatal(err)
+	}
+	if nextDay.ImpressionCount != 1 || nextDay.ClickCount != 1 {
+		t.Fatalf("click-first provisional cohort=%#v want impression=1 click=1", nextDay)
+	}
+	lateImpression, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationImpression, lateExposureAt, latePayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lateMessage := recommendationMessage(t, lateImpression)
+	if err := applyRecommendationMetricsMessagesForIntegration(t, db, kafkaConfig, []kafka.Message{lateMessage}); err != nil {
+		t.Fatal(err)
+	}
+	// A distinct event ID (or an inbox replay) must not count again.
+	duplicateView, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationImpression, lateExposureAt, latePayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applyRecommendationMetricsMessagesForIntegration(t, db, kafkaConfig, []kafka.Message{lateMessage, recommendationMessage(t, duplicateView)}); err != nil {
+		t.Fatal(err)
+	}
+	var firstDay models.RecommendationDailyMetric
+	if err := db.Where("strategy_id = ? AND metric_date = ?", lateStrategy, lateExposureAt.Format("2006-01-02")).First(&firstDay).Error; err != nil {
+		t.Fatal(err)
+	}
+	if firstDay.ImpressionCount != 1 || firstDay.ClickCount != 1 {
+		t.Fatalf("reconciled original exposure cohort=%#v want impression=1 click=1", firstDay)
+	}
+	if err := db.Where("strategy_id = ? AND metric_date = ?", lateStrategy, clickAt.Format("2006-01-02")).First(&nextDay).Error; err != nil {
+		t.Fatal(err)
+	}
+	if nextDay.ImpressionCount != 0 || nextDay.ClickCount != 0 {
+		t.Fatalf("old provisional cohort=%#v want impression=0 click=0", nextDay)
+	}
+	var claims []models.RecommendationCTRClaim
+	if err := db.Where("user_id = ? AND request_id = ? AND post_id = ?", userID, latePayload.RequestID, postID).Find(&claims).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 2 {
+		t.Fatalf("CTR claims=%d want=2", len(claims))
+	}
+	for _, claim := range claims {
+		if claim.MetricDate.Format("2006-01-02") != lateExposureAt.Format("2006-01-02") {
+			t.Fatalf("CTR claim=%#v has wrong cohort", claim)
+		}
+	}
+	if err := db.Where("user_id = ? AND post_id = ? AND action = ?", userID, postID, eventing.RecommendationBehaviorActionClick).First(&clickBehavior).Error; err != nil {
+		t.Fatal(err)
+	}
+	if clickBehavior.Count != 4 {
+		t.Fatalf("late impression double-counted click behavior: %d want=4", clickBehavior.Count)
 	}
 }
 

@@ -151,7 +151,7 @@ describe('RecommendationTelemetryClient delivery', () => {
     expect(events.filter(event => event.event_type === 'read_end')).toHaveLength(1);
   });
 
-  it('allows a new click after five minutes without refreshing the earlier window', async () => {
+  it('deduplicates clicks within a request but allows a new recommendation request immediately', async () => {
     let now = 1_000_000;
     const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => now);
     let nextEventID = 0;
@@ -167,20 +167,21 @@ describe('RecommendationTelemetryClient delivery', () => {
     const firstEvent = eventsFromPost(0)[0];
 
     now += 60_000;
-    client.recordClick(42, { ...tracking, request_id: 'request-after-one-minute' });
+    client.recordClick(42, tracking);
     expect(mocks.post).toHaveBeenCalledTimes(1);
 
-    now += 240_000;
-    client.recordClick(42, { ...tracking, request_id: 'request-after-five-minutes' });
+    client.recordClick(42, { ...tracking, request_id: 'another-recommendation-request' });
     await flushMicrotasks();
     expect(mocks.post).toHaveBeenCalledTimes(2);
-    const secondEvent = eventsFromPost(1)[0];
-    expect(secondEvent.event_type).toBe('click');
-    expect(secondEvent.event_id).not.toBe(firstEvent.event_id);
+    expect(eventsFromPost(1)[0].event_id).not.toBe(firstEvent.event_id);
+
+    now += 5 * 60_000;
+    client.recordClick(42, tracking);
+    expect(mocks.post).toHaveBeenCalledTimes(2);
     dateNow.mockRestore();
   });
 
-  it('clears click cooldown state when the session is cleared', async () => {
+  it('clears click deduplication state when the session is cleared', async () => {
     let nextEventID = 0;
     vi.stubGlobal('crypto', { randomUUID: vi.fn(() => `session-click-${++nextEventID}`) });
     mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) => ({

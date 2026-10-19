@@ -76,6 +76,13 @@ func TestRecommendationMetricsRecoveryDecoderClassifiesPermanentFailures(t *test
 	}
 	invalidPayload.Position = 0
 	invalidBusiness.Payload, _ = json.Marshal(invalidPayload)
+	invalidRequestID := base(uuid.NewString(), eventing.EventTypeRecommendationImpression)
+	var invalidRequestPayload eventing.RecommendationBehaviorPayload
+	if err := json.Unmarshal(invalidRequestID.Payload, &invalidRequestPayload); err != nil {
+		t.Fatal(err)
+	}
+	invalidRequestPayload.RequestID = "invalid-id"
+	invalidRequestID.Payload, _ = json.Marshal(invalidRequestPayload)
 
 	tests := []struct {
 		name string
@@ -89,6 +96,7 @@ func TestRecommendationMetricsRecoveryDecoderClassifiesPermanentFailures(t *test
 		{name: "missing occurred at", msg: mustRecommendationRecoveryMessageRaw(t, 4, missingOccurredAt), code: kafkaFailureCodeInvalidPayload},
 		{name: "bad payload json", msg: mustRecommendationRecoveryMessageRaw(t, 5, badPayload), code: kafkaFailureCodeDecodePayload},
 		{name: "invalid business payload", msg: mustRecommendationRecoveryMessageRaw(t, 6, invalidBusiness), code: kafkaFailureCodeInvalidPayload},
+		{name: "invalid request id UUID", msg: mustRecommendationRecoveryMessageRaw(t, 7, invalidRequestID), code: kafkaFailureCodeInvalidPayload},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -1,0 +1,110 @@
+name: Production Deploy
+run-name: Production ${{ inputs.mode }} / ${{ inputs.target_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Check only, or explicitly deploy production
+        type: choice
+        options: [check, deploy]
+        default: check
+        required: true
+      target_sha:
+        description: Full 40-character SHA of main (must equal this workflow run SHA)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: exchange-platform-production
+  cancel-in-progress: false
+
+jobs:
+  verify-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require main and a fixed SHA
+        env:
+          REF: ${{ github.ref }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          RUN_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$REF" = refs/heads/main
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$TARGET_SHA" = "$RUN_SHA"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify existing CI for this exact main SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          mkdir -p cd-report
+          python3 scripts/cd/verify-ci.py > cd-report/ci.json
+          cat cd-report/ci.json
+      - name: Save CI gate result even when SSH is blocked
+        if: always()
+        run: |
+          mkdir -p cd-report
+          test -s cd-report/ci.json || printf '%s\n' '{"status":"blocked-before-ssh","reason":"SHA or CI gate failed; inspect job logs"}' > cd-report/ci.json
+          printf '### Production CI gate\n\n```json\n' >> "$GITHUB_STEP_SUMMARY"
+          cat cd-report/ci.json >> "$GITHUB_STEP_SUMMARY"
+          printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload CI gate record
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: production-gate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: cd-report/
+          retention-days: 30
+          if-no-files-found: error
+
+  production:
+    needs: verify-ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    environment: production
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Recheck SHA and CI after environment approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: python3 scripts/cd/verify-ci.py
+      - name: Execute restricted SSH request and wait for final result
+        env:
+          DEPLOY_MODE: ${{ inputs.mode }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+        run: python3 scripts/cd/ssh-client.py
+      - name: Save sanitized report
+        if: always()
+        run: |
+          mkdir -p cd-report
+          test -f cd-report/result.json || printf '%s\n' '{"status":"not-started","reason":"gate failed before SSH; inspect job logs"}' > cd-report/result.json
+          printf '### Production CD result\n\n```json\n' >> "$GITHUB_STEP_SUMMARY"
+          cat cd-report/result.json >> "$GITHUB_STEP_SUMMARY"
+          printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload sanitized execution record
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: production-${{ github.run_id }}-${{ github.run_attempt }}
+          path: cd-report/
+          retention-days: 30
+          if-no-files-found: error

@@ -63,7 +63,6 @@ const flushDelayMs = 1000;
 const impressionDelayMs = 1000;
 const maxRetryDelayMs = 30_000;
 const maxFeedVisibleTimeMS = 6 * 60 * 60 * 1000;
-const clickCooldownMs = 5 * 60 * 1000;
 
 let sharedClient: RecommendationTelemetryClient | null = null;
 
@@ -134,7 +133,7 @@ export class RecommendationTelemetryClient {
   private qualifyingElements = new Set<Element>();
   private visibilityTimers = new Map<Element, number>();
   private seenImpressions = new Set<string>();
-  private seenClicks = new Map<number, number>();
+  private seenClicks = new Set<string>();
   private seenReadEnds = new Set<string>();
   private seenNotInterested = new Set<string>();
   private seenFeedDwells = new Set<string>();
@@ -333,12 +332,11 @@ export class RecommendationTelemetryClient {
       return;
     }
     this.finalizeFeedDwell(postID, tracking);
-    const now = Date.now();
-    const lastClickAt = this.seenClicks.get(postID);
-    if (lastClickAt !== undefined && now - lastClickAt < clickCooldownMs) {
+    const key = this.businessKey(postID, tracking);
+    if (this.seenClicks.has(key)) {
       return;
     }
-    this.seenClicks.set(postID, now);
+    this.seenClicks.add(key);
     this.enqueue('click', tracking);
     void this.flush(false);
   }

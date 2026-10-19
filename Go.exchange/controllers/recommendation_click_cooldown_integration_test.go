@@ -52,7 +52,7 @@ func integrationCooldownIdentity() (uint, uint) {
 func TestRecommendationClickCooldownFiveMinutesIntegration(t *testing.T) {
 	client := openRecommendationClickCooldownIntegrationRedis(t)
 	userID, postID := integrationCooldownIdentity()
-	key := recommendationClickCooldownKey(userID, postID)
+	key := recommendationClickCooldownKey(userID, postID, "request-a")
 	t.Cleanup(func() {
 		if err := client.Del(key).Err(); err != nil {
 			t.Errorf("delete recommendation click cooldown test key: %v", err)
@@ -62,18 +62,18 @@ func TestRecommendationClickCooldownFiveMinutesIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := store.Acquire(context.Background(), userID, postID, "event-a")
+	first, err := store.Acquire(context.Background(), userID, postID, "request-a", "event-a")
 	if err != nil || first != RecommendationClickCooldownAcquired {
 		t.Fatalf("first acquire=%v err=%v", first, err)
 	}
-	if err := store.Commit(context.Background(), userID, postID, "event-a"); err != nil {
+	if err := store.Commit(context.Background(), userID, postID, "request-a", "event-a"); err != nil {
 		t.Fatal(err)
 	}
 	initialTTL, err := client.TTL(key).Result()
 	if err != nil || initialTTL < 299*time.Second || initialTTL > 300*time.Second {
 		t.Fatalf("committed TTL=%s err=%v want about 300s", initialTTL, err)
 	}
-	second, err := store.Acquire(context.Background(), userID, postID, "event-b")
+	second, err := store.Acquire(context.Background(), userID, postID, "request-a", "event-b")
 	if err != nil || second != RecommendationClickCooldownDuplicate {
 		t.Fatalf("second acquire=%v err=%v want committed duplicate", second, err)
 	}
@@ -92,14 +92,14 @@ func TestRecommendationClickCooldownFiveMinutesIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if acquired, err := shortStore.Acquire(context.Background(), userID, postID, "event-c"); err != nil || acquired != RecommendationClickCooldownAcquired {
+	if acquired, err := shortStore.Acquire(context.Background(), userID, postID, "request-a", "event-c"); err != nil || acquired != RecommendationClickCooldownAcquired {
 		t.Fatalf("short lease first acquire=%v err=%v", acquired, err)
 	}
-	if err := shortStore.Commit(context.Background(), userID, postID, "event-c"); err != nil {
+	if err := shortStore.Commit(context.Background(), userID, postID, "request-a", "event-c"); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(1100 * time.Millisecond)
-	if acquired, err := shortStore.Acquire(context.Background(), userID, postID, "event-d"); err != nil || acquired != RecommendationClickCooldownAcquired {
+	if acquired, err := shortStore.Acquire(context.Background(), userID, postID, "request-a", "event-d"); err != nil || acquired != RecommendationClickCooldownAcquired {
 		t.Fatalf("acquire after expiry=%v err=%v", acquired, err)
 	}
 }
@@ -112,9 +112,9 @@ func TestRecommendationClickCooldownRedisScopesUserAndPostIntegration(t *testing
 	}
 	userID, postID := integrationCooldownIdentity()
 	keys := []string{
-		recommendationClickCooldownKey(userID, postID),
-		recommendationClickCooldownKey(userID+1, postID),
-		recommendationClickCooldownKey(userID, postID+1),
+		recommendationClickCooldownKey(userID, postID, "request-a"),
+		recommendationClickCooldownKey(userID+1, postID, "request-a"),
+		recommendationClickCooldownKey(userID, postID+1, "request-a"),
 	}
 	t.Cleanup(func() {
 		if err := client.Del(keys...).Err(); err != nil {
@@ -126,7 +126,7 @@ func TestRecommendationClickCooldownRedisScopesUserAndPostIntegration(t *testing
 		postID  uint
 		eventID string
 	}{{userID, postID, "event-a"}, {userID + 1, postID, "event-b"}, {userID, postID + 1, "event-c"}} {
-		result, err := store.Acquire(context.Background(), test.userID, test.postID, test.eventID)
+		result, err := store.Acquire(context.Background(), test.userID, test.postID, "request-a", test.eventID)
 		if err != nil || result != RecommendationClickCooldownAcquired {
 			t.Fatalf("user=%d post=%d acquire=%v err=%v", test.userID, test.postID, result, err)
 		}
@@ -137,7 +137,7 @@ func TestRecommendationClickCooldownConcurrentAcquireIntegration(t *testing.T) {
 	firstClient := openRecommendationClickCooldownIntegrationRedis(t)
 	secondClient := openRecommendationClickCooldownIntegrationRedis(t)
 	userID, postID := integrationCooldownIdentity()
-	key := recommendationClickCooldownKey(userID, postID)
+	key := recommendationClickCooldownKey(userID, postID, "request-a")
 	t.Cleanup(func() {
 		if err := firstClient.Del(key).Err(); err != nil {
 			t.Errorf("delete recommendation click cooldown concurrency key: %v", err)
@@ -167,7 +167,7 @@ func TestRecommendationClickCooldownConcurrentAcquireIntegration(t *testing.T) {
 		go func(store RecommendationClickCooldown, eventID string) {
 			defer wait.Done()
 			<-start
-			result, err := store.Acquire(context.Background(), userID, postID, eventID)
+			result, err := store.Acquire(context.Background(), userID, postID, "request-a", eventID)
 			outcomes <- acquireOutcome{eventID: eventID, result: result, err: err}
 		}(candidate.store, candidate.eventID)
 	}
@@ -193,10 +193,10 @@ func TestRecommendationClickCooldownConcurrentAcquireIntegration(t *testing.T) {
 	if acquired != 1 || pending != 1 {
 		t.Fatalf("concurrent outcomes acquired=%d pending=%d want 1 each", acquired, pending)
 	}
-	if err := firstStore.Commit(context.Background(), userID, postID, owner); err != nil {
+	if err := firstStore.Commit(context.Background(), userID, postID, "request-a", owner); err != nil {
 		t.Fatal(err)
 	}
-	result, err := secondStore.Acquire(context.Background(), userID, postID, "event-c")
+	result, err := secondStore.Acquire(context.Background(), userID, postID, "request-a", "event-c")
 	if err != nil || result != RecommendationClickCooldownDuplicate {
 		t.Fatalf("post-commit acquire=%v err=%v want duplicate", result, err)
 	}
@@ -205,7 +205,7 @@ func TestRecommendationClickCooldownConcurrentAcquireIntegration(t *testing.T) {
 func TestRecommendationClickCooldownReleaseCannotDeleteAnotherOwnerIntegration(t *testing.T) {
 	client := openRecommendationClickCooldownIntegrationRedis(t)
 	userID, postID := integrationCooldownIdentity()
-	key := recommendationClickCooldownKey(userID, postID)
+	key := recommendationClickCooldownKey(userID, postID, "request-a")
 	t.Cleanup(func() {
 		if err := client.Del(key).Err(); err != nil {
 			t.Errorf("delete recommendation click cooldown ownership key: %v", err)
@@ -215,24 +215,48 @@ func TestRecommendationClickCooldownReleaseCannotDeleteAnotherOwnerIntegration(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result, err := store.Acquire(context.Background(), userID, postID, "event-a"); err != nil || result != RecommendationClickCooldownAcquired {
+	if result, err := store.Acquire(context.Background(), userID, postID, "request-a", "event-a"); err != nil || result != RecommendationClickCooldownAcquired {
 		t.Fatalf("owner A acquire=%v err=%v", result, err)
 	}
 	time.Sleep(1100 * time.Millisecond)
-	if result, err := store.Acquire(context.Background(), userID, postID, "event-b"); err != nil || result != RecommendationClickCooldownAcquired {
+	if result, err := store.Acquire(context.Background(), userID, postID, "request-a", "event-b"); err != nil || result != RecommendationClickCooldownAcquired {
 		t.Fatalf("owner B acquire=%v err=%v", result, err)
 	}
-	if err := store.Release(context.Background(), userID, postID, "event-a"); err != nil {
+	if err := store.Release(context.Background(), userID, postID, "request-a", "event-a"); err != nil {
 		t.Fatal(err)
 	}
 	value, err := client.Get(key).Result()
 	if err != nil || value != "PENDING:event-b" {
 		t.Fatalf("key after delayed release=%q err=%v want B reservation", value, err)
 	}
-	if err := store.Commit(context.Background(), userID, postID, "event-a"); err != ErrRecommendationClickCooldownOwnershipLost {
+	if err := store.Commit(context.Background(), userID, postID, "request-a", "event-a"); err != ErrRecommendationClickCooldownOwnershipLost {
 		t.Fatalf("old owner commit error=%v want ownership lost", err)
 	}
-	if err := store.Commit(context.Background(), userID, postID, "event-b"); err != nil {
+	if err := store.Commit(context.Background(), userID, postID, "request-a", "event-b"); err != nil {
 		t.Fatalf("current owner commit: %v", err)
+	}
+}
+
+func TestRecommendationClickCooldownSeparatesRequestsIntegration(t *testing.T) {
+	client := openRecommendationClickCooldownIntegrationRedis(t)
+	userID, postID := integrationCooldownIdentity()
+	requestA, requestB := "opportunity-a", "opportunity-b"
+	keys := []string{
+		recommendationClickCooldownKey(userID, postID, requestA),
+		recommendationClickCooldownKey(userID, postID, requestB),
+	}
+	t.Cleanup(func() { _ = client.Del(keys...).Err() })
+	store, err := newRedisRecommendationClickCooldown(client, 60*time.Second, 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome, err := store.Acquire(context.Background(), userID, postID, requestA, "click-a"); err != nil || outcome != RecommendationClickCooldownAcquired {
+		t.Fatalf("request A acquire=%v err=%v", outcome, err)
+	}
+	if err := store.Commit(context.Background(), userID, postID, requestA, "click-a"); err != nil {
+		t.Fatal(err)
+	}
+	if outcome, err := store.Acquire(context.Background(), userID, postID, requestB, "click-b"); err != nil || outcome != RecommendationClickCooldownAcquired {
+		t.Fatalf("new recommendation request blocked: result=%v err=%v", outcome, err)
 	}
 }
