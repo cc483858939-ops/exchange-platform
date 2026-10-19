@@ -141,6 +141,23 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	}
 	messages = append(messages, recommendationMessage(t, quickClick), recommendationMessage(t, quickImpression))
 
+	// The click and impression must share the exposure date when they
+	// straddle midnight, rather than creating a numerator on the next day.
+	crossDatePayload := base
+	crossDatePayload.RequestID = uuid.NewString()
+	crossDatePayload.StrategyID = groupID + "-cross-day"
+	beforeMidnight := time.Date(2026, 8, 16, 23, 59, 0, 0, time.UTC)
+	afterMidnight := beforeMidnight.Add(2 * time.Minute)
+	crossImpression, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationImpression, beforeMidnight, crossDatePayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crossClick, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationClick, afterMidnight, crossDatePayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages = append(messages, recommendationMessage(t, crossImpression), recommendationMessage(t, crossClick))
+
 	variantDate := base
 	variantDate.RequestID = uuid.NewString()
 	variantDate.ReceivedAt = baseAt.AddDate(0, 0, 1)
@@ -201,20 +218,28 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 		t.Fatalf("quick click metric=%#v want implied impression=1 click=1", quickMetric)
 	}
 
+	var crossDayMetric models.RecommendationDailyMetric
+	if err := db.Where("strategy_id = ? AND metric_date = ?", groupID+"-cross-day", beforeMidnight.Format("2006-01-02")).First(&crossDayMetric).Error; err != nil {
+		t.Fatal(err)
+	}
+	if crossDayMetric.ImpressionCount != 1 || crossDayMetric.ClickCount != 1 {
+		t.Fatalf("cross-day metric=%#v want CTR attributed to impression date", crossDayMetric)
+	}
+
 	var metricRows int64
 	if err := db.Model(&models.RecommendationDailyMetric{}).Where("strategy_id LIKE ?", groupID+"%").Count(&metricRows).Error; err != nil {
 		t.Fatal(err)
 	}
-	if metricRows != 6 {
-		t.Fatalf("metric rows=%d want=6 including quick-click and exploration dimensions", metricRows)
+	if metricRows != 7 {
+		t.Fatalf("metric rows=%d want=7 including quick-click and cross-day cohorts", metricRows)
 	}
 
 	var clickBehavior models.PostBehavior
 	if err := db.Where("user_id = ? AND post_id = ? AND action = ?", userID, postID, eventing.RecommendationBehaviorActionClick).First(&clickBehavior).Error; err != nil {
 		t.Fatal(err)
 	}
-	if clickBehavior.Count != 2 {
-		t.Fatalf("derived click behavior=%#v want one click each for base and quick-click opportunities", clickBehavior)
+	if clickBehavior.Count != 3 {
+		t.Fatalf("derived click behavior=%#v want one click each for three distinct opportunities", clickBehavior)
 	}
 }
 
