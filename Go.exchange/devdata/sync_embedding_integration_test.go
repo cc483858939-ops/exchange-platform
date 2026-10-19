@@ -131,7 +131,7 @@ func TestDevDataEmbeddingInvalidationAcrossSyncPathsIntegration(t *testing.T) {
 	addDevDataVersionedEmbeddings(t, db, postID, post.Text)
 
 	metadataOnly := post
-	metadataOnly.Language = "fr"
+	metadataOnly.Language = "ja"
 	metadataOnly.CreatedAt = post.CreatedAt.Add(time.Minute)
 	if _, err := SyncSnapshotWithOptions(context.Background(), db, data.Registry, data.snapshot(now.Add(time.Minute), metadataOnly), nil, now.Add(time.Minute), devDataEmbeddingSyncOptions(true)); err != nil {
 		t.Fatalf("sync metadata-only Post change: %v", err)
@@ -449,6 +449,16 @@ func TestDevDataTargetedReplacementBodyChangeInvalidatesEmbeddingsIntegration(t 
 	}
 	if err := db.Create(&newAccount).Error; err != nil {
 		t.Fatalf("create previously disabled replacement account: %v", err)
+	}
+	if err := db.Model(&newAccount).Update("enabled", false).Error; err != nil {
+		t.Fatalf("persist disabled replacement account state: %v", err)
+	}
+	var storedNewAccount models.DevDataMirrorAccount
+	if err := db.First(&storedNewAccount, newAccount.ID).Error; err != nil {
+		t.Fatalf("reload previously disabled replacement account: %v", err)
+	}
+	if storedNewAccount.Enabled {
+		t.Fatalf("replacement account Enabled=%t, want false", storedNewAccount.Enabled)
 	}
 	oldContent := "it-marker-" + data.Tag + " replacement embedding A"
 	localPost := models.Post{

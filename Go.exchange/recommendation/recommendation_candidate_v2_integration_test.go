@@ -721,7 +721,7 @@ func TestRecommendationHydrationAllInvalidAuthorsReturnsEmptyIntegration(t *test
 	}
 }
 
-func TestRecommendationHydrationRetainsCandidateWithoutServingEmbeddingIntegration(t *testing.T) {
+func TestRecommendationHydrationExcludesCandidateWithoutServingEmbeddingIntegration(t *testing.T) {
 	db := openRecommendationCandidateIntegrationDB(t)
 	author := newRecommendationCandidateIntegrationUser(t, db, "missing-serving-embedding")
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
@@ -734,8 +734,8 @@ func TestRecommendationHydrationRetainsCandidateWithoutServingEmbeddingIntegrati
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hydrated) != 1 || hydrated[0].Post.ID != article.ID || hydrated[0].Embedding != nil {
-		t.Fatalf("hydrated=%+v want retained post %d with nil embedding", hydrated, article.ID)
+	if len(hydrated) != 0 {
+		t.Fatalf("hydrated=%+v, want empty", hydrated)
 	}
 }
 

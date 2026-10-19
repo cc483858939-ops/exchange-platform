@@ -157,8 +157,24 @@ func TestOnboardingInterestRecentRecallUsesUserChoicesAndExistingEligibilityInte
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(aiCandidates) != 4 || aiCandidates[0].PostID != aiValid.ID || !aiCandidates[0].FromOnboardingInterest {
-		t.Fatalf("AI recent candidates=%#v, want bounded AI post followed by ordinary fill", aiCandidates)
+	assertCandidateOrder := func(label string, candidates []Candidate, want []uint) {
+		t.Helper()
+		got := make([]uint, 0, len(candidates))
+		for _, candidate := range candidates {
+			got = append(got, candidate.PostID)
+		}
+		if len(got) != len(want) {
+			t.Fatalf("%s candidate IDs=%v, want %v", label, got, want)
+		}
+		for index := range want {
+			if got[index] != want[index] {
+				t.Fatalf("%s candidate IDs=%v, want %v", label, got, want)
+			}
+		}
+	}
+	assertCandidateOrder("AI recent", aiCandidates, []uint{aiValid.ID, neutral.ID, spaceValid.ID})
+	if !aiCandidates[0].FromOnboardingInterest {
+		t.Fatalf("AI recent candidates=%#v, want onboarding-interest Post %d first", aiCandidates, aiValid.ID)
 	}
 	assertUniqueRecommendationPostIDs(t, aiCandidates)
 	for _, candidate := range aiCandidates {
@@ -179,8 +195,9 @@ func TestOnboardingInterestRecentRecallUsesUserChoicesAndExistingEligibilityInte
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(spaceCandidates) != 4 || spaceCandidates[0].PostID != spaceValid.ID || !spaceCandidates[0].FromOnboardingInterest {
-		t.Fatalf("Space recent candidates=%#v, want Space post followed by ordinary fill", spaceCandidates)
+	assertCandidateOrder("Space recent", spaceCandidates, []uint{spaceValid.ID, neutral.ID, aiInteracted.ID, aiNotInterested.ID})
+	if !spaceCandidates[0].FromOnboardingInterest {
+		t.Fatalf("Space recent candidates=%#v, want onboarding-interest Post %d first", spaceCandidates, spaceValid.ID)
 	}
 	assertUniqueRecommendationPostIDs(t, spaceCandidates)
 	if spaceCandidates[0].PostID == aiValid.ID {
