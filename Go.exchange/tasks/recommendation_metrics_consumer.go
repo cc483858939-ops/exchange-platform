@@ -303,6 +303,12 @@ func decodeRecommendationMetricEvent(message kafka.Message) (recommendationMetri
 		!validRecommendationMetricsPayload(event.Type, payload) {
 		return recommendationMetricEvent{}, permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("recommendation behavior payload failed validation"))
 	}
+	// The durable CTR claim uses a PostgreSQL UUID column. Reject malformed
+	// request IDs before any database transaction so a poison Kafka message
+	// goes through permanent-error DLQ handling instead of retrying forever.
+	if _, err := uuid.Parse(payload.RequestID); err != nil {
+		return recommendationMetricEvent{}, permanentKafkaError(kafkaFailureCodeInvalidPayload, errors.New("recommendation request_id must be UUID"))
+	}
 	return recommendationMetricEvent{Envelope: event, Payload: payload, Message: message}, nil
 }
 
