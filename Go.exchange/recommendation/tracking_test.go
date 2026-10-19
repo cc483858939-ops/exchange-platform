@@ -88,6 +88,16 @@ func TestRecommendationRankerConfigHashIncludesServingVersion(t *testing.T) {
 	}
 }
 
+func TestRecommendationRankerConfigHashIncludesCandidateWindow(t *testing.T) {
+	cfg := serviceTestConfig()
+	cfg.CandidateWindowDays = 7
+	sevenDayHash := RankerConfigHash(cfg, "post_embedding_v1")
+	cfg.CandidateWindowDays = 5
+	if fiveDayHash := RankerConfigHash(cfg, "post_embedding_v1"); sevenDayHash == fiveDayHash {
+		t.Fatalf("candidate-window change did not change ranker hash: %q", sevenDayHash)
+	}
+}
+
 func tamperRecommendationTrackingClaim(token string, oldValue, newValue string) string {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {

@@ -13,6 +13,8 @@ type CandidateQuery struct {
 	UserID                        uint
 	ServingVersion                string
 	Now                           time.Time
+	CandidateWindowStart          time.Time
+	CandidateWindowEnd            time.Time
 	Limit                         int
 	PositiveVector                []float32
 	SemanticRecentRatio           float64
@@ -29,7 +31,10 @@ type CandidateQuery struct {
 }
 
 type PublicCandidateQuery struct {
+	ServingVersion        string
 	Now                   time.Time
+	CandidateWindowStart  time.Time
+	CandidateWindowEnd    time.Time
 	Limit                 int
 	TrendingCutoff        time.Time
 	TrendingReplyFactor   float64
@@ -44,7 +49,7 @@ type CandidateRepository interface {
 	LoadTrendingCandidates(ctx context.Context, query CandidateQuery) ([]Candidate, error)
 	LoadPublicRecentCandidates(ctx context.Context, query PublicCandidateQuery) ([]Candidate, error)
 	LoadPublicTrendingCandidates(ctx context.Context, query PublicCandidateQuery) ([]Candidate, error)
-	HydrateCandidates(ctx context.Context, servingVersion string, candidates []Candidate, now time.Time) ([]RankedCandidate, error)
+	HydrateCandidates(ctx context.Context, query CandidateQuery, candidates []Candidate) ([]RankedCandidate, error)
 	LoadPostEmbeddings(ctx context.Context, postIDs []uint, version string) (map[uint][]float32, error)
 }
 

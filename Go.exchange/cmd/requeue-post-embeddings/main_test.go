@@ -55,7 +55,7 @@ func TestRequeuePostEmbeddingsIntegration(t *testing.T) {
 		}
 		db.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
 	})
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	posts = []models.Post{
 		{AuthorID: user.ID, Content: "missing", Visibility: "public"},
 		{AuthorID: user.ID, Content: "current", Visibility: "public"},
@@ -64,7 +64,23 @@ func TestRequeuePostEmbeddingsIntegration(t *testing.T) {
 		{AuthorID: user.ID, Content: "ordinary short post", Visibility: "public"},
 		{AuthorID: user.ID, Content: "another ordinary short post", Visibility: "public"},
 		{AuthorID: user.ID, Content: "deleted", Visibility: "public"},
+		{AuthorID: user.ID, Content: "seven-day boundary", Visibility: "public"},
+		{AuthorID: user.ID, Content: "five-day boundary", Visibility: "public"},
+		{AuthorID: user.ID, Content: "older than seven days", Visibility: "public"},
+		{AuthorID: user.ID, Content: "future", Visibility: "public"},
 	}
+	for index := range posts {
+		posts[index].CreatedAt = now.Add(-time.Duration(index+1) * time.Minute)
+		posts[index].UpdatedAt = posts[index].CreatedAt
+	}
+	posts[7].CreatedAt = now.AddDate(0, 0, -7)
+	posts[7].UpdatedAt = posts[7].CreatedAt
+	posts[8].CreatedAt = now.AddDate(0, 0, -5)
+	posts[8].UpdatedAt = posts[8].CreatedAt
+	posts[9].CreatedAt = now.AddDate(0, 0, -7).Add(-time.Second)
+	posts[9].UpdatedAt = posts[9].CreatedAt
+	posts[10].CreatedAt = now.Add(time.Second)
+	posts[10].UpdatedAt = posts[10].CreatedAt
 	if err := db.Create(&posts).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -87,14 +103,14 @@ func TestRequeuePostEmbeddingsIntegration(t *testing.T) {
 	}
 
 	publisher := &reconciliationTestPublisher{}
-	stats, err := requeuePostEmbeddings(context.Background(), db, publisher, "v2", now)
+	stats, err := requeuePostEmbeddings(context.Background(), db, publisher, "v2", now, 7)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Scanned != 6 || stats.Missing != 4 || stats.StaleContent != 1 || stats.Published != 5 {
+	if stats.Scanned != 8 || stats.Missing != 6 || stats.StaleContent != 1 || stats.Published != 7 {
 		t.Fatalf("stats=%+v", stats)
 	}
-	if publisher.calls != 1 || len(publisher.events) != 5 {
+	if publisher.calls != 1 || len(publisher.events) != 7 {
 		t.Fatalf("publisher calls=%d events=%d", publisher.calls, len(publisher.events))
 	}
 	gotIDs := make(map[uint]bool, len(publisher.events))
@@ -105,14 +121,34 @@ func TestRequeuePostEmbeddingsIntegration(t *testing.T) {
 		}
 		gotIDs[payload.PostID] = true
 	}
-	for _, index := range []int{0, 2, 3, 4, 5} {
+	for _, index := range []int{0, 2, 3, 4, 5, 7, 8} {
 		if !gotIDs[posts[index].ID] {
 			t.Fatalf("missing embedding event for post %d", posts[index].ID)
 		}
 	}
-	for _, index := range []int{1, 6} {
+	for _, index := range []int{1, 6, 9, 10} {
 		if gotIDs[posts[index].ID] {
 			t.Fatalf("unexpected embedding event for post %d", posts[index].ID)
 		}
+	}
+
+	fiveDayPublisher := &reconciliationTestPublisher{}
+	fiveDayStats, err := requeuePostEmbeddings(context.Background(), db, fiveDayPublisher, "v2", now, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fiveDayStats.Scanned != 7 || fiveDayStats.Missing != 5 || fiveDayStats.StaleContent != 1 || fiveDayStats.Published != 6 {
+		t.Fatalf("five-day stats=%+v", fiveDayStats)
+	}
+	fiveDayIDs := make(map[uint]bool, len(fiveDayPublisher.events))
+	for _, event := range fiveDayPublisher.events {
+		var payload eventing.PostEmbeddingRequestedPayload
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		fiveDayIDs[payload.PostID] = true
+	}
+	if !fiveDayIDs[posts[8].ID] || fiveDayIDs[posts[7].ID] || fiveDayIDs[posts[9].ID] || fiveDayIDs[posts[10].ID] {
+		t.Fatalf("five-day reconciliation included wrong boundaries: %v", fiveDayIDs)
 	}
 }

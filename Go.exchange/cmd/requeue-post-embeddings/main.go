@@ -38,14 +38,14 @@ type requeuePost struct {
 }
 
 type postEmbeddingReconciliationScanner interface {
-	ListPage(context.Context, uint, int, string) ([]requeuePost, error)
+	ListPage(context.Context, uint, int, string, time.Time, time.Time) ([]requeuePost, error)
 }
 
 type gormPostEmbeddingReconciliationScanner struct {
 	db *gorm.DB
 }
 
-func (s gormPostEmbeddingReconciliationScanner) ListPage(ctx context.Context, lastID uint, pageSize int, buildVersion string) ([]requeuePost, error) {
+func (s gormPostEmbeddingReconciliationScanner) ListPage(ctx context.Context, lastID uint, pageSize int, buildVersion string, windowStart, windowEnd time.Time) ([]requeuePost, error) {
 	if s.db == nil {
 		return nil, errors.New("database is not initialized")
 	}
@@ -54,7 +54,13 @@ func (s gormPostEmbeddingReconciliationScanner) ListPage(ctx context.Context, la
 		Table("posts AS p").
 		Select("p.id, p.content, pe.post_id AS embedding_post_id, pe.content_hash AS embedding_content_hash").
 		Joins("LEFT JOIN post_embeddings AS pe ON pe.post_id = p.id AND pe.version = ?", buildVersion).
-		Where("p.deleted_at IS NULL AND p.id > ?", lastID).
+		Where("p.deleted_at IS NULL AND p.visibility = ? AND p.reply_to_post_id IS NULL", "public").
+		Where("p.created_at >= ? AND p.created_at <= ?", windowStart.UTC(), windowEnd.UTC()).
+		Where("p.id > ?", lastID).
+		Where(`EXISTS (
+			SELECT 1 FROM users AS u
+			WHERE u.id = p.author_id AND u.deleted_at IS NULL
+		)`).
 		Order("p.id ASC").
 		Limit(pageSize).
 		Scan(&rows).Error
@@ -77,22 +83,26 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	stats, err := requeuePostEmbeddings(ctx, global.WorkerDb, publisher, config.BuildEmbeddingVersion(), time.Now().UTC())
+	now := time.Now().UTC()
+	candidateWindowDays := config.NormalizeRecommendationCandidateWindowDays(config.AppConfig.Recommendation.CandidateWindowDays)
+	stats, err := requeuePostEmbeddings(ctx, global.WorkerDb, publisher, config.BuildEmbeddingVersion(), now, candidateWindowDays)
 	if err != nil {
 		log.Fatalf("failed to requeue post embeddings: %v", err)
 	}
-	log.Printf("post embedding reconciliation completed: scanned=%d missing=%d stale_content=%d published=%d",
+	windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, candidateWindowDays)
+	log.Printf("post embedding reconciliation completed: candidate_window_days=%d window_start=%s window_end=%s scanned=%d missing=%d stale_content=%d published=%d",
+		candidateWindowDays, windowStart.Format(time.RFC3339Nano), windowEnd.Format(time.RFC3339Nano),
 		stats.Scanned, stats.Missing, stats.StaleContent, stats.Published)
 }
 
-func requeuePostEmbeddings(ctx context.Context, db *gorm.DB, publisher eventing.BatchPublisher, buildVersion string, now time.Time) (requeueStats, error) {
+func requeuePostEmbeddings(ctx context.Context, db *gorm.DB, publisher eventing.BatchPublisher, buildVersion string, now time.Time, candidateWindowDays int) (requeueStats, error) {
 	if db == nil {
 		return requeueStats{}, errors.New("database is not initialized")
 	}
-	return reconcilePostEmbeddings(ctx, gormPostEmbeddingReconciliationScanner{db: db}, publisher, buildVersion, now)
+	return reconcilePostEmbeddings(ctx, gormPostEmbeddingReconciliationScanner{db: db}, publisher, buildVersion, now, candidateWindowDays)
 }
 
-func reconcilePostEmbeddings(ctx context.Context, scanner postEmbeddingReconciliationScanner, publisher eventing.BatchPublisher, buildVersion string, now time.Time) (requeueStats, error) {
+func reconcilePostEmbeddings(ctx context.Context, scanner postEmbeddingReconciliationScanner, publisher eventing.BatchPublisher, buildVersion string, now time.Time, candidateWindowDays int) (requeueStats, error) {
 	stats := requeueStats{}
 	if scanner == nil {
 		return stats, errors.New("post embedding reconciliation scanner is nil")
@@ -107,10 +117,11 @@ func reconcilePostEmbeddings(ctx context.Context, scanner postEmbeddingReconcili
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, candidateWindowDays)
 
 	var lastID uint
 	for {
-		rows, err := scanner.ListPage(ctx, lastID, requeuePostEmbeddingPageSize, buildVersion)
+		rows, err := scanner.ListPage(ctx, lastID, requeuePostEmbeddingPageSize, buildVersion, windowStart, windowEnd)
 		if err != nil {
 			return stats, fmt.Errorf("scan posts requiring embeddings: %w", err)
 		}

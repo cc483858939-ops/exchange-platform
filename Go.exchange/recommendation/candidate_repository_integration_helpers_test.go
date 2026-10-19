@@ -79,8 +79,10 @@ func TestDefaultRecommendationConfigIncludesTraceDispatcherDefaults(t *testing.T
 }
 
 func candidateQueryForTest(servingVersion string, userID uint, profile Profile, served ServedHistory, now time.Time, cfg config.RecommendationConfig, softOnly bool, limit int) CandidateQuery {
+	windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, cfg.CandidateWindowDays)
 	return CandidateQuery{
 		UserID: userID, ServingVersion: servingVersion, Now: now, Limit: limit,
+		CandidateWindowStart: windowStart, CandidateWindowEnd: windowEnd,
 		PositiveVector: profile.PositiveVector, SemanticRecentRatio: cfg.SemanticRecall.RecentRatio,
 		SemanticRecentCutoff: now.AddDate(0, 0, -cfg.SemanticRecall.RecentWindowDays),
 		TrendingCutoff:       now.AddDate(0, 0, -cfg.Trending.MaxAgeDays),
@@ -103,7 +105,7 @@ func servicePublicCandidateSetFromDB(db *gorm.DB, now time.Time, cfg config.Reco
 	if err != nil {
 		return CandidateSetSummary{}, err
 	}
-	return buildPublicCandidateSet(recommendationDBTestContext(db), repository, now, cfg, excluded, "fresh")
+	return buildPublicCandidateSet(recommendationDBTestContext(db), repository, "post_embedding_v1", now, cfg, excluded, "fresh")
 }
 
 func loadRecommendationSemanticCandidates(db *gorm.DB, version string, userID uint, profile Profile, served ServedHistory, now time.Time, cfg config.RecommendationConfig, softOnly bool, limit int) ([]Candidate, error) {
@@ -119,12 +121,9 @@ func loadRecommendationSemanticPool(db *gorm.DB, version string, userID uint, pr
 	if err != nil {
 		return nil, err
 	}
-	query := CandidateQuery{
-		UserID: userID, ServingVersion: version, Now: now, Limit: limit,
-		PositiveVector: profile.PositiveVector, SemanticRecentRatio: 0, SemanticRecentCutoff: cutoff,
-		Served: served, SoftOnly: softOnly, MaterializedInteractionsReady: profile.MaterializedInteractionsReady,
-		InteractedPostIDs: profile.InteractedPostIDs,
-	}
+	query := candidateQueryForTest(version, userID, profile, served, now, testDefaultRecommendationConfig(), softOnly, limit)
+	query.SemanticRecentRatio = 0
+	query.SemanticRecentCutoff = cutoff
 	_ = comparison
 	candidates, err := repository.LoadSemanticCandidates(recommendationDBTestContext(db), query)
 	if err != nil {
@@ -166,20 +165,26 @@ func loadRecommendationTrendingCandidates(db *gorm.DB, version string, userID ui
 	return repository.LoadTrendingCandidates(recommendationDBTestContext(db), candidateQueryForTest(version, userID, profile, served, now, cfg, softOnly, limit))
 }
 
-func loadPublicRecommendationSourceCandidates(db *gorm.DB, _ string, now time.Time, _ config.RecommendationConfig, _ interface{}, limit int, _ string, excluded map[uint]struct{}) ([]Candidate, error) {
+func loadPublicRecommendationSourceCandidates(db *gorm.DB, version string, now time.Time, cfg config.RecommendationConfig, _ interface{}, limit int, _ string, excluded map[uint]struct{}) ([]Candidate, error) {
 	repository, err := NewGormCandidateRepository(db)
 	if err != nil {
 		return nil, err
 	}
-	return repository.LoadPublicRecentCandidates(recommendationDBTestContext(db), PublicCandidateQuery{Now: now, Limit: limit, ExcludedPostIDs: excluded})
+	windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, cfg.CandidateWindowDays)
+	return repository.LoadPublicRecentCandidates(recommendationDBTestContext(db), PublicCandidateQuery{
+		ServingVersion: version, Now: now, CandidateWindowStart: windowStart, CandidateWindowEnd: windowEnd,
+		Limit: limit, ExcludedPostIDs: excluded,
+	})
 }
 
-func loadPublicRecommendationTrendingCandidates(db *gorm.DB, _ string, now time.Time, cfg config.RecommendationConfig, limit int, excluded map[uint]struct{}) ([]Candidate, error) {
+func loadPublicRecommendationTrendingCandidates(db *gorm.DB, version string, now time.Time, cfg config.RecommendationConfig, limit int, excluded map[uint]struct{}) ([]Candidate, error) {
 	repository, err := NewGormCandidateRepository(db)
 	if err != nil {
 		return nil, err
 	}
+	windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, cfg.CandidateWindowDays)
 	return repository.LoadPublicTrendingCandidates(recommendationDBTestContext(db), PublicCandidateQuery{
+		ServingVersion: version, CandidateWindowStart: windowStart, CandidateWindowEnd: windowEnd,
 		Now: now, Limit: limit, TrendingCutoff: now.AddDate(0, 0, -cfg.Trending.MaxAgeDays),
 		TrendingReplyFactor: cfg.Trending.ReplyFactor, TrendingHalfLifeHours: cfg.Trending.HalfLifeHours,
 		ExcludedPostIDs: excluded,
@@ -191,7 +196,9 @@ func hydrateRecommendationCandidates(db *gorm.DB, version string, candidates []C
 	if err != nil {
 		return nil, err
 	}
-	return repository.HydrateCandidates(recommendationDBTestContext(db), version, candidates, now)
+	cfg := testDefaultRecommendationConfig()
+	query := recommendationCandidateQuery(version, 0, Profile{}, nil, now, cfg, false)
+	return repository.HydrateCandidates(recommendationDBTestContext(db), query, candidates)
 }
 
 func loadMaterializedProfileForIntegration(db *gorm.DB, userID uint, version string, now time.Time, cfg config.RecommendationConfig) (Profile, error) {

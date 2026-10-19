@@ -129,13 +129,27 @@ func TestNormalizedRecommendationConfigMissingFieldsPreserveDefaults(t *testing.
 		cfg.BehaviorWeights.Click != 1 || cfg.BehaviorWeights.QualifiedRead != 2.5 ||
 		cfg.BehaviorWeights.Reply != 5 || cfg.BehaviorWeights.QuickBounce != -2 ||
 		cfg.BehaviorWeights.NotInterested != -8 ||
-		cfg.SemanticRecall.RecentWindowDays != 7 || cfg.SemanticRecall.RecentRatio != 0.85 ||
+		cfg.CandidateWindowDays != 7 || cfg.SemanticRecall.RecentWindowDays != 7 || cfg.SemanticRecall.RecentRatio != 0.85 ||
 		cfg.Trending.MaxAgeDays != 3 || cfg.Trending.HalfLifeHours != 12 || cfg.Trending.ReplyFactor != 1.5 ||
 		cfg.FollowingBonus != 0.5 ||
 		cfg.OutOfNetworkMinRatio != 0.30 || cfg.Exploration.Ratio != 0.10 || cfg.Exploration.MaxSlots != 3 ||
 		cfg.Exploration.RecentWindowDays != 7 || cfg.Exploration.NovelPostMaxAgeDays != 30 ||
 		!cfg.Diversity.Enabled || cfg.Diversity.SemanticDuplicatePenalty != 1 {
 		t.Fatalf("normalized config=%#v", cfg)
+	}
+}
+
+func TestNormalizedRecommendationCandidateWindowDefaultsAndAcceptsPositiveOverride(t *testing.T) {
+	if got := NormalizeConfig(config.RecommendationConfig{}, nil).CandidateWindowDays; got != 7 {
+		t.Fatalf("candidate window default=%d, want 7", got)
+	}
+	configured := config.RecommendationConfig{CandidateWindowDays: 5}
+	if got := NormalizeConfig(configured, nil).CandidateWindowDays; got != 5 {
+		t.Fatalf("candidate window override=%d, want 5", got)
+	}
+	configured.CandidateWindowDays = -1
+	if got := NormalizeConfig(configured, nil).CandidateWindowDays; got != 7 {
+		t.Fatalf("invalid candidate window=%d, want default 7", got)
 	}
 }
 

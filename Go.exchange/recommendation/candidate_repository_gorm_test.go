@@ -88,10 +88,10 @@ func TestAuthenticatedCandidateEligibilityFiltersMutedAuthorsBeforeLimit(t *test
 		t.Fatal(err)
 	}
 	input := CandidateQuery{
-		UserID:   73,
-		Limit:    20,
-		SoftOnly: true,
-		Served:   map[uint]ServedItem{101: {Soft: true}},
+		UserID: 73, ServingVersion: "v1", Limit: 20, SoftOnly: true,
+		CandidateWindowStart: time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC),
+		CandidateWindowEnd:   time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC),
+		Served:               map[uint]ServedItem{101: {Soft: true}},
 	}
 	query := repository.eligibilityQuery(db, db.Table("posts").Select("posts.id"), input).
 		Order("posts.created_at DESC, posts.id DESC").Limit(input.Limit)
@@ -114,6 +114,51 @@ func TestAuthenticatedCandidateEligibilityFiltersMutedAuthorsBeforeLimit(t *test
 	}
 }
 
+func TestCandidateEligibilityRequiresCurrentEmbeddingAndWindowBeforeLimit(t *testing.T) {
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: &sql.DB{}}), &gorm.Config{
+		DryRun: true, DisableAutomaticPing: true, SkipDefaultTransaction: true,
+	})
+	if err != nil {
+		t.Fatalf("open dry-run PostgreSQL database: %v", err)
+	}
+	repository, err := NewGormCandidateRepository(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := CandidateQuery{
+		UserID: 73, ServingVersion: "serving-v2", Limit: 20,
+		CandidateWindowStart: time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC),
+		CandidateWindowEnd:   time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC),
+	}
+	query := repository.eligibilityQuery(db, db.Table("posts").Select("posts.id"), input).
+		Order("posts.created_at DESC, posts.id DESC").Limit(input.Limit)
+	var rows []uint
+	if err := query.Find(&rows).Error; err != nil {
+		t.Fatalf("build dry-run candidate eligibility query: %v", err)
+	}
+	sqlText := strings.Join(strings.Fields(query.Statement.SQL.String()), " ")
+	limitIndex := strings.Index(sqlText, "LIMIT")
+	for _, fragment := range []string{"eligible_embedding.version =", "eligible_embedding.dimensions > 0", "vector_norm(eligible_embedding.embedding) > 0", "posts.created_at >=", "posts.created_at <="} {
+		index := strings.Index(sqlText, fragment)
+		if index < 0 || limitIndex < 0 || index >= limitIndex {
+			t.Fatalf("candidate query is missing pre-limit eligibility %q: %s", fragment, sqlText)
+		}
+	}
+	var sawServingVersion, sawWindowStart, sawWindowEnd bool
+	for _, value := range query.Statement.Vars {
+		switch value := value.(type) {
+		case string:
+			sawServingVersion = sawServingVersion || value == input.ServingVersion
+		case time.Time:
+			sawWindowStart = sawWindowStart || value.Equal(input.CandidateWindowStart)
+			sawWindowEnd = sawWindowEnd || value.Equal(input.CandidateWindowEnd)
+		}
+	}
+	if !sawServingVersion || !sawWindowStart || !sawWindowEnd {
+		t.Fatalf("candidate query variables omit serving version or time window: %#v", query.Statement.Vars)
+	}
+}
+
 func TestPublicCandidateQueriesRemainUnaffectedByMuteRelationships(t *testing.T) {
 	db, err := gorm.Open(postgres.New(postgres.Config{Conn: &sql.DB{}}), &gorm.Config{
 		DryRun:                 true,
@@ -123,7 +168,11 @@ func TestPublicCandidateQueriesRemainUnaffectedByMuteRelationships(t *testing.T)
 	if err != nil {
 		t.Fatalf("open dry-run PostgreSQL database: %v", err)
 	}
-	query := publicCandidateQuery(db, PublicCandidateQuery{}).Order("posts.created_at DESC").Limit(10)
+	input := PublicCandidateQuery{
+		ServingVersion: "serving-v2", CandidateWindowStart: time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC),
+		CandidateWindowEnd: time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC),
+	}
+	query := publicCandidateQuery(db, input).Order("posts.created_at DESC").Limit(10)
 	var rows []uint
 	result := query.Find(&rows)
 	if result.Error != nil {
@@ -131,5 +180,13 @@ func TestPublicCandidateQueriesRemainUnaffectedByMuteRelationships(t *testing.T)
 	}
 	if strings.Contains(strings.ToLower(result.Statement.SQL.String()), "user_mutes") {
 		t.Fatalf("guest public query was modified by mute filtering: %s", result.Statement.SQL.String())
+	}
+	sqlText := strings.Join(strings.Fields(result.Statement.SQL.String()), " ")
+	limitIndex := strings.Index(sqlText, "LIMIT")
+	for _, fragment := range []string{"eligible_embedding.version =", "eligible_embedding.dimensions > 0", "vector_norm(eligible_embedding.embedding) > 0", "posts.created_at >=", "posts.created_at <="} {
+		index := strings.Index(sqlText, fragment)
+		if index < 0 || limitIndex < 0 || index >= limitIndex {
+			t.Fatalf("public query is missing pre-limit eligibility %q: %s", fragment, sqlText)
+		}
 	}
 }

@@ -74,7 +74,7 @@ func TestRecommendationRepositoryIOHonorsCanceledContext(t *testing.T) {
 			return err
 		}},
 		{"candidate hydration", func() error {
-			_, err := candidate.HydrateCandidates(ctx, "v1", []Candidate{{PostID: 1}}, time.Now())
+			_, err := candidate.HydrateCandidates(ctx, CandidateQuery{ServingVersion: "v1", Now: time.Now()}, []Candidate{{PostID: 1}})
 			return err
 		}},
 		{"post embeddings", func() error {

@@ -8,10 +8,12 @@ import (
 	"time"
 
 	"Go.exchange/config"
+	"Go.exchange/embeddings"
 	"Go.exchange/eventing"
 	"Go.exchange/models"
 
 	"github.com/google/uuid"
+	"github.com/pgvector/pgvector-go"
 	"gorm.io/gorm"
 )
 
@@ -92,6 +94,7 @@ func TestOnboardingInterestRecentRecallUsesUserChoicesAndExistingEligibilityInte
 	}
 	spaceValid := createOnboardingInterestMappedPost(t, db, spaceAccount, spaceAuthor, "space-valid", now.Add(-time.Hour), &postIDs)
 	neutral := newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, spaceAuthor, "neutral-recent", now.Add(-30*time.Minute))
+	addOnboardingCandidateEmbedding(t, db, neutral)
 	postIDs = append(postIDs, neutral.ID)
 	if err := db.Create(&models.UserOnboardingInterest{UserID: viewer.ID, TopicSlug: "ai"}).Error; err != nil {
 		t.Fatal(err)
@@ -140,10 +143,11 @@ func TestOnboardingInterestRecentRecallUsesUserChoicesAndExistingEligibilityInte
 	if !equalStrings(aiSlugs, []string{"ai"}) || !equalStrings(spaceSlugs, []string{"space"}) {
 		t.Fatalf("interest query did not isolate users: AI=%v Space=%v", aiSlugs, spaceSlugs)
 	}
-	base := CandidateQuery{Now: now, Limit: 4, Served: ServedHistory{
+	cfg := testDefaultRecommendationConfig()
+	base := candidateQueryForTest("post_embedding_v1", 0, Profile{}, ServedHistory{
 		aiHardServed.ID: {Hard: true, LastServedAt: now.Add(-time.Minute)},
 		aiSoftServed.ID: {Soft: true, LastServedAt: now.Add(-time.Hour)},
-	}}
+	}, now, cfg, false, 4)
 	aiQuery := base
 	aiQuery.UserID = viewer.ID
 	aiQuery.OnboardingInterestSourceKeys = onboardingSourceKeys(aiSlugs, topicSources)
@@ -234,6 +238,7 @@ func createOnboardingInterestMappedPost(t *testing.T, db *gorm.DB, account model
 		t.Fatal(err)
 	}
 	*trackedPostIDs = append(*trackedPostIDs, post.ID)
+	addOnboardingCandidateEmbedding(t, db, post)
 	mapping := models.DevDataMirrorPost{
 		Platform: "x", SourcePostID: label + "-" + uuid.NewString(), SourceURL: "https://example.invalid/" + label,
 		MirrorAccountID: account.ID, LocalPostID: post.ID, SourceCreatedAt: createdAt,
@@ -243,6 +248,18 @@ func createOnboardingInterestMappedPost(t *testing.T, db *gorm.DB, account model
 		t.Fatal(err)
 	}
 	return post
+}
+
+func addOnboardingCandidateEmbedding(t *testing.T, db *gorm.DB, post models.Post) {
+	t.Helper()
+	embedding := models.PostEmbedding{
+		PostID: post.ID, Version: "post_embedding_v1", Model: "onboarding-interest-test",
+		Dimensions: 2, Embedding: pgvector.NewVector([]float32{1, 0}),
+		ContentHash: embeddings.PostEmbeddingContentHash(post.Content),
+	}
+	if err := db.Create(&embedding).Error; err != nil {
+		t.Fatalf("create serving embedding for onboarding post %d: %v", post.ID, err)
+	}
 }
 
 func countOnboardingInterestCandidates(candidates []Candidate) int {

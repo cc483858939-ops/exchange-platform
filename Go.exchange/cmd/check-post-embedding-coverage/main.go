@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"Go.exchange/config"
 	"Go.exchange/embeddings"
@@ -29,7 +30,7 @@ type postEmbeddingCoverageRow struct {
 }
 
 type postEmbeddingCoverageScanner interface {
-	ScanEligible(context.Context, string, int, func([]postEmbeddingCoverageRow) error) error
+	ScanEligible(context.Context, string, time.Time, time.Time, int, func([]postEmbeddingCoverageRow) error) error
 }
 
 type gormPostEmbeddingCoverageScanner struct {
@@ -37,15 +38,19 @@ type gormPostEmbeddingCoverageScanner struct {
 }
 
 type postEmbeddingCoverage struct {
-	TargetVersion string
-	Eligible      int64
-	Ready         int64
-	Missing       int64
-	StaleContent  int64
-	Percent       float64
+	TargetVersion       string
+	CandidateWindowDays int
+	WindowStart         time.Time
+	WindowEnd           time.Time
+	Eligible            int64
+	Ready               int64
+	Missing             int64
+	StaleContent        int64
+	Percent             float64
+	EmptyCandidateSet   bool
 }
 
-func (s gormPostEmbeddingCoverageScanner) ScanEligible(ctx context.Context, targetVersion string, pageSize int, visit func([]postEmbeddingCoverageRow) error) error {
+func (s gormPostEmbeddingCoverageScanner) ScanEligible(ctx context.Context, targetVersion string, windowStart, windowEnd time.Time, pageSize int, visit func([]postEmbeddingCoverageRow) error) error {
 	if s.db == nil {
 		return errors.New("database is not initialized")
 	}
@@ -58,7 +63,7 @@ func (s gormPostEmbeddingCoverageScanner) ScanEligible(ctx context.Context, targ
 	var lastPostID uint
 	for {
 		var rows []postEmbeddingCoverageRow
-		err := eligiblePostCoverageQuery(s.db.WithContext(ctx)).
+		err := eligiblePostCoverageQuery(s.db.WithContext(ctx), windowStart, windowEnd).
 			Joins("LEFT JOIN post_embeddings AS pe ON pe.post_id = p.id AND pe.version = ?", targetVersion).
 			Select("p.id AS post_id, p.content, pe.post_id IS NOT NULL AS has_embedding, pe.content_hash").
 			Where("p.id > ?", lastPostID).
@@ -81,11 +86,15 @@ func (s gormPostEmbeddingCoverageScanner) ScanEligible(ctx context.Context, targ
 	}
 }
 
-func eligiblePostCoverageQuery(db *gorm.DB) *gorm.DB {
+func eligiblePostCoverageQuery(db *gorm.DB, windowStart, windowEnd time.Time) *gorm.DB {
+	if windowStart.IsZero() || windowEnd.IsZero() || windowEnd.Before(windowStart) {
+		return db.Table("posts AS p").Where("1 = 0")
+	}
 	return db.Table("posts AS p").
 		Where("p.deleted_at IS NULL").
 		Where("p.visibility = ?", "public").
 		Where("p.reply_to_post_id IS NULL").
+		Where("p.created_at >= ? AND p.created_at <= ?", windowStart.UTC(), windowEnd.UTC()).
 		Where(`EXISTS (
 			SELECT 1
 			FROM users AS u
@@ -94,7 +103,7 @@ func eligiblePostCoverageQuery(db *gorm.DB) *gorm.DB {
 		)`)
 }
 
-func calculatePostEmbeddingCoverage(ctx context.Context, scanner postEmbeddingCoverageScanner, targetVersion string) (postEmbeddingCoverage, error) {
+func calculatePostEmbeddingCoverage(ctx context.Context, scanner postEmbeddingCoverageScanner, targetVersion string, now time.Time, candidateWindowDays int) (postEmbeddingCoverage, error) {
 	targetVersion = strings.TrimSpace(targetVersion)
 	if targetVersion == "" {
 		return postEmbeddingCoverage{}, errors.New("target build embedding version is required")
@@ -105,8 +114,16 @@ func calculatePostEmbeddingCoverage(ctx context.Context, scanner postEmbeddingCo
 	if ctx == nil {
 		return postEmbeddingCoverage{}, errors.New("post embedding coverage context is nil")
 	}
-	coverage := postEmbeddingCoverage{TargetVersion: targetVersion, Percent: 100}
-	err := scanner.ScanEligible(ctx, targetVersion, postEmbeddingCoveragePageSize, func(rows []postEmbeddingCoverageRow) error {
+	if now.IsZero() {
+		return postEmbeddingCoverage{}, errors.New("post embedding coverage time is required")
+	}
+	candidateWindowDays = config.NormalizeRecommendationCandidateWindowDays(candidateWindowDays)
+	windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, candidateWindowDays)
+	coverage := postEmbeddingCoverage{
+		TargetVersion: targetVersion, CandidateWindowDays: candidateWindowDays,
+		WindowStart: windowStart, WindowEnd: windowEnd,
+	}
+	err := scanner.ScanEligible(ctx, targetVersion, windowStart, windowEnd, postEmbeddingCoveragePageSize, func(rows []postEmbeddingCoverageRow) error {
 		for _, row := range rows {
 			coverage.Eligible++
 			if !row.HasEmbedding {
@@ -126,6 +143,8 @@ func calculatePostEmbeddingCoverage(ctx context.Context, scanner postEmbeddingCo
 	coverage.Missing = coverage.Eligible - coverage.Ready
 	if coverage.Eligible > 0 {
 		coverage.Percent = float64(coverage.Ready) / float64(coverage.Eligible) * 100
+	} else {
+		coverage.EmptyCandidateSet = true
 	}
 	return coverage, nil
 }
@@ -135,8 +154,10 @@ func writePostEmbeddingCoverage(w io.Writer, coverage postEmbeddingCoverage) err
 		return errors.New("coverage output writer is nil")
 	}
 	_, err := fmt.Fprintf(w,
-		"post embedding coverage:\ntarget_version=%s\neligible=%d\nready=%d\nmissing=%d\nstale_content=%d\ncoverage=%.4f%%\n",
-		coverage.TargetVersion, coverage.Eligible, coverage.Ready, coverage.Missing, coverage.StaleContent, coverage.Percent,
+		"post embedding coverage:\ntarget_version=%s\ncandidate_window_days=%d\nwindow_start=%s\nwindow_end=%s\nempty_candidate_set=%t\neligible=%d\nready=%d\nmissing=%d\nstale_content=%d\ncoverage=%.4f%%\n",
+		coverage.TargetVersion, coverage.CandidateWindowDays,
+		coverage.WindowStart.Format(time.RFC3339Nano), coverage.WindowEnd.Format(time.RFC3339Nano), coverage.EmptyCandidateSet,
+		coverage.Eligible, coverage.Ready, coverage.Missing, coverage.StaleContent, coverage.Percent,
 	)
 	return err
 }
@@ -146,10 +167,14 @@ func run(w io.Writer) error {
 	defer config.CloseDatabasePools()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	now := time.Now().UTC()
+	candidateWindowDays := config.NormalizeRecommendationCandidateWindowDays(config.AppConfig.Recommendation.CandidateWindowDays)
 	coverage, err := calculatePostEmbeddingCoverage(
 		ctx,
 		gormPostEmbeddingCoverageScanner{db: global.WorkerDb},
 		config.BuildEmbeddingVersion(),
+		now,
+		candidateWindowDays,
 	)
 	if err != nil {
 		return err

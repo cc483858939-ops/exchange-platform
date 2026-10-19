@@ -88,6 +88,21 @@ AND EXISTS (
 `)
 }
 
+func recommendationCandidateWindowAndEmbedding(query *gorm.DB, servingVersion string, windowStart, windowEnd time.Time) *gorm.DB {
+	if servingVersion == "" || windowStart.IsZero() || windowEnd.IsZero() || windowEnd.Before(windowStart) {
+		return query.Where("1 = 0")
+	}
+	return query.
+		Where("posts.created_at >= ? AND posts.created_at <= ?", windowStart.UTC(), windowEnd.UTC()).
+		Where(`EXISTS (
+			SELECT 1 FROM post_embeddings AS eligible_embedding
+			WHERE eligible_embedding.post_id = posts.id
+			  AND eligible_embedding.version = ?
+			  AND eligible_embedding.dimensions > 0
+			  AND vector_norm(eligible_embedding.embedding) > 0
+		)`, servingVersion)
+}
+
 func (r *GormCandidateRepository) eligibilityQuery(db *gorm.DB, query *gorm.DB, input CandidateQuery) *gorm.DB {
 	negative := db.Table("post_behaviors AS ni").
 		Select("1").
@@ -109,6 +124,7 @@ func (r *GormCandidateRepository) eligibilityQuery(db *gorm.DB, query *gorm.DB, 
 		Where("posts.author_id <> ?", input.UserID).
 		Where("NOT EXISTS (?)", mutedAuthor).
 		Where("NOT EXISTS (?)", negative)
+	query = recommendationCandidateWindowAndEmbedding(query, input.ServingVersion, input.CandidateWindowStart, input.CandidateWindowEnd)
 	if input.MaterializedInteractionsReady {
 		interacted := db.Table("user_post_reco_states AS rs").
 			Select("1").
@@ -364,6 +380,7 @@ func (r *GormCandidateRepository) LoadPublicTrendingCandidates(ctx context.Conte
 
 func publicCandidateQuery(db *gorm.DB, input PublicCandidateQuery) *gorm.DB {
 	query := recommendationPublicPostScope(db.Table("posts").Select("posts.id")).Where("posts.reply_to_post_id IS NULL")
+	query = recommendationCandidateWindowAndEmbedding(query, input.ServingVersion, input.CandidateWindowStart, input.CandidateWindowEnd)
 	if ids := recommendationPostIDList(input.ExcludedPostIDs); len(ids) > 0 {
 		query = query.Where("posts.id NOT IN ?", ids)
 	}
@@ -400,7 +417,7 @@ func queryCandidateIDs(query *gorm.DB, limit int, following, recent bool) ([]Can
 	return result, nil
 }
 
-func (r *GormCandidateRepository) HydrateCandidates(ctx context.Context, servingVersion string, candidates []Candidate, now time.Time) ([]RankedCandidate, error) {
+func (r *GormCandidateRepository) HydrateCandidates(ctx context.Context, input CandidateQuery, candidates []Candidate) ([]RankedCandidate, error) {
 	if len(candidates) == 0 {
 		return nil, nil
 	}
@@ -418,7 +435,7 @@ func (r *GormCandidateRepository) HydrateCandidates(ctx context.Context, serving
 		return nil, nil
 	}
 	var posts []models.Post
-	query := recommendationPublicPostScope(db.Model(&models.Post{}).Select(recommendationPublicPostColumns).Where("posts.id IN ?", ids))
+	query := r.eligibilityQuery(db, db.Model(&models.Post{}).Select(recommendationPublicPostColumns).Where("posts.id IN ?", ids), input)
 	if err := query.Preload("Author", func(tx *gorm.DB) *gorm.DB { return tx.Select("id, username, display_name, avatar_url") }).Find(&posts).Error; err != nil {
 		return nil, fmt.Errorf("load candidate posts: %w", err)
 	}
@@ -434,7 +451,7 @@ func (r *GormCandidateRepository) HydrateCandidates(ctx context.Context, serving
 	if len(validIDs) == 0 {
 		return nil, nil
 	}
-	embeddings, err := r.LoadPostEmbeddings(ctx, validIDs, servingVersion)
+	embeddings, err := r.LoadPostEmbeddings(ctx, validIDs, input.ServingVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -444,9 +461,9 @@ func (r *GormCandidateRepository) HydrateCandidates(ctx context.Context, serving
 		if !ok {
 			continue
 		}
-		embedding := embeddings[candidate.PostID]
-		if len(embedding) == 0 {
-			embedding = nil
+		embedding, ok := embeddings[candidate.PostID]
+		if !ok || !ValidEmbeddingVector(embedding) {
+			continue
 		}
 		result = append(result, RankedCandidate{Candidate: candidate, Post: post, Embedding: embedding})
 	}
@@ -503,7 +520,19 @@ func (r *GormCandidateRepository) LoadSnapshotPage(ctx context.Context, input Ca
 			embeddingIDs = append(embeddingIDs, id)
 		}
 	}
-	for _, id := range contextPostIDs {
+	validContextIDs := make([]uint, 0, len(contextPostIDs))
+	if len(contextPostIDs) > 0 {
+		contextQuery := db.Table("posts").Select("posts.id").Where("posts.id IN ?", contextPostIDs)
+		contextQuery = recommendationPublicPostScope(contextQuery).
+			Where("posts.reply_to_post_id IS NULL")
+		contextQuery = recommendationCandidateWindowAndEmbedding(
+			contextQuery, input.ServingVersion, input.CandidateWindowStart, input.CandidateWindowEnd,
+		)
+		if err := contextQuery.Pluck("posts.id", &validContextIDs).Error; err != nil {
+			return nil, nil, fmt.Errorf("load eligible snapshot context posts: %w", err)
+		}
+	}
+	for _, id := range validContextIDs {
 		if id == 0 {
 			continue
 		}
@@ -517,8 +546,8 @@ func (r *GormCandidateRepository) LoadSnapshotPage(ctx context.Context, input Ca
 		return nil, nil, err
 	}
 	contextEmbeddings := make(map[uint][]float32, len(contextPostIDs))
-	for _, id := range contextPostIDs {
-		if embedding, exists := embeddings[id]; exists {
+	for _, id := range validContextIDs {
+		if embedding, exists := embeddings[id]; exists && ValidEmbeddingVector(embedding) {
 			contextEmbeddings[id] = embedding
 		}
 	}
@@ -532,7 +561,11 @@ func (r *GormCandidateRepository) LoadSnapshotPage(ctx context.Context, input Ca
 		if !exists || post.AuthorID == 0 || post.Author.ID != post.AuthorID {
 			continue
 		}
-		result = append(result, RankedCandidate{Candidate: byID[id], Post: post, Embedding: embeddings[id]})
+		embedding, exists := embeddings[id]
+		if !exists || !ValidEmbeddingVector(embedding) {
+			continue
+		}
+		result = append(result, RankedCandidate{Candidate: byID[id], Post: post, Embedding: embedding})
 	}
 	return result, contextEmbeddings, nil
 }
@@ -551,7 +584,10 @@ func (r *GormCandidateRepository) LoadPostEmbeddings(ctx context.Context, postID
 		return nil, fmt.Errorf("load post embeddings: %w", err)
 	}
 	for _, row := range rows {
-		result[row.PostID] = append([]float32(nil), row.Embedding.Slice()...)
+		vector := row.Embedding.Slice()
+		if ValidEmbeddingVector(vector) {
+			result[row.PostID] = append([]float32(nil), vector...)
+		}
 	}
 	return result, nil
 }

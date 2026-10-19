@@ -56,6 +56,7 @@ outbox:
 
 recommendation:
   serving_timeout_ms: 5000
+  candidate_window_days: 7
   behavior_weights:
     view: 0.25
     like: 4

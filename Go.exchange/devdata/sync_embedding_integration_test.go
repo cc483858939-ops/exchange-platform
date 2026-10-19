@@ -8,9 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"Go.exchange/config"
 	"Go.exchange/embeddings"
+	"Go.exchange/embeddingstate"
 	"Go.exchange/eventing"
 	"Go.exchange/models"
+	"Go.exchange/recommendation"
 
 	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
@@ -189,6 +192,119 @@ func TestDevDataEmbeddingInvalidationAcrossSyncPathsIntegration(t *testing.T) {
 	}
 	assertDevDataEmbeddingVersions(t, db, postID)
 	assertDevDataEmbeddingOutbox(t, db, postID, 4)
+}
+
+func TestDevDataBodyChangeRequiresCurrentServingEmbeddingForRecommendationIntegration(t *testing.T) {
+	db := openDevDataIntegrationDB(t)
+	data := newSyncIntegrationData()
+	t.Cleanup(func() { cleanupDevDataIntegrationRows(db, data) })
+	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	target, _ := incrementalIntegrationTarget(t, data)
+	post := data.sourcePost(target.Key, 1710, now.Add(-time.Hour), "recommendation lifecycle A")
+	initial := data.snapshot(now, post)
+	if _, err := SyncSnapshot(context.Background(), db, data.Registry, initial, nil, now); err != nil {
+		t.Fatalf("seed recommendation lifecycle snapshot: %v", err)
+	}
+	postID := findMirrorMapping(t, db, post.SourcePostID).LocalPostID
+	var storedPost models.Post
+	if err := db.First(&storedPost, postID).Error; err != nil {
+		t.Fatalf("load recommendation lifecycle Post: %v", err)
+	}
+	viewer := models.User{Username: "it_embedding_reco_viewer_" + data.Tag, Password: "test"}
+	if err := db.Create(&viewer).Error; err != nil {
+		t.Fatalf("create recommendation lifecycle viewer: %v", err)
+	}
+	registerDevDataEmbeddingCleanup(t, db, postID, viewer.ID)
+	if err := db.Create(&models.PostBehavior{
+		UserID: viewer.ID, PostID: postID, Action: recommendation.PostBehaviorView,
+		Count: 1, LastSeenAt: now, Active: true,
+	}).Error; err != nil {
+		t.Fatalf("create profile invalidation behavior: %v", err)
+	}
+	addDevDataVersionedEmbeddings(t, db, postID, storedPost.Content)
+
+	repository, err := recommendation.NewGormCandidateRepository(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadServingCandidateIDs := func() []uint {
+		t.Helper()
+		servingVersion, err := embeddingstate.LoadServingVersion(context.Background(), db)
+		if err != nil {
+			t.Fatalf("load serving version: %v", err)
+		}
+		windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, config.DefaultRecommendationCandidateWindowDays)
+		candidates, err := repository.LoadRecentCandidates(context.Background(), recommendation.CandidateQuery{
+			UserID: viewer.ID, ServingVersion: servingVersion, Now: now,
+			CandidateWindowStart: windowStart, CandidateWindowEnd: windowEnd, Limit: 10,
+		})
+		if err != nil {
+			t.Fatalf("load %s recommendation candidates: %v", servingVersion, err)
+		}
+		ids := make([]uint, 0, len(candidates))
+		for _, candidate := range candidates {
+			ids = append(ids, candidate.PostID)
+		}
+		return ids
+	}
+	if got := loadServingCandidateIDs(); !containsUintID(got, postID) {
+		t.Fatalf("Post %d with v1 serving embedding is not eligible: %v", postID, got)
+	}
+	assertDevDataEmbeddingOutbox(t, db, postID, 0)
+
+	post.Text += " body B"
+	if _, err := SyncSnapshotWithOptions(context.Background(), db, data.Registry, data.snapshot(now.Add(time.Minute), post), nil, now.Add(time.Minute), devDataEmbeddingSyncOptions(true)); err != nil {
+		t.Fatalf("sync recommendation lifecycle body change: %v", err)
+	}
+	assertDevDataEmbeddingVersions(t, db, postID)
+	assertDevDataEmbeddingOutbox(t, db, postID, 1)
+	var dirty models.UserRecoProfileDirty
+	if err := db.Where("user_id = ?", viewer.ID).First(&dirty).Error; err != nil {
+		t.Fatalf("load dirty profile after body change: %v", err)
+	}
+	if dirty.Reason != "post_embedding_changed" {
+		t.Fatalf("dirty profile reason=%q, want post_embedding_changed", dirty.Reason)
+	}
+	if got := loadServingCandidateIDs(); containsUintID(got, postID) {
+		t.Fatalf("body-changed Post %d remained eligible under v1 after invalidation: %v", postID, got)
+	}
+
+	var changedPost models.Post
+	if err := db.First(&changedPost, postID).Error; err != nil {
+		t.Fatalf("load body-changed Post: %v", err)
+	}
+	// This row represents the Consumer's successful v2 projection for the new body.
+	if err := db.Create(&models.PostEmbedding{
+		PostID: postID, Version: "post_embedding_v2", Model: "devdata-recommendation-lifecycle",
+		Dimensions: 2, Embedding: pgvector.NewVector([]float32{0, 1}),
+		ContentHash: embeddings.PostEmbeddingContentHash(changedPost.Content), CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatalf("write current v2 projection: %v", err)
+	}
+	if got := loadServingCandidateIDs(); containsUintID(got, postID) {
+		t.Fatalf("v2 projection made Post %d eligible before serving version switch: %v", postID, got)
+	}
+	if err := embeddingstate.SetServingVersion(context.Background(), db, "post_embedding_v2"); err != nil {
+		t.Fatalf("switch serving version to v2: %v", err)
+	}
+	if got := loadServingCandidateIDs(); !containsUintID(got, postID) {
+		t.Fatalf("Post %d with current v2 projection is not eligible after serving version switch: %v", postID, got)
+	}
+	post.SourceMetrics.LikeCount++
+	if _, err := SyncSnapshotWithOptions(context.Background(), db, data.Registry, data.snapshot(now.Add(2*time.Minute), post), nil, now.Add(2*time.Minute), devDataEmbeddingSyncOptions(true)); err != nil {
+		t.Fatalf("sync non-body Post metadata: %v", err)
+	}
+	assertDevDataEmbeddingVersions(t, db, postID, "post_embedding_v2")
+	assertDevDataEmbeddingOutbox(t, db, postID, 1)
+}
+
+func containsUintID(ids []uint, want uint) bool {
+	for _, id := range ids {
+		if id == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestDevDataEmbeddingOutboxFailureRollsBackPostAndVectorsIntegration(t *testing.T) {

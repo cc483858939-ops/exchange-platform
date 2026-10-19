@@ -269,11 +269,7 @@ func (service *RecommendationService) selectSnapshotPage(ctx context.Context, re
 	var err error
 	if repository, ok := service.dependencies.Candidates.(SnapshotPageRepository); ok {
 		contextIDs := selectedSnapshotContextIDs(*snapshot, pageIndex)
-		query := CandidateQuery{
-			UserID: request.Viewer.UserID, ServingVersion: servingVersion, Now: request.Now,
-			MaterializedInteractionsReady: profile.MaterializedInteractionsReady,
-			InteractedPostIDs:             profile.InteractedPostIDs,
-		}
+		query := recommendationCandidateQuery(servingVersion, request.Viewer.UserID, profile, nil, request.Now, service.config.Recommendation, false)
 		var contextEmbeddings map[uint][]float32
 		eligible, contextEmbeddings, err = repository.LoadSnapshotPage(ctx, query, candidates, contextIDs)
 		if err != nil {
@@ -454,11 +450,7 @@ func (service *RecommendationService) loadEligibleSnapshotCandidates(ctx context
 	if !ok {
 		return nil, ErrSnapshotUnavailable
 	}
-	query := CandidateQuery{
-		UserID: request.Viewer.UserID, ServingVersion: servingVersion, Now: request.Now,
-		MaterializedInteractionsReady: profile.MaterializedInteractionsReady,
-		InteractedPostIDs:             profile.InteractedPostIDs,
-	}
+	query := recommendationCandidateQuery(servingVersion, request.Viewer.UserID, profile, nil, request.Now, service.config.Recommendation, false)
 	return repository.LoadEligibleSnapshotCandidates(ctx, query, candidates)
 }
 

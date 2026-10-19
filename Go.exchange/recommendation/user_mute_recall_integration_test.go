@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"Go.exchange/config"
 	"Go.exchange/models"
 )
 
@@ -16,6 +17,7 @@ func TestAuthenticatedRecallSourcesExcludeMutedAuthorsIntegration(t *testing.T) 
 	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 	mutedPost := newRecommendationSemanticPost(t, db, mutedAuthor, "mute-recall-muted", now.Add(-time.Hour), []float32{1, 0})
 	visiblePost := newRecommendationSemanticPost(t, db, visibleAuthor, "mute-recall-visible", now.Add(-2*time.Hour), []float32{1, 0})
+	windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, config.DefaultRecommendationCandidateWindowDays)
 	if err := db.Create(&[]models.UserFollow{
 		{FollowerID: viewer.ID, FollowingID: mutedAuthor.ID},
 		{FollowerID: viewer.ID, FollowingID: visibleAuthor.ID},
@@ -35,7 +37,7 @@ func TestAuthenticatedRecallSourcesExcludeMutedAuthorsIntegration(t *testing.T) 
 	}
 	base := CandidateQuery{
 		UserID: viewer.ID, ServingVersion: recommendationRecallV3TestVersion,
-		Now: now, Limit: 10, PositiveVector: []float32{1, 0},
+		Now: now, CandidateWindowStart: windowStart, CandidateWindowEnd: windowEnd, Limit: 10, PositiveVector: []float32{1, 0},
 		SemanticRecentRatio: 1, SemanticRecentCutoff: now.Add(-30 * 24 * time.Hour),
 		TrendingCutoff: now.Add(-30 * 24 * time.Hour), TrendingReplyFactor: 0.5, TrendingHalfLifeHours: 24,
 	}
@@ -67,7 +69,10 @@ func TestAuthenticatedRecallSourcesExcludeMutedAuthorsIntegration(t *testing.T) 
 		t.Fatalf("soft fallback candidates=%#v err=%v; muted post must not be restored", softFallback, err)
 	}
 
-	guest, err := repository.LoadPublicRecentCandidates(context.Background(), PublicCandidateQuery{Now: now, Limit: 10})
+	guest, err := repository.LoadPublicRecentCandidates(context.Background(), PublicCandidateQuery{
+		ServingVersion: recommendationRecallV3TestVersion, Now: now,
+		CandidateWindowStart: windowStart, CandidateWindowEnd: windowEnd, Limit: 10,
+	})
 	if err != nil {
 		t.Fatalf("guest recent recall: %v", err)
 	}

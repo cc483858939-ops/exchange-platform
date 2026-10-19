@@ -97,7 +97,7 @@ func (repo *controllerRecommendationCandidates) LoadPublicRecentCandidates(conte
 func (repo *controllerRecommendationCandidates) LoadPublicTrendingCandidates(context.Context, recommendation.PublicCandidateQuery) ([]recommendation.Candidate, error) {
 	return nil, nil
 }
-func (repo *controllerRecommendationCandidates) HydrateCandidates(_ context.Context, _ string, candidates []recommendation.Candidate, _ time.Time) ([]recommendation.RankedCandidate, error) {
+func (repo *controllerRecommendationCandidates) HydrateCandidates(_ context.Context, _ recommendation.CandidateQuery, candidates []recommendation.Candidate) ([]recommendation.RankedCandidate, error) {
 	items := make([]recommendation.RankedCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		items = append(items, recommendation.RankedCandidate{

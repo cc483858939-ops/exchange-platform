@@ -43,6 +43,24 @@ func TestConfigLoadingDoesNotInitializeExternalResources(t *testing.T) {
 	}
 }
 
+func TestRecommendationCandidateWindowBoundsNormalizeInUTC(t *testing.T) {
+	now := time.Date(2026, 10, 19, 9, 30, 0, 0, time.FixedZone("UTC+8", 8*60*60))
+	start, end := RecommendationCandidateWindowBounds(now, 5)
+	wantEnd := now.UTC()
+	wantStart := wantEnd.AddDate(0, 0, -5)
+	if !start.Equal(wantStart) || !end.Equal(wantEnd) || start.Location() != time.UTC || end.Location() != time.UTC {
+		t.Fatalf("5-day candidate window=%s..%s, want UTC %s..%s", start, end, wantStart, wantEnd)
+	}
+	defaultStart, defaultEnd := RecommendationCandidateWindowBounds(now, 0)
+	if !defaultStart.Equal(wantEnd.AddDate(0, 0, -DefaultRecommendationCandidateWindowDays)) || !defaultEnd.Equal(wantEnd) {
+		t.Fatalf("default candidate window=%s..%s, want %d days ending at %s", defaultStart, defaultEnd, DefaultRecommendationCandidateWindowDays, wantEnd)
+	}
+	zeroStart, zeroEnd := RecommendationCandidateWindowBounds(time.Time{}, 5)
+	if !zeroStart.IsZero() || !zeroEnd.IsZero() {
+		t.Fatalf("zero request time produced candidate window=%s..%s", zeroStart, zeroEnd)
+	}
+}
+
 func TestRecommendationSettingPresenceDetectsExplicitZeroAndFalse(t *testing.T) {
 	v := viper.New()
 	v.SetConfigType("yaml")

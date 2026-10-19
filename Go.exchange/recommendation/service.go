@@ -338,7 +338,9 @@ func (service *RecommendationService) executeUser(ctx context.Context, request S
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	freshHydrated, err := traceHydrateRecommendationCandidates(ctx, service.dependencies.Candidates, servingVersion, freshSet.Candidates, request.Now, phaseName(false))
+	freshHydrated, err := traceHydrateRecommendationCandidates(ctx, service.dependencies.Candidates,
+		recommendationCandidateQuery(servingVersion, request.Viewer.UserID, profile, served, request.Now, service.config.Recommendation, false),
+		freshSet.Candidates, phaseName(false))
 	if err != nil {
 		return result, err
 	}
@@ -368,7 +370,9 @@ func (service *RecommendationService) executeUser(ctx context.Context, request S
 		}
 		result.RecallSets = append(result.RecallSets, softSet)
 		service.recordRecallMetrics(softSet, observe)
-		softHydrated, softErr := traceHydrateRecommendationCandidates(ctx, service.dependencies.Candidates, servingVersion, softSet.Candidates, request.Now, phaseName(true))
+		softHydrated, softErr := traceHydrateRecommendationCandidates(ctx, service.dependencies.Candidates,
+			recommendationCandidateQuery(servingVersion, request.Viewer.UserID, profile, served, request.Now, service.config.Recommendation, true),
+			softSet.Candidates, phaseName(true))
 		if softErr != nil {
 			return result, softErr
 		}
@@ -403,7 +407,7 @@ func (service *RecommendationService) executeGuest(ctx context.Context, request 
 	}
 	cfg := service.config.Recommendation
 	languageContext := BuildLanguageContext(request.BrowserLanguage, LanguagePrior{}, 0, languageConfig(cfg))
-	freshSet, err := buildPublicCandidateSet(ctx, service.dependencies.Candidates, request.Now, cfg, freshGuestExclusions(served), "fresh")
+	freshSet, err := buildPublicCandidateSet(ctx, service.dependencies.Candidates, servingVersion, request.Now, cfg, freshGuestExclusions(served), "fresh")
 	if err != nil {
 		return result, err
 	}
@@ -412,7 +416,9 @@ func (service *RecommendationService) executeGuest(ctx context.Context, request 
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	hydrated, err := traceHydrateRecommendationCandidates(ctx, service.dependencies.Candidates, servingVersion, freshSet.Candidates, request.Now, "fresh")
+	hydrated, err := traceHydrateRecommendationCandidates(ctx, service.dependencies.Candidates,
+		recommendationCandidateQuery(servingVersion, 0, Profile{}, nil, request.Now, cfg, false),
+		freshSet.Candidates, "fresh")
 	if err != nil {
 		return result, err
 	}
@@ -438,13 +444,15 @@ func (service *RecommendationService) executeGuest(ctx context.Context, request 
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		fallbackSet, fallbackErr := buildPublicCandidateSet(ctx, service.dependencies.Candidates, request.Now, cfg, fallbackGuestExclusions(served, selected), "guest_fallback")
+		fallbackSet, fallbackErr := buildPublicCandidateSet(ctx, service.dependencies.Candidates, servingVersion, request.Now, cfg, fallbackGuestExclusions(served, selected), "guest_fallback")
 		if fallbackErr != nil {
 			return result, fallbackErr
 		}
 		result.RecallSets = append(result.RecallSets, fallbackSet)
 		service.recordRecallMetrics(fallbackSet, observe)
-		fallbackHydrated, fallbackErr := traceHydrateRecommendationCandidates(ctx, service.dependencies.Candidates, servingVersion, fallbackSet.Candidates, request.Now, "guest_fallback")
+		fallbackHydrated, fallbackErr := traceHydrateRecommendationCandidates(ctx, service.dependencies.Candidates,
+			recommendationCandidateQuery(servingVersion, 0, Profile{}, nil, request.Now, cfg, false),
+			fallbackSet.Candidates, "guest_fallback")
 		if fallbackErr != nil {
 			return result, fallbackErr
 		}

@@ -44,12 +44,15 @@ type serviceTestCandidateRepository struct {
 	publicCalls              int
 	softQueries              int
 	recentQueries            []CandidateQuery
+	hydrateQueries           []CandidateQuery
 	snapshotEligibilityCalls int
 	snapshotCandidateIDsRead int
 	embeddingReadCalls       int
 	snapshotEmbeddingIDsRead int
 	snapshotDatabaseQueries  int
 	snapshotPageCandidateIDs []int
+	snapshotQueries          []CandidateQuery
+	snapshotIneligibleIDs    map[uint]struct{}
 }
 
 func (repository *serviceTestCandidateRepository) addCall(value string) {
@@ -96,8 +99,9 @@ func (repository *serviceTestCandidateRepository) LoadPublicTrendingCandidates(c
 	repository.publicCalls++
 	return append([]Candidate(nil), repository.publicTrend...), repository.loadErr
 }
-func (repository *serviceTestCandidateRepository) HydrateCandidates(_ context.Context, _ string, candidates []Candidate, _ time.Time) ([]RankedCandidate, error) {
+func (repository *serviceTestCandidateRepository) HydrateCandidates(_ context.Context, query CandidateQuery, candidates []Candidate) ([]RankedCandidate, error) {
 	repository.addCall("hydrate")
+	repository.hydrateQueries = append(repository.hydrateQueries, query)
 	if repository.hydrateErr != nil {
 		return nil, repository.hydrateErr
 	}
@@ -239,6 +243,7 @@ func (enqueuer *serviceTestTraceEnqueuer) TryEnqueue(job TracePersistJob) TraceE
 
 func serviceTestConfig() config.RecommendationConfig {
 	return config.RecommendationConfig{
+		CandidateWindowDays: 7,
 		Candidates: config.RecommendationCandidatesConfig{
 			Personalized: config.RecommendationCandidateCaps{Semantic: 20, Following: 20, Recent: 20, Trending: 20, Merged: 50},
 			ColdStart:    config.RecommendationCandidateCaps{Following: 20, Recent: 20, Trending: 20, Merged: 50},
@@ -360,6 +365,18 @@ func TestRecommendationServiceGuestOwnsPublicDiversificationFallbackAndHistory(t
 	}
 	if candidates.softQueries != 0 {
 		t.Fatalf("guest serving unexpectedly used authenticated soft query count=%d", candidates.softQueries)
+	}
+	if len(candidates.hydrateQueries) == 0 {
+		t.Fatal("guest candidates were not hydrated")
+	}
+	wantWindowStart, wantWindowEnd := config.RecommendationCandidateWindowBounds(now, serviceTestConfig().CandidateWindowDays)
+	for _, query := range candidates.hydrateQueries {
+		if len(query.Served) != 0 {
+			t.Fatalf("guest hydration reapplied user served history: %+v", query.Served)
+		}
+		if query.ServingVersion != "post_embedding_v1" || !query.CandidateWindowStart.Equal(wantWindowStart) || !query.CandidateWindowEnd.Equal(wantWindowEnd) {
+			t.Fatalf("guest hydration eligibility=%+v want serving version and 7-day window", query)
+		}
 	}
 	ids := selectedPostIDs(result.Selected)
 	if len(ids) < 2 || containsPostID(ids, 3) {

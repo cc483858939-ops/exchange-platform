@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -307,6 +308,7 @@ func (c RecommendationProfileMaterializationConfig) Normalized() RecommendationP
 
 type RecommendationConfig struct {
 	ServingTimeoutMS                  int                                        `mapstructure:"serving_timeout_ms"`
+	CandidateWindowDays               int                                        `mapstructure:"candidate_window_days"`
 	BehaviorWeights                   RecommendationBehaviorWeights              `mapstructure:"behavior_weights"`
 	SemanticRecall                    RecommendationSemanticRecallConfig         `mapstructure:"semantic_recall"`
 	Fusion                            RecommendationFusionConfig                 `mapstructure:"fusion"`
@@ -335,6 +337,24 @@ type RecommendationConfig struct {
 	ProfileMaterialization            RecommendationProfileMaterializationConfig `mapstructure:"profile_materialization"`
 	LanguageAffinity                  RecommendationLanguageAffinityConfig       `mapstructure:"language_affinity"`
 	Snapshot                          RecommendationSnapshotConfig               `mapstructure:"snapshot"`
+}
+
+const DefaultRecommendationCandidateWindowDays = 7
+
+func NormalizeRecommendationCandidateWindowDays(days int) int {
+	if days <= 0 {
+		return DefaultRecommendationCandidateWindowDays
+	}
+	return days
+}
+
+func RecommendationCandidateWindowBounds(now time.Time, days int) (time.Time, time.Time) {
+	end := now.UTC()
+	if end.IsZero() {
+		return time.Time{}, time.Time{}
+	}
+	start := end.AddDate(0, 0, -NormalizeRecommendationCandidateWindowDays(days))
+	return start, end
 }
 
 type OutboxConfig struct {

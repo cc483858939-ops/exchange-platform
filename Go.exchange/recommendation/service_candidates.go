@@ -70,6 +70,21 @@ func onboardingInterestCandidateBudget(recentLimit int) int {
 	return budget
 }
 
+func recommendationCandidateQuery(servingVersion string, userID uint, profile Profile, served ServedHistory, now time.Time, cfg config.RecommendationConfig, softOnly bool) CandidateQuery {
+	windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, cfg.CandidateWindowDays)
+	return CandidateQuery{
+		UserID: userID, ServingVersion: servingVersion, Now: now,
+		CandidateWindowStart: windowStart, CandidateWindowEnd: windowEnd,
+		PositiveVector: profile.PositiveVector, SemanticRecentRatio: cfg.SemanticRecall.RecentRatio,
+		SemanticRecentCutoff: now.AddDate(0, 0, -cfg.SemanticRecall.RecentWindowDays),
+		TrendingCutoff:       now.AddDate(0, 0, -cfg.Trending.MaxAgeDays),
+		TrendingReplyFactor:  cfg.Trending.ReplyFactor, TrendingHalfLifeHours: cfg.Trending.HalfLifeHours,
+		Served: served, SoftOnly: softOnly,
+		MaterializedInteractionsReady: profile.MaterializedInteractionsReady,
+		InteractedPostIDs:             profile.InteractedPostIDs,
+	}
+}
+
 func buildCandidateSet(ctx context.Context, repository CandidateRepository, servingVersion string, userID uint, profile Profile, served ServedHistory, now time.Time, cfg config.RecommendationConfig, softOnly bool, onboarding ...onboardingInterestContext) (CandidateSetSummary, error) {
 	phase := phaseName(softOnly)
 	ctx, span := startRecommendationSpan(ctx, "recommendation.recall", attribute.String("recommendation.phase", phase))
@@ -80,16 +95,7 @@ func buildCandidateSet(ctx context.Context, repository CandidateRepository, serv
 		return CandidateSetSummary{}, err
 	}
 	caps := candidateCaps(profile, cfg)
-	query := CandidateQuery{
-		UserID: userID, ServingVersion: servingVersion, Now: now,
-		PositiveVector: profile.PositiveVector, SemanticRecentRatio: cfg.SemanticRecall.RecentRatio,
-		SemanticRecentCutoff: now.AddDate(0, 0, -cfg.SemanticRecall.RecentWindowDays),
-		TrendingCutoff:       now.AddDate(0, 0, -cfg.Trending.MaxAgeDays),
-		TrendingReplyFactor:  cfg.Trending.ReplyFactor, TrendingHalfLifeHours: cfg.Trending.HalfLifeHours,
-		Served: served, SoftOnly: softOnly,
-		MaterializedInteractionsReady: profile.MaterializedInteractionsReady,
-		InteractedPostIDs:             profile.InteractedPostIDs,
-	}
+	query := recommendationCandidateQuery(servingVersion, userID, profile, served, now, cfg, softOnly)
 	interest := onboardingInterestContext{}
 	if len(onboarding) > 0 {
 		interest = onboarding[0]
@@ -165,7 +171,7 @@ func buildCandidateSet(ctx context.Context, repository CandidateRepository, serv
 	}, nil
 }
 
-func buildPublicCandidateSet(ctx context.Context, repository CandidateRepository, now time.Time, cfg config.RecommendationConfig, excluded map[uint]struct{}, phase string) (CandidateSetSummary, error) {
+func buildPublicCandidateSet(ctx context.Context, repository CandidateRepository, servingVersion string, now time.Time, cfg config.RecommendationConfig, excluded map[uint]struct{}, phase string) (CandidateSetSummary, error) {
 	ctx, span := startRecommendationSpan(ctx, "recommendation.recall", attribute.String("recommendation.phase", phase))
 	defer span.End()
 	if repository == nil {
@@ -174,8 +180,10 @@ func buildPublicCandidateSet(ctx context.Context, repository CandidateRepository
 		return CandidateSetSummary{}, err
 	}
 	caps := cfg.Candidates.ColdStart
+	windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, cfg.CandidateWindowDays)
 	query := PublicCandidateQuery{
-		Now: now, TrendingCutoff: now.AddDate(0, 0, -cfg.Trending.MaxAgeDays),
+		ServingVersion: servingVersion, Now: now, CandidateWindowStart: windowStart, CandidateWindowEnd: windowEnd,
+		TrendingCutoff:      now.AddDate(0, 0, -cfg.Trending.MaxAgeDays),
 		TrendingReplyFactor: cfg.Trending.ReplyFactor, TrendingHalfLifeHours: cfg.Trending.HalfLifeHours,
 		ExcludedPostIDs: excluded,
 	}

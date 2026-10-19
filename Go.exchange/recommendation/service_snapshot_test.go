@@ -83,8 +83,9 @@ func (repository *serviceTestCandidateRepository) LoadEligibleSnapshotCandidates
 	return eligible, err
 }
 
-func (repository *serviceTestCandidateRepository) LoadSnapshotPage(_ context.Context, _ CandidateQuery, candidates []Candidate, contextPostIDs []uint) ([]RankedCandidate, map[uint][]float32, error) {
+func (repository *serviceTestCandidateRepository) LoadSnapshotPage(_ context.Context, query CandidateQuery, candidates []Candidate, contextPostIDs []uint) ([]RankedCandidate, map[uint][]float32, error) {
 	repository.snapshotEligibilityCalls++
+	repository.snapshotQueries = append(repository.snapshotQueries, query)
 	repository.snapshotCandidateIDsRead += len(candidates)
 	repository.embeddingReadCalls++
 	repository.snapshotEmbeddingIDsRead += len(candidates) + len(contextPostIDs)
@@ -105,6 +106,9 @@ func (repository *serviceTestCandidateRepository) LoadSnapshotPage(_ context.Con
 		}
 	}
 	for _, candidate := range candidates {
+		if _, ineligible := repository.snapshotIneligibleIDs[candidate.PostID]; ineligible {
+			continue
+		}
 		post, exists := repository.posts[candidate.PostID]
 		if !exists || post.ID == 0 || post.AuthorID == 0 {
 			continue
@@ -112,6 +116,56 @@ func (repository *serviceTestCandidateRepository) LoadSnapshotPage(_ context.Con
 		items = append(items, RankedCandidate{Candidate: candidate, Post: post, Embedding: append([]float32(nil), repository.embeddings[candidate.PostID]...)})
 	}
 	return items, contextEmbeddings, nil
+}
+
+func TestRecommendationSnapshotRevalidatesServingEmbeddingAndWindow(t *testing.T) {
+	store := newMemorySnapshotStore()
+	service, repository, now := newSnapshotTestService(t, store)
+	first := firstSnapshotResult(t, service, now)
+	snapshot, err := store.Load(context.Background(), first.PoolID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, exists := snapshotPageAt(snapshot, 0)
+	if !exists || len(page.Items) < 2 {
+		t.Fatalf("initial snapshot page=%#v, want multiple eligible posts", page)
+	}
+	invalidatedPostID := page.Items[0].PostID
+	repository.snapshotIneligibleIDs = map[uint]struct{}{invalidatedPostID: {}}
+	rematerialized, _, err := service.materializeSnapshotPage(
+		context.Background(), first.finalization.request, snapshot, page,
+		first.Profile, first.LanguageContext, first.EmbeddingVersion,
+	)
+	if err != nil {
+		t.Fatalf("rematerialize snapshot after serving embedding removal: %v", err)
+	}
+	if len(rematerialized.Selected) != len(page.Items)-1 || containsPostID(selectedPostIDs(rematerialized.Selected), invalidatedPostID) {
+		t.Fatalf("revalidated snapshot returned %v, removed Post %d, page items=%d", selectedPostIDs(rematerialized.Selected), invalidatedPostID, len(page.Items))
+	}
+	if len(repository.snapshotQueries) != 1 {
+		t.Fatalf("snapshot revalidation calls=%d, want one", len(repository.snapshotQueries))
+	}
+	query := repository.snapshotQueries[0]
+	wantStart, wantEnd := config.RecommendationCandidateWindowBounds(now, service.config.Recommendation.CandidateWindowDays)
+	if query.ServingVersion != first.EmbeddingVersion || !query.CandidateWindowStart.Equal(wantStart) || !query.CandidateWindowEnd.Equal(wantEnd) {
+		t.Fatalf("snapshot revalidation query=%+v, want serving version %q and configured window %s..%s", query, first.EmbeddingVersion, wantStart, wantEnd)
+	}
+}
+
+func TestRecommendationSnapshotCursorExpiresAfterServingVersionChanges(t *testing.T) {
+	service, _, now := newSnapshotTestService(t, newMemorySnapshotStore())
+	first := firstSnapshotResult(t, service, now)
+	if first.NextCursor == "" {
+		t.Fatal("first snapshot response has no continuation cursor")
+	}
+	service.dependencies.ServingVersions = serviceTestVersionProvider{version: "embedding-v2"}
+	_, err := service.Serve(context.Background(), ServeRequest{
+		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 20,
+		Cursor: first.NextCursor, RequestID: uuid.NewString(), Now: now.Add(time.Second),
+	})
+	if !errors.Is(err, ErrCursorExpired) {
+		t.Fatalf("cursor after serving version switch error=%v, want %v", err, ErrCursorExpired)
+	}
 }
 
 type unavailableSnapshotStore struct{ SnapshotStore }

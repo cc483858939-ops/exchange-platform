@@ -89,14 +89,14 @@ func traceRecommendationResult[T any](ctx context.Context, name string, attribut
 	return operation(span)
 }
 
-func traceHydrateRecommendationCandidates(ctx context.Context, repository CandidateRepository, servingVersion string, candidates []Candidate, now time.Time, phase string) ([]RankedCandidate, error) {
+func traceHydrateRecommendationCandidates(ctx context.Context, repository CandidateRepository, query CandidateQuery, candidates []Candidate, phase string) ([]RankedCandidate, error) {
 	if !TracingEnabled() {
-		return repository.HydrateCandidates(ctx, servingVersion, candidates, now)
+		return repository.HydrateCandidates(ctx, query, candidates)
 	}
 	attributes := []attribute.KeyValue{attribute.String("recommendation.phase", phase)}
 	spanCtx, span := startRecommendationSpan(ctx, "recommendation.hydrate", attributes...)
 	defer span.End()
-	hydrated, err := repository.HydrateCandidates(spanCtx, servingVersion, candidates, now)
+	hydrated, err := repository.HydrateCandidates(spanCtx, query, candidates)
 	span.SetAttributes(attribute.Int("recommendation.candidate_count", len(hydrated)))
 	finishRecommendationSpan(span, err)
 	return hydrated, err
