@@ -119,6 +119,10 @@ read_target_head() {
   stage="reading origin/main"
   target_head="$(git -C "$REPO_ROOT" rev-parse origin/main)" || \
     fail_stage "cannot read origin/main"
+  if [[ -n "${DEPLOY_EXPECTED_SHA:-}" ]]; then
+    [[ "$DEPLOY_EXPECTED_SHA" =~ ^[0-9a-f]{40}$ && "$target_head" == "$DEPLOY_EXPECTED_SHA" ]] || \
+      fail_stage "origin/main changed from the locked deployment SHA"
+  fi
 }
 
 ensure_state_dir() {
@@ -538,11 +542,11 @@ run_ack() {
 
 run_deploy() {
   read_current_head
+  fetch_origin_main
+  read_target_head
   runtime_from_head=""
   prepare_deploy_states
   runtime_from_head="$runtime_head"
-  fetch_origin_main
-  read_target_head
   check_fast_forward
   check_deployed_ancestry
   classify_compose_changes
@@ -566,7 +570,7 @@ run_deploy() {
 
   if [[ "$git_head" != "$target_head" ]]; then
     stage="git fast-forward"
-    git -C "$REPO_ROOT" merge --ff-only origin/main >/dev/null 2>&1 || \
+    git -C "$REPO_ROOT" merge --ff-only --no-overwrite-ignore "$target_head" >/dev/null 2>&1 || \
       fail_stage "git fast-forward failed"
     [[ "$(git -C "$REPO_ROOT" rev-parse HEAD)" == "$target_head" ]] || \
       fail_stage "HEAD after fast-forward does not match origin/main"

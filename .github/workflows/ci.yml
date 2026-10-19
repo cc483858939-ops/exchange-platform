@@ -441,12 +441,17 @@ jobs:
               assert "KAFKA_DLQ_DATABASE_DSN" not in environment(name), f"{name} received the maintenance audit DSN"
           PY
           python3 scripts/tests/worker-runtime-isolation-test.py
+          sudo python3 -B scripts/tests/production-cd-test.py
+          bash -n scripts/cd/gateway.sh
           bash -n \
             scripts/backup-postgres.sh \
             scripts/rebuild-production-data.sh \
             scripts/deploy-production.sh \
             scripts/tests/deploy-production-state-test.sh
           bash scripts/tests/deploy-production-state-test.sh
+
+      - name: Validate restricted SSH access policy
+        run: sudo bash scripts/tests/run-cd-ssh-access-tests.sh
 
       - name: Build frontend image
         run: docker build -f Exchangeapp_frontend/Dockerfile -t goexchange-frontend:ci Exchangeapp_frontend
