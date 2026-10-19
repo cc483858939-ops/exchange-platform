@@ -372,6 +372,7 @@ func (service *RecommendationService) rebuildSnapshotCandidates(ctx context.Cont
 }
 
 func (service *RecommendationService) materializeSnapshotPage(ctx context.Context, request ServeRequest, snapshot CandidatePoolSnapshot, page CachedPage, profile Profile, language LanguageContext, servingVersion string) (ServeResult, ServeRequest, error) {
+	eligibilityRequest := request
 	request.RequestID = page.RequestID
 	if !page.ServedAt.IsZero() {
 		request.Now = page.ServedAt.UTC()
@@ -391,7 +392,7 @@ func (service *RecommendationService) materializeSnapshotPage(ctx context.Contex
 		}
 		inputs = append(inputs, item.Candidate)
 	}
-	eligible, err := service.loadEligibleSnapshotCandidates(ctx, request, servingVersion, profile, inputs)
+	eligible, err := service.loadEligibleSnapshotCandidates(ctx, eligibilityRequest, servingVersion, profile, inputs)
 	if err != nil {
 		return ServeResult{}, request, err
 	}

@@ -147,11 +147,6 @@ type RecommendationDiversityConfig struct {
 	SemanticDuplicatePenalty   float64 `mapstructure:"semantic_duplicate_penalty"`
 }
 
-type RecommendationSemanticRecallConfig struct {
-	RecentWindowDays int     `mapstructure:"recent_window_days"`
-	RecentRatio      float64 `mapstructure:"recent_ratio"`
-}
-
 type RecommendationFusionConfig struct {
 	RankConstant int `mapstructure:"rank_constant"`
 }
@@ -310,7 +305,6 @@ type RecommendationConfig struct {
 	ServingTimeoutMS                  int                                        `mapstructure:"serving_timeout_ms"`
 	CandidateWindowDays               int                                        `mapstructure:"candidate_window_days"`
 	BehaviorWeights                   RecommendationBehaviorWeights              `mapstructure:"behavior_weights"`
-	SemanticRecall                    RecommendationSemanticRecallConfig         `mapstructure:"semantic_recall"`
 	Fusion                            RecommendationFusionConfig                 `mapstructure:"fusion"`
 	Trending                          RecommendationTrendingConfig               `mapstructure:"trending"`
 	Exploration                       RecommendationExplorationConfig            `mapstructure:"exploration"`
@@ -399,8 +393,6 @@ var recommendationPresenceKeys = []string{
 	"behavior_weights.reply",
 	"behavior_weights.quick_bounce",
 	"behavior_weights.not_interested",
-	"semantic_recall.recent_window_days",
-	"semantic_recall.recent_ratio",
 	"trending.max_age_days",
 	"trending.half_life_hours",
 	"trending.reply_factor",

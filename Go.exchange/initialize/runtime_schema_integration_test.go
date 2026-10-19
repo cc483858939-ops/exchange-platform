@@ -156,6 +156,14 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	expectIntegrationSchemaCode(t, tx, apiOptions, "")
 	expectIntegrationSchemaCode(t, tx, workerOptions, "")
 
+	withIntegrationSavepoint(t, tx, "missing_post_embedding_nonzero_constraint", func() {
+		embeddings := qualifiedIntegrationTable(primarySchema, "post_embeddings")
+		if err := tx.Exec("ALTER TABLE " + embeddings + " DROP CONSTRAINT chk_post_embeddings_nonzero").Error; err != nil {
+			t.Fatalf("drop PostEmbedding nonzero constraint: %v", err)
+		}
+		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_constraint_missing")
+	})
+
 	withIntegrationSavepoint(t, tx, "missing_post_language_column", func() {
 		if err := tx.Exec("ALTER TABLE " + qualifiedIntegrationTable(primarySchema, "posts") + " DROP COLUMN language").Error; err != nil {
 			t.Fatalf("drop Post language column: %v", err)

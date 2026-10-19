@@ -17,8 +17,6 @@ type CandidateQuery struct {
 	CandidateWindowEnd            time.Time
 	Limit                         int
 	PositiveVector                []float32
-	SemanticRecentRatio           float64
-	SemanticRecentCutoff          time.Time
 	TrendingCutoff                time.Time
 	TrendingReplyFactor           float64
 	TrendingHalfLifeHours         float64

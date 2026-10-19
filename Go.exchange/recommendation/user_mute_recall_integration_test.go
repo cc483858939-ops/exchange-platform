@@ -38,7 +38,6 @@ func TestAuthenticatedRecallSourcesExcludeMutedAuthorsIntegration(t *testing.T) 
 	base := CandidateQuery{
 		UserID: viewer.ID, ServingVersion: recommendationRecallV3TestVersion,
 		Now: now, CandidateWindowStart: windowStart, CandidateWindowEnd: windowEnd, Limit: 10, PositiveVector: []float32{1, 0},
-		SemanticRecentRatio: 1, SemanticRecentCutoff: now.Add(-30 * 24 * time.Hour),
 		TrendingCutoff: now.Add(-30 * 24 * time.Hour), TrendingReplyFactor: 0.5, TrendingHalfLifeHours: 24,
 	}
 	assertOnlyVisible := func(name string, candidates []Candidate, err error) {

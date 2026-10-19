@@ -75,10 +75,9 @@ func recommendationCandidateQuery(servingVersion string, userID uint, profile Pr
 	return CandidateQuery{
 		UserID: userID, ServingVersion: servingVersion, Now: now,
 		CandidateWindowStart: windowStart, CandidateWindowEnd: windowEnd,
-		PositiveVector: profile.PositiveVector, SemanticRecentRatio: cfg.SemanticRecall.RecentRatio,
-		SemanticRecentCutoff: now.AddDate(0, 0, -cfg.SemanticRecall.RecentWindowDays),
-		TrendingCutoff:       now.AddDate(0, 0, -cfg.Trending.MaxAgeDays),
-		TrendingReplyFactor:  cfg.Trending.ReplyFactor, TrendingHalfLifeHours: cfg.Trending.HalfLifeHours,
+		PositiveVector:      profile.PositiveVector,
+		TrendingCutoff:      now.AddDate(0, 0, -cfg.Trending.MaxAgeDays),
+		TrendingReplyFactor: cfg.Trending.ReplyFactor, TrendingHalfLifeHours: cfg.Trending.HalfLifeHours,
 		Served: served, SoftOnly: softOnly,
 		MaterializedInteractionsReady: profile.MaterializedInteractionsReady,
 		InteractedPostIDs:             profile.InteractedPostIDs,

@@ -380,6 +380,8 @@ func applyPostEmbeddingConstraints(tx *gorm.DB) error {
 		"ALTER TABLE post_embeddings ADD CONSTRAINT fk_post_embeddings_post FOREIGN KEY (post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE CASCADE",
 		"ALTER TABLE post_embeddings DROP CONSTRAINT IF EXISTS chk_post_embeddings_vector_dimensions",
 		"ALTER TABLE post_embeddings ADD CONSTRAINT chk_post_embeddings_vector_dimensions CHECK (vector_dims(embedding) = dimensions)",
+		"ALTER TABLE post_embeddings DROP CONSTRAINT IF EXISTS chk_post_embeddings_nonzero",
+		"ALTER TABLE post_embeddings ADD CONSTRAINT chk_post_embeddings_nonzero CHECK (vector_norm(embedding) > 0)",
 	}
 	if err := applyMigrationStatements(tx, "apply post embedding constraint", statements); err != nil {
 		return fmt.Errorf("apply post embedding constraint: %w", err)

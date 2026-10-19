@@ -167,32 +167,20 @@ func (r *GormCandidateRepository) LoadSemanticCandidates(ctx context.Context, in
 	if err != nil {
 		return nil, fmt.Errorf("load semantic candidates: %w", err)
 	}
-	recentLimit, evergreenLimit := SemanticRecallQuota(input.Limit, input.SemanticRecentRatio)
-	recent, err := r.loadSemanticPool(db, input, input.SemanticRecentCutoff, ">=", recentLimit, nil)
-	if err != nil {
-		return nil, fmt.Errorf("load recent semantic candidates: %w", err)
+	queryVector := pgvector.NewVector(input.PositiveVector)
+	query := r.eligibilityQuery(db, db.Table("post_embeddings AS ae").
+		Select("ae.post_id, 1 - (ae.embedding <=> ?) AS positive_semantic_similarity", queryVector).
+		Joins("JOIN posts ON posts.id = ae.post_id").
+		Where("ae.version = ? AND ae.dimensions = ?", input.ServingVersion, len(input.PositiveVector)), input)
+	var rows []semanticCandidateRow
+	if err := query.Clauses(clause.OrderBy{Expression: clause.Expr{
+		SQL: "ae.embedding <=> ? ASC, posts.id DESC", Vars: []interface{}{queryVector},
+	}}).Limit(input.Limit).Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("load semantic candidates: %w", err)
 	}
-	selected := make(map[uint]struct{}, len(recent)+evergreenLimit)
-	for _, candidate := range recent {
-		selected[candidate.PostID] = struct{}{}
-	}
-	evergreen, err := r.loadSemanticPool(db, input, input.SemanticRecentCutoff, "<", evergreenLimit, selected)
-	if err != nil {
-		return nil, fmt.Errorf("load evergreen semantic candidates: %w", err)
-	}
-	result := make([]Candidate, 0, input.Limit)
-	result = append(result, recent...)
-	for _, candidate := range evergreen {
-		selected[candidate.PostID] = struct{}{}
-	}
-	result = append(result, evergreen...)
-	remaining := input.Limit - len(result)
-	if remaining > 0 {
-		backfill, err := r.loadSemanticPool(db, input, time.Time{}, "", remaining, selected)
-		if err != nil {
-			return nil, fmt.Errorf("backfill semantic candidates: %w", err)
-		}
-		result = append(result, backfill...)
+	result := make([]Candidate, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, Candidate{PostID: row.PostID, PositiveSemanticSimilarity: ClampSemanticSimilarity(row.PositiveSemanticSimilarity), FromSemantic: true})
 	}
 	return result, nil
 }
@@ -200,34 +188,6 @@ func (r *GormCandidateRepository) LoadSemanticCandidates(ctx context.Context, in
 type semanticCandidateRow struct {
 	PostID                     uint
 	PositiveSemanticSimilarity float64
-}
-
-func (r *GormCandidateRepository) loadSemanticPool(db *gorm.DB, input CandidateQuery, cutoff time.Time, comparison string, limit int, excluded map[uint]struct{}) ([]Candidate, error) {
-	if limit <= 0 {
-		return nil, nil
-	}
-	queryVector := pgvector.NewVector(input.PositiveVector)
-	query := r.eligibilityQuery(db, db.Table("post_embeddings AS ae").
-		Select("ae.post_id, 1 - (ae.embedding <=> ?) AS positive_semantic_similarity", queryVector).
-		Joins("JOIN posts ON posts.id = ae.post_id").
-		Where("ae.version = ? AND ae.dimensions = ?", input.ServingVersion, len(input.PositiveVector)), input)
-	if !cutoff.IsZero() && comparison != "" {
-		query = query.Where("posts.created_at "+comparison+" ?", cutoff)
-	}
-	if ids := recommendationPostIDList(excluded); len(ids) > 0 {
-		query = query.Where("posts.id NOT IN ?", ids)
-	}
-	var rows []semanticCandidateRow
-	if err := query.Clauses(clause.OrderBy{Expression: clause.Expr{
-		SQL: "ae.embedding <=> ? ASC, posts.id DESC", Vars: []interface{}{queryVector},
-	}}).Limit(limit).Scan(&rows).Error; err != nil {
-		return nil, err
-	}
-	result := make([]Candidate, 0, len(rows))
-	for _, row := range rows {
-		result = append(result, Candidate{PostID: row.PostID, PositiveSemanticSimilarity: ClampSemanticSimilarity(row.PositiveSemanticSimilarity), FromSemantic: true})
-	}
-	return result, nil
 }
 
 func (r *GormCandidateRepository) LoadFollowingCandidates(ctx context.Context, input CandidateQuery) ([]Candidate, error) {

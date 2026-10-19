@@ -120,26 +120,6 @@ func MergeCandidates(limit int, sources ...[]Candidate) []Candidate {
 	return merged
 }
 
-func SemanticRecallQuota(cap int, recentRatio float64) (int, int) {
-	if cap <= 0 {
-		return 0, 0
-	}
-	if cap == 1 {
-		return 1, 0
-	}
-	if recentRatio <= 0 || recentRatio >= 1 {
-		recentRatio = 0.80
-	}
-	recentCap := int(math.Round(float64(cap) * recentRatio))
-	if recentCap < 1 {
-		recentCap = 1
-	}
-	if recentCap > cap-1 {
-		recentCap = cap - 1
-	}
-	return recentCap, cap - recentCap
-}
-
 func CandidatePostIDs(candidates []Candidate) []uint {
 	ids := make([]uint, 0, len(candidates))
 	for _, candidate := range candidates {

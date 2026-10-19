@@ -22,7 +22,6 @@ func testDefaultRecommendationConfig() config.RecommendationConfig {
 	cfg.BehaviorWeights = config.RecommendationBehaviorWeights{
 		View: 0.25, Like: 4, Click: 1, QualifiedRead: 2.5, Reply: 5, QuickBounce: -2, NotInterested: -8,
 	}
-	cfg.SemanticRecall = config.RecommendationSemanticRecallConfig{RecentWindowDays: 7, RecentRatio: 0.85}
 	cfg.Trending = config.RecommendationTrendingConfig{MaxAgeDays: 3, HalfLifeHours: 12, ReplyFactor: 1.5}
 	cfg.Exploration = config.RecommendationExplorationConfig{Ratio: 0.10, MaxSlots: 3, RecentWindowDays: 7, NovelPostMaxAgeDays: 30}
 	cfg.LanguageAffinity = config.RecommendationLanguageAffinityConfig{Enabled: true, Weight: 0.35, EvidenceSaturationScale: 5, MaxBehaviorShare: 0.95}
@@ -83,10 +82,9 @@ func candidateQueryForTest(servingVersion string, userID uint, profile Profile, 
 	return CandidateQuery{
 		UserID: userID, ServingVersion: servingVersion, Now: now, Limit: limit,
 		CandidateWindowStart: windowStart, CandidateWindowEnd: windowEnd,
-		PositiveVector: profile.PositiveVector, SemanticRecentRatio: cfg.SemanticRecall.RecentRatio,
-		SemanticRecentCutoff: now.AddDate(0, 0, -cfg.SemanticRecall.RecentWindowDays),
-		TrendingCutoff:       now.AddDate(0, 0, -cfg.Trending.MaxAgeDays),
-		TrendingReplyFactor:  cfg.Trending.ReplyFactor, TrendingHalfLifeHours: cfg.Trending.HalfLifeHours,
+		PositiveVector:      profile.PositiveVector,
+		TrendingCutoff:      now.AddDate(0, 0, -cfg.Trending.MaxAgeDays),
+		TrendingReplyFactor: cfg.Trending.ReplyFactor, TrendingHalfLifeHours: cfg.Trending.HalfLifeHours,
 		Served: served, SoftOnly: softOnly, MaterializedInteractionsReady: profile.MaterializedInteractionsReady,
 		InteractedPostIDs: profile.InteractedPostIDs,
 	}
@@ -114,31 +112,6 @@ func loadRecommendationSemanticCandidates(db *gorm.DB, version string, userID ui
 		return nil, err
 	}
 	return repository.LoadSemanticCandidates(recommendationDBTestContext(db), candidateQueryForTest(version, userID, profile, served, now, cfg, softOnly, limit))
-}
-
-func loadRecommendationSemanticPool(db *gorm.DB, version string, userID uint, profile Profile, served ServedHistory, now time.Time, softOnly bool, cutoff time.Time, comparison string, limit int, excluded map[uint]struct{}) ([]Candidate, error) {
-	repository, err := NewGormCandidateRepository(db)
-	if err != nil {
-		return nil, err
-	}
-	query := candidateQueryForTest(version, userID, profile, served, now, testDefaultRecommendationConfig(), softOnly, limit)
-	query.SemanticRecentRatio = 0
-	query.SemanticRecentCutoff = cutoff
-	_ = comparison
-	candidates, err := repository.LoadSemanticCandidates(recommendationDBTestContext(db), query)
-	if err != nil {
-		return nil, err
-	}
-	if len(excluded) == 0 {
-		return candidates, nil
-	}
-	filtered := make([]Candidate, 0, len(candidates))
-	for _, item := range candidates {
-		if _, excluded := excluded[item.PostID]; !excluded {
-			filtered = append(filtered, item)
-		}
-	}
-	return filtered, nil
 }
 
 func loadRecommendationFollowingCandidates(db *gorm.DB, version string, userID uint, profile Profile, served ServedHistory, now time.Time, cfg config.RecommendationConfig, softOnly bool, limit int) ([]Candidate, error) {

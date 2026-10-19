@@ -206,6 +206,7 @@ var postSchemaObjectCanaries = []schemaObjectCanary{
 		Constraints: []string{
 			"fk_post_embeddings_post",
 			"chk_post_embeddings_vector_dimensions",
+			"chk_post_embeddings_nonzero",
 		},
 		Indexes: []string{
 			"post_embeddings_pkey",

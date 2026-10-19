@@ -14,7 +14,6 @@ func DefaultConfig() config.RecommendationConfig {
 		BehaviorWeights: config.RecommendationBehaviorWeights{
 			View: 0.25, Like: 4, Click: 1, QualifiedRead: 2.5, Reply: 5, QuickBounce: -2, NotInterested: -8,
 		},
-		SemanticRecall:     config.RecommendationSemanticRecallConfig{RecentWindowDays: 7, RecentRatio: 0.85},
 		Fusion:             config.RecommendationFusionConfig{RankConstant: 60},
 		Trending:           config.RecommendationTrendingConfig{MaxAgeDays: 3, HalfLifeHours: 12, ReplyFactor: 1.5},
 		Exploration:        config.RecommendationExplorationConfig{Ratio: 0.10, MaxSlots: 3, RecentWindowDays: 7, NovelPostMaxAgeDays: 30},
@@ -119,12 +118,6 @@ func NormalizeConfig(configured config.RecommendationConfig, presence map[string
 	}
 	if settingProvided(presence, "trending.reply_factor", set.Trending.ReplyFactor != 0) {
 		cfg.Trending.ReplyFactor = set.Trending.ReplyFactor
-	}
-	if set.SemanticRecall.RecentWindowDays > 0 {
-		cfg.SemanticRecall.RecentWindowDays = set.SemanticRecall.RecentWindowDays
-	}
-	if settingProvided(presence, "semantic_recall.recent_ratio", set.SemanticRecall.RecentRatio != 0) {
-		cfg.SemanticRecall.RecentRatio = set.SemanticRecall.RecentRatio
 	}
 	if set.Trending.MaxAgeDays > 0 {
 		cfg.Trending.MaxAgeDays = set.Trending.MaxAgeDays
@@ -346,12 +339,6 @@ func NormalizeConfig(configured config.RecommendationConfig, presence map[string
 	}
 	if cfg.Trace.ShutdownDrainTimeoutMS <= 0 {
 		cfg.Trace.ShutdownDrainTimeoutMS = defaultTraceShutdownDrainTimeoutMS
-	}
-	if cfg.SemanticRecall.RecentWindowDays <= 0 {
-		cfg.SemanticRecall.RecentWindowDays = 7
-	}
-	if cfg.SemanticRecall.RecentRatio <= 0 || cfg.SemanticRecall.RecentRatio >= 1 {
-		cfg.SemanticRecall.RecentRatio = 0.85
 	}
 	if cfg.Fusion.RankConstant <= 0 {
 		cfg.Fusion.RankConstant = 60

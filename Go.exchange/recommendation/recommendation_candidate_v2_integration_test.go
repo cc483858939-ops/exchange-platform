@@ -167,24 +167,24 @@ func TestRecommendationCandidateSourcesRequireServingEmbeddingAcrossAllSourcesIn
 	v1Only := newRecommendationCandidateIntegrationPost(t, db, author, "v1-only", now.Add(-3*time.Minute))
 	v2Only := newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, author, "v2-only", now.Add(-2*time.Minute))
 	v1AndV2 := newRecommendationCandidateIntegrationPost(t, db, author, "v1-and-v2", now.Add(-time.Minute))
-	zeroVector := newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, author, "zero-vector", now.Add(-30*time.Second))
+	zeroVectorPost := newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, author, "zero-vector", now.Add(-30*time.Second))
 	addRecommendationCandidateVersion(t, db, v2Only, "post_embedding_v2")
 	addRecommendationCandidateVersion(t, db, v1AndV2, "post_embedding_v2")
 	if err := db.Create(&models.PostEmbedding{
-		PostID: zeroVector.ID, Version: "post_embedding_v1", Model: "candidate-zero-vector-test", Dimensions: 2,
-		Embedding: pgvector.NewVector([]float32{0, 0}), ContentHash: embeddings.PostEmbeddingContentHash(zeroVector.Content),
-	}).Error; err != nil {
-		t.Fatal(err)
+		PostID: zeroVectorPost.ID, Version: "post_embedding_v1", Model: "candidate-zero-vector-test", Dimensions: 2,
+		Embedding: pgvector.NewVector([]float32{0, 0}), ContentHash: embeddings.PostEmbeddingContentHash(zeroVectorPost.Content),
+	}).Error; err == nil {
+		t.Fatal("database accepted a zero-vector recommendation fixture")
 	}
 	if err := db.Create(&models.UserFollow{FollowerID: viewer.ID, FollowingID: author.ID}).Error; err != nil {
 		t.Fatal(err)
 	}
-	postIDs := []uint{noEmbedding.ID, v1Only.ID, v2Only.ID, v1AndV2.ID, zeroVector.ID}
+	postIDs := []uint{noEmbedding.ID, v1Only.ID, v2Only.ID, v1AndV2.ID, zeroVectorPost.ID}
 	userIDs := []uint{viewer.ID, author.ID}
 	registryKey := "serving-version-" + uuid.NewString()
 	account := createOnboardingInterestMirrorAccount(t, db, author, registryKey)
 	var mirrorPostIDs []uint
-	for _, post := range []models.Post{noEmbedding, v1Only, v2Only, v1AndV2, zeroVector} {
+	for _, post := range []models.Post{noEmbedding, v1Only, v2Only, v1AndV2, zeroVectorPost} {
 		addRecommendationCandidateMirrorPost(t, db, account, post, &mirrorPostIDs)
 		if err := db.Model(&models.Post{}).Where("id = ?", post.ID).Update("like_count", 1).Error; err != nil {
 			t.Fatal(err)
@@ -206,7 +206,7 @@ func TestRecommendationCandidateSourcesRequireServingEmbeddingAcrossAllSourcesIn
 	if err != nil {
 		t.Fatal(err)
 	}
-	allIDs := []uint{noEmbedding.ID, v1Only.ID, v2Only.ID, v1AndV2.ID, zeroVector.ID}
+	allIDs := []uint{noEmbedding.ID, v1Only.ID, v2Only.ID, v1AndV2.ID, zeroVectorPost.ID}
 	versions := []struct {
 		serving string
 		want    []uint
@@ -470,7 +470,7 @@ func TestRecommendationHydrationExcludesNonServingEmbeddingIntegration(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	semantic, err := loadRecommendationSemanticPool(db, servingVersion, viewer.ID, profile, served, now, false, time.Time{}, "", 10, nil)
+	semantic, err := loadRecommendationSemanticCandidates(db, servingVersion, viewer.ID, profile, served, now, testDefaultRecommendationConfig(), false, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -113,6 +113,12 @@ func (repository *serviceTestCandidateRepository) LoadSnapshotPage(_ context.Con
 		if !exists || post.ID == 0 || post.AuthorID == 0 {
 			continue
 		}
+		if !query.CandidateWindowStart.IsZero() && post.CreatedAt.Before(query.CandidateWindowStart) {
+			continue
+		}
+		if !query.CandidateWindowEnd.IsZero() && post.CreatedAt.After(query.CandidateWindowEnd) {
+			continue
+		}
 		items = append(items, RankedCandidate{Candidate: candidate, Post: post, Embedding: append([]float32(nil), repository.embeddings[candidate.PostID]...)})
 	}
 	return items, contextEmbeddings, nil
@@ -149,6 +155,58 @@ func TestRecommendationSnapshotRevalidatesServingEmbeddingAndWindow(t *testing.T
 	wantStart, wantEnd := config.RecommendationCandidateWindowBounds(now, service.config.Recommendation.CandidateWindowDays)
 	if query.ServingVersion != first.EmbeddingVersion || !query.CandidateWindowStart.Equal(wantStart) || !query.CandidateWindowEnd.Equal(wantEnd) {
 		t.Fatalf("snapshot revalidation query=%+v, want serving version %q and configured window %s..%s", query, first.EmbeddingVersion, wantStart, wantEnd)
+	}
+}
+
+func TestRecommendationSnapshotRevalidatesWindowAtCurrentRequestTime(t *testing.T) {
+	service, repository, servedAt := newSnapshotTestService(t, newMemorySnapshotStore())
+	boundaryCandidate := testCandidate(1, CandidateSourceSemantic)
+	validCandidate := testCandidate(2, CandidateSourceSemantic)
+	boundaryPost := repository.posts[boundaryCandidate.PostID]
+	boundaryPost.CreatedAt = servedAt.AddDate(0, 0, -service.config.Recommendation.CandidateWindowDays).Add(time.Second)
+	repository.posts[boundaryCandidate.PostID] = boundaryPost
+	profile := Profile{PositiveVector: []float32{1}, ProfileStatus: ProfileStatusHit}
+	page := CachedPage{
+		Index: 0, RequestID: "original-page-request", ServedAt: servedAt,
+		Items: []CachedCandidate{
+			{Candidate: boundaryCandidate, PostID: boundaryCandidate.PostID, AuthorID: boundaryPost.AuthorID, CreatedAt: boundaryPost.CreatedAt},
+			{Candidate: validCandidate, PostID: validCandidate.PostID, AuthorID: repository.posts[validCandidate.PostID].AuthorID, CreatedAt: repository.posts[validCandidate.PostID].CreatedAt},
+		},
+	}
+	snapshot := CandidatePoolSnapshot{ID: "snapshot-window-revalidation", Candidates: append([]CachedCandidate(nil), page.Items...)}
+	candidates := []Candidate{boundaryCandidate, validCandidate}
+
+	initial, err := service.loadEligibleSnapshotCandidates(context.Background(), ServeRequest{
+		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Now: servedAt,
+	}, "embedding-v1", profile, candidates)
+	if err != nil {
+		t.Fatalf("load candidates at original page time: %v", err)
+	}
+	if len(initial) != 2 {
+		t.Fatalf("original page eligible count=%d, want 2", len(initial))
+	}
+
+	currentRequestTime := servedAt.Add(2 * time.Second)
+	result, returnedRequest, err := service.materializeSnapshotPage(context.Background(), ServeRequest{
+		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 20,
+		RequestID: "retry-request", Now: currentRequestTime,
+	}, snapshot, page, profile, LanguageContext{}, "embedding-v1")
+	if err != nil {
+		t.Fatalf("revalidate cached page at retry time: %v", err)
+	}
+	if got := selectedPostIDs(result.Selected); !equalUintSlices(got, []uint{validCandidate.PostID}) {
+		t.Fatalf("revalidated page IDs=%v, want only still-valid candidate %d", got, validCandidate.PostID)
+	}
+	if result.RequestID != page.RequestID || returnedRequest.RequestID != page.RequestID || !result.Now.Equal(servedAt) || !returnedRequest.Now.Equal(servedAt) {
+		t.Fatalf("page replay metadata changed: result=%+v request=%+v, want original request ID and ServedAt", result, returnedRequest)
+	}
+	if len(repository.snapshotQueries) != 2 {
+		t.Fatalf("snapshot eligibility calls=%d, want original and retry checks", len(repository.snapshotQueries))
+	}
+	query := repository.snapshotQueries[1]
+	wantStart, wantEnd := config.RecommendationCandidateWindowBounds(currentRequestTime, service.config.Recommendation.CandidateWindowDays)
+	if !query.Now.Equal(currentRequestTime) || !query.CandidateWindowStart.Equal(wantStart) || !query.CandidateWindowEnd.Equal(wantEnd) {
+		t.Fatalf("retry eligibility query=%+v, want current-time window %s..%s", query, wantStart, wantEnd)
 	}
 }
 

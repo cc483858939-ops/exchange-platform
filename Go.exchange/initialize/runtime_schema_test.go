@@ -140,6 +140,15 @@ func TestPostEmbeddingRuntimeSchemaCanaryRequiresVersionedIdentityAndIndex(t *te
 		if canary.Table != "post_embeddings" {
 			continue
 		}
+		constraints := make(map[string]struct{}, len(canary.Constraints))
+		for _, constraint := range canary.Constraints {
+			constraints[constraint] = struct{}{}
+		}
+		for _, required := range []string{"fk_post_embeddings_post", "chk_post_embeddings_vector_dimensions", "chk_post_embeddings_nonzero"} {
+			if _, exists := constraints[required]; !exists {
+				t.Fatalf("post_embeddings schema canary is missing constraint %q: %v", required, canary.Constraints)
+			}
+		}
 		indexes := make(map[string]struct{}, len(canary.Indexes))
 		for _, index := range canary.Indexes {
 			indexes[index] = struct{}{}

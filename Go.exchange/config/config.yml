@@ -65,9 +65,6 @@ recommendation:
     reply: 5
     quick_bounce: -2
     not_interested: -8
-  semantic_recall:
-    recent_window_days: 7
-    recent_ratio: 0.85
   fusion:
     rank_constant: 60
   trending:

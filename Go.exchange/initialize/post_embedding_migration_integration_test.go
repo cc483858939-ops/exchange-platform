@@ -13,7 +13,7 @@ import (
 	"github.com/pgvector/pgvector-go"
 )
 
-func TestPostEmbeddingVectorDimensionsMigrationIntegration(t *testing.T) {
+func TestPostEmbeddingVectorConstraintsMigrationIntegration(t *testing.T) {
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
@@ -61,6 +61,14 @@ func TestPostEmbeddingVectorDimensionsMigrationIntegration(t *testing.T) {
 	if !strings.Contains(normalized, "vector_dims") || !strings.Contains(normalized, "dimensions") {
 		t.Fatalf("constraint definition=%q", definition)
 	}
+	var nonzeroDefinition string
+	if err := db.Raw("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'post_embeddings'::regclass AND conname = 'chk_post_embeddings_nonzero'").Scan(&nonzeroDefinition).Error; err != nil {
+		t.Fatal(err)
+	}
+	normalizedNonzero := strings.ToLower(nonzeroDefinition)
+	if !strings.Contains(normalizedNonzero, "vector_norm") || !strings.Contains(normalizedNonzero, ">") || !strings.Contains(normalizedNonzero, "0") {
+		t.Fatalf("nonzero constraint definition=%q", nonzeroDefinition)
+	}
 
 	user := models.User{Username: "embedding-dimension-" + uuid.NewString(), Password: "test"}
 	if err := db.Create(&user).Error; err != nil {
@@ -89,12 +97,29 @@ func TestPostEmbeddingVectorDimensionsMigrationIntegration(t *testing.T) {
 	if err := db.Create(&v1).Error; err != nil {
 		t.Fatalf("database rejected matching vector dimensions: %v", err)
 	}
+	zeroInsert := models.PostEmbedding{
+		PostID: article.ID, Version: "zero-insert", Model: "test", Dimensions: 2,
+		Embedding: pgvector.NewVector([]float32{0, 0}), ContentHash: "zero",
+	}
+	if err := db.Create(&zeroInsert).Error; err == nil {
+		t.Fatal("database accepted a zero vector insert")
+	}
 	v2 := v1
 	v2.Version = "v2"
 	v2.Model = "test-v2"
-	v2.Embedding = pgvector.NewVector([]float32{3, 4})
+	v2.Embedding = pgvector.NewVector([]float32{1, 1})
 	if err := db.Create(&v2).Error; err != nil {
 		t.Fatalf("database rejected a second embedding version: %v", err)
+	}
+	if err := db.Model(&models.PostEmbedding{}).
+		Where("post_id = ? AND version = ?", article.ID, "v2").
+		Update("embedding", pgvector.NewVector([]float32{3, 4})).Error; err != nil {
+		t.Fatalf("database rejected update to another nonzero vector: %v", err)
+	}
+	if err := db.Model(&models.PostEmbedding{}).
+		Where("post_id = ? AND version = ?", article.ID, "v2").
+		Update("embedding", pgvector.NewVector([]float32{0, 0})).Error; err == nil {
+		t.Fatal("database accepted update to a zero vector")
 	}
 	var persistedV1, persistedV2 models.PostEmbedding
 	if err := db.Where("post_id = ? AND version = ?", article.ID, "v1").First(&persistedV1).Error; err != nil {
@@ -103,7 +128,7 @@ func TestPostEmbeddingVectorDimensionsMigrationIntegration(t *testing.T) {
 	if err := db.Where("post_id = ? AND version = ?", article.ID, "v2").First(&persistedV2).Error; err != nil {
 		t.Fatalf("load v2 embedding: %v", err)
 	}
-	if persistedV1.Model != "test" || persistedV1.Embedding.Slice()[0] != 1 || persistedV2.Model != "test-v2" || persistedV2.Embedding.Slice()[0] != 3 {
+	if persistedV1.Model != "test" || persistedV1.Embedding.Slice()[0] != 1 || persistedV2.Model != "test-v2" || persistedV2.Embedding.Slice()[0] != 3 || persistedV2.Embedding.Slice()[1] != 4 {
 		t.Fatalf("coexisting embedding rows changed: v1=%+v v2=%+v", persistedV1, persistedV2)
 	}
 }

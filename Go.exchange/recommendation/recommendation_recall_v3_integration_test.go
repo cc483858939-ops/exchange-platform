@@ -57,58 +57,45 @@ func cleanupRecommendationRecallV3Data(db *gorm.DB, postIDs, userIDs []uint) {
 	}
 }
 
-func TestSemanticRecallRecentQuotaAndEvergreenReservationIntegration(t *testing.T) {
+func TestSemanticRecallUsesCandidateWindowAndCosineOrderIntegration(t *testing.T) {
 	db := openRecommendationRecallV3IntegrationDB(t)
-	viewer := newRecommendationCandidateIntegrationUser(t, db, "semantic-quota-viewer")
-	author := newRecommendationCandidateIntegrationUser(t, db, "semantic-quota-author")
+	viewer := newRecommendationCandidateIntegrationUser(t, db, "semantic-window-viewer")
+	author := newRecommendationCandidateIntegrationUser(t, db, "semantic-window-author")
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	cutoff := now.AddDate(0, 0, -30)
-	postIDs := make([]uint, 0, 7)
-	for index := 0; index < 4; index++ {
-		article := newRecommendationSemanticPost(t, db, author, "semantic-old-"+string(rune('a'+index)), cutoff.Add(-time.Duration(index+1)*24*time.Hour), []float32{1, 0})
-		postIDs = append(postIDs, article.ID)
+	best := newRecommendationSemanticPost(t, db, author, "semantic-best", now.Add(-time.Hour), []float32{1, 0})
+	second := newRecommendationSemanticPost(t, db, author, "semantic-second", now.Add(-2*24*time.Hour), []float32{0.8, 0.6})
+	third := newRecommendationSemanticPost(t, db, author, "semantic-third", now.Add(-3*24*time.Hour), []float32{0.6, 0.8})
+	fourth := newRecommendationSemanticPost(t, db, author, "semantic-fourth", now.Add(-4*24*time.Hour), []float32{0, 1})
+	expired := newRecommendationSemanticPost(t, db, author, "semantic-expired", now.Add(-8*24*time.Hour), []float32{1, 0})
+	wrongVersion := newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, author, "semantic-wrong-version", now.Add(-30*time.Minute))
+	if err := db.Create(&models.PostEmbedding{
+		PostID: wrongVersion.ID, Version: "old-semantic-version", Model: "test", Dimensions: 2,
+		Embedding: pgvector.NewVector([]float32{1, 0}), ContentHash: wrongVersion.Content,
+	}).Error; err != nil {
+		t.Fatal(err)
 	}
-	for index := 0; index < 3; index++ {
-		article := newRecommendationSemanticPost(t, db, author, "semantic-recent-"+string(rune('a'+index)), cutoff.Add(time.Duration(index+1)*24*time.Hour), []float32{0.8, 0.6})
-		postIDs = append(postIDs, article.ID)
-	}
+	postIDs := []uint{best.ID, second.ID, third.ID, fourth.ID, expired.ID, wrongVersion.ID}
 	userIDs := []uint{viewer.ID, author.ID}
 	t.Cleanup(func() { cleanupRecommendationRecallV3Data(db, postIDs, userIDs) })
 
 	cfg := testDefaultRecommendationConfig()
-	cfg.SemanticRecall.RecentWindowDays = 30
-	cfg.SemanticRecall.RecentRatio = 0.75
+	cfg.CandidateWindowDays = 7
 	profile := Profile{PositiveVector: []float32{1, 0}}
-	candidates, err := loadRecommendationSemanticCandidates(db, recommendationRecallV3TestVersion, viewer.ID, profile, map[uint]ServedItem{}, now, cfg, false, 4)
+	candidates, err := loadRecommendationSemanticCandidates(db, recommendationRecallV3TestVersion, viewer.ID, profile, map[uint]ServedItem{}, now, cfg, false, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(candidates) != 4 {
-		t.Fatalf("candidate count=%d, want 4; candidates=%#v", len(candidates), candidates)
+	wantIDs := []uint{best.ID, second.ID, third.ID}
+	if !equalUintSlices(CandidatePostIDs(candidates), wantIDs) {
+		t.Fatalf("semantic candidates=%v, want nearest in-window candidates %v (fourth=%d expired=%d wrong-version=%d)", CandidatePostIDs(candidates), wantIDs, fourth.ID, expired.ID, wrongVersion.ID)
 	}
-	recentCount := 0
-	evergreenCount := 0
-	seen := make(map[uint]struct{}, len(candidates))
-	for _, candidate := range candidates {
-		if _, exists := seen[candidate.PostID]; exists {
-			t.Fatalf("duplicate semantic article ID=%d", candidate.PostID)
+	for index, candidate := range candidates {
+		if !candidate.FromSemantic {
+			t.Fatalf("candidate %d is not marked semantic: %+v", index, candidate)
 		}
-		seen[candidate.PostID] = struct{}{}
-		var post models.Post
-		if err := db.Select("created_at").First(&post, candidate.PostID).Error; err != nil {
-			t.Fatal(err)
+		if index > 0 && candidates[index-1].PositiveSemanticSimilarity < candidate.PositiveSemanticSimilarity {
+			t.Fatalf("semantic candidates are not ordered by cosine similarity: %#v", candidates)
 		}
-		if !post.CreatedAt.Before(cutoff) {
-			recentCount++
-		} else {
-			evergreenCount++
-		}
-	}
-	if recentCount != 3 || evergreenCount != 1 {
-		t.Fatalf("recent=%d evergreen=%d, want 3/1", recentCount, evergreenCount)
-	}
-	if candidates[3].PositiveSemanticSimilarity < 0.99 {
-		t.Fatalf("evergreen reservation selected a weak candidate: %#v", candidates)
 	}
 }
 
@@ -175,64 +162,42 @@ func TestSemanticRecallPreservesRecommendationEligibilityIntegration(t *testing.
 	}
 }
 
-func TestSemanticRecallUnderfillBackfillsNearestNeighborsWithoutDuplicatesIntegration(t *testing.T) {
-	t.Run("recent underfill", func(t *testing.T) {
-		db := openRecommendationRecallV3IntegrationDB(t)
-		viewer := newRecommendationCandidateIntegrationUser(t, db, "semantic-recent-underfill-viewer")
-		author := newRecommendationCandidateIntegrationUser(t, db, "semantic-recent-underfill-author")
-		now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-		cutoff := now.AddDate(0, 0, -30)
-		postIDs := make([]uint, 0, 5)
-		recent := newRecommendationSemanticPost(t, db, author, "semantic-only-recent", cutoff.Add(time.Hour), []float32{0.7, 0.71414286})
-		postIDs = append(postIDs, recent.ID)
-		for index, vector := range [][]float32{{0.99, 0.14106782}, {0.95, 0.3122499}, {0.9, 0.4358899}, {0.8, 0.6}} {
-			article := newRecommendationSemanticPost(t, db, author, "semantic-underfill-old-"+string(rune('a'+index)), cutoff.Add(-time.Duration(index+1)*24*time.Hour), vector)
-			postIDs = append(postIDs, article.ID)
-		}
-		userIDs := []uint{viewer.ID, author.ID}
-		t.Cleanup(func() { cleanupRecommendationRecallV3Data(db, postIDs, userIDs) })
+func TestSemanticRecallUnderfillDoesNotEscapeCandidateWindowIntegration(t *testing.T) {
+	db := openRecommendationRecallV3IntegrationDB(t)
+	viewer := newRecommendationCandidateIntegrationUser(t, db, "semantic-underfill-viewer")
+	author := newRecommendationCandidateIntegrationUser(t, db, "semantic-underfill-author")
+	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	valid := newRecommendationSemanticPost(t, db, author, "semantic-window-valid", now.Add(-24*time.Hour), []float32{0.7, 0.71414286})
+	expired := newRecommendationSemanticPost(t, db, author, "semantic-window-expired", now.Add(-8*24*time.Hour), []float32{1, 0})
+	future := newRecommendationSemanticPost(t, db, author, "semantic-window-future", now.Add(time.Hour), []float32{1, 0})
+	wrongVersion := newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, author, "semantic-window-wrong-version", now.Add(-2*time.Hour))
+	if err := db.Create(&models.PostEmbedding{
+		PostID: wrongVersion.ID, Version: "old-semantic-version", Model: "test", Dimensions: 2,
+		Embedding: pgvector.NewVector([]float32{1, 0}), ContentHash: wrongVersion.Content,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	postIDs := []uint{valid.ID, expired.ID, future.ID, wrongVersion.ID}
+	userIDs := []uint{viewer.ID, author.ID}
+	t.Cleanup(func() { cleanupRecommendationRecallV3Data(db, postIDs, userIDs) })
 
-		cfg := testDefaultRecommendationConfig()
-		cfg.SemanticRecall.RecentWindowDays = 30
-		cfg.SemanticRecall.RecentRatio = 0.75
-		candidates, err := loadRecommendationSemanticCandidates(db, recommendationRecallV3TestVersion, viewer.ID, Profile{PositiveVector: []float32{1, 0}}, map[uint]ServedItem{}, now, cfg, false, 4)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(candidates) != 4 {
-			t.Fatalf("candidate count=%d, want 4; candidates=%#v", len(candidates), candidates)
-		}
-		assertUniqueRecommendationPostIDs(t, candidates)
-		if candidates[0].PostID != recent.ID {
-			t.Fatalf("recent candidate=%d, want %d; candidates=%#v", candidates[0].PostID, recent.ID, candidates)
-		}
-	})
-
-	t.Run("evergreen underfill", func(t *testing.T) {
-		db := openRecommendationRecallV3IntegrationDB(t)
-		viewer := newRecommendationCandidateIntegrationUser(t, db, "semantic-evergreen-underfill-viewer")
-		author := newRecommendationCandidateIntegrationUser(t, db, "semantic-evergreen-underfill-author")
-		now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-		postIDs := make([]uint, 0, 4)
-		for index, vector := range [][]float32{{0.99, 0.14106782}, {0.95, 0.3122499}, {0.9, 0.4358899}, {0.8, 0.6}} {
-			article := newRecommendationSemanticPost(t, db, author, "semantic-recent-only-"+string(rune('a'+index)), now.Add(-time.Duration(index+1)*time.Hour), vector)
-			postIDs = append(postIDs, article.ID)
-		}
-		userIDs := []uint{viewer.ID, author.ID}
-		t.Cleanup(func() { cleanupRecommendationRecallV3Data(db, postIDs, userIDs) })
-
-		cfg := testDefaultRecommendationConfig()
-		cfg.SemanticRecall.RecentWindowDays = 30
-		cfg.SemanticRecall.RecentRatio = 0.75
-		candidates, err := loadRecommendationSemanticCandidates(db, recommendationRecallV3TestVersion, viewer.ID, Profile{PositiveVector: []float32{1, 0}}, map[uint]ServedItem{}, now, cfg, false, 4)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(candidates) != 4 {
-			t.Fatalf("candidate count=%d, want 4; candidates=%#v", len(candidates), candidates)
-		}
-		assertUniqueRecommendationPostIDs(t, candidates)
-	})
+	cfg := testDefaultRecommendationConfig()
+	cfg.CandidateWindowDays = 7
+	profile := Profile{PositiveVector: []float32{1, 0}}
+	candidates, err := loadRecommendationSemanticCandidates(db, recommendationRecallV3TestVersion, viewer.ID, profile, map[uint]ServedItem{}, now, cfg, false, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equalUintSlices(CandidatePostIDs(candidates), []uint{valid.ID}) {
+		t.Fatalf("window-underfilled candidates=%v, want only in-window current-version post %d; expired=%d future=%d wrong-version=%d", CandidatePostIDs(candidates), valid.ID, expired.ID, future.ID, wrongVersion.ID)
+	}
+	empty, err := loadRecommendationSemanticCandidates(db, "no-current-serving-vector", viewer.ID, profile, map[uint]ServedItem{}, now, cfg, false, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("no-serving-vector candidates=%#v, want empty", empty)
+	}
 }
 
 func assertUniqueRecommendationPostIDs(t *testing.T, candidates []Candidate) {

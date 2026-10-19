@@ -31,8 +31,6 @@ func TestRecommendationRankerConfigHashIncludesV6ServingSettings(t *testing.T) {
 		name   string
 		mutate func(*config.RecommendationConfig)
 	}{
-		{name: "semantic recent window", mutate: func(cfg *config.RecommendationConfig) { cfg.SemanticRecall.RecentWindowDays++ }},
-		{name: "semantic recent ratio", mutate: func(cfg *config.RecommendationConfig) { cfg.SemanticRecall.RecentRatio = 0.75 }},
 		{name: "behavior like weight", mutate: func(cfg *config.RecommendationConfig) { cfg.BehaviorWeights.Like++ }},
 		{name: "trending weight", mutate: func(cfg *config.RecommendationConfig) { cfg.TrendingWeight++ }},
 		{name: "trending max age", mutate: func(cfg *config.RecommendationConfig) { cfg.Trending.MaxAgeDays++ }},
