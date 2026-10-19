@@ -118,10 +118,16 @@ HOST 必须与 `DEPLOY_HOST` 完全一致。新部署身份的信任根应通过
 | Variable | `DEPLOY_PORT` | 实际 SSH 端口，例如 `22` |
 | Variable | `DEPLOY_USER` | `exchange-deploy` |
 
-配置 Required reviewers、Prevent self-review；禁止管理员绕过（如计划支持），
+配置 Required reviewers；多人维护时启用 Prevent self-review，并禁止管理员绕过（如计划支持）。
+**单人维护限制**：开启 Prevent self-review 后，发起 workflow 的人不能审批自己的
+environment job，即使本人已列为 required reviewer；只有一个维护者且没有其他合格审批人时，
+check 和 deploy 都会停在等待审批。需要独立双人审批时，必须先增加可信 reviewer。
+若仓库明确采用单人手动确认，可将本人设为 required reviewer，但不能同时启用
+Prevent self-review；发起后仍需本人另行审批，这不是独立双人复核。
+选择哪种模式由维护者决定，本 PR 不自动修改审批设置或绕过门禁。
 Deployment branches and tags 只允许 **main branch**，不允许同名 tag。
 环境保护规则在 job 启动及访问 secrets 前生效。
-参见 [GitHub 部署保护规则](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/control-deployments)。
+参见 [GitHub Required reviewers 与 Prevent self-review](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments#required-reviewers)。
 若仓库计划不支持所需审批规则，停止启用生产 deploy，先解决审批机制。
 建议保护 main、禁止 force push，要求 CI 和审查；为 `.github/workflows/`、`scripts/cd/`、
 `scripts/deploy-production.sh` 配置现有 CODEOWNERS/分支保护，限制 Actions 修改权限。
@@ -149,7 +155,7 @@ Compose `pending` 会显示经过凭据字段脱敏的 diff，并**失败停止*
 
 以后真正决定升级时，再在网页选择 mode **deploy**、填写 main 的完整 SHA 并审批。
 等待审批期间 main 前进会停止，必须用新 SHA 重跑 check，不能继续旧审批静默部署新 HEAD。
-服务端反复确认 origin/main、服务器 main、干净工作树、FF ancestry、deployment ancestry；
+服务端反复确认 origin/main、服务器 main、干净的 tracked 文件、FF ancestry、deployment ancestry；
 Compose 状态合格后才 FF 到固定 SHA，并执行原有：
 
 ```sh
@@ -159,6 +165,10 @@ bash scripts/deploy-production.sh DEPLOY-PRODUCTION
 官方脚本仅增加可选 `DEPLOY_EXPECTED_SHA` 门禁与不可变 SHA 的 FF，保留原有备份、迁移、
 Kafka/CDC 初始化、运行时更新与 ACK 逻辑。入口不会复制这些逻辑。
 FF 使用 `--no-overwrite-ignore`，遇到 ignored 文件覆盖风险也停止。
+工作树门禁拒绝 tracked 文件的暂存、未暂存修改及冲突，允许不影响目标更新的已有 untracked
+和 ignored 文件。预检用 NUL 分隔的 Git 路径清单，拒绝目标文件的同名、祖先、子路径冲突，
+包括未跟踪 symlink 和被忽略的本地文件；合并时继续保留 `--no-overwrite-ignore`，
+防止预检后出现覆盖风险。不会 clean、stash、删除或搬走生产本地文件来绕过检查。
 没有 Compose 差异时允许保留较早的 Compose state SHA，只要 ancestry 和路径 diff 均正确。
 最终比对 Git/runtime SHA、目标 Schema、服务/CDC/公网健康及前后镜像账号、镜像帖子、
 总帖子、总媒体和镜像媒体数量；**任何数量下降**均停止并交人工调查，不自动回滚。
@@ -172,8 +182,14 @@ FF 使用 `--no-overwrite-ignore`，遇到 ignored 文件覆盖风险也停止�
 
 VPS：`backups/deploy/<run-id>-<attempt>.json`，目录 0700、文件 0600，包含开始/结束时间、
 完整目标 SHA、官方脚本退出码（如已执行）、最终退出码及脱敏阶段记录。
-仅保存官方脚本白名单结构字段，原始 build/SQL/异常/env 输出不落盘、不回传 Actions。
-失败排查需管理员读取容器与系统日志，避免把可能含凭据的原始日志上传到 Actions。
+正式 deploy 另写 `backups/deploy/<run-id>-<attempt>.diagnostic.log`：由 root 入口以 0600
+独占创建，所在目录 root:root 0700，拒绝覆盖已有日志或跟随符号链接。
+该文件保存完整命令 stdout/stderr、官方部署脚本合并输出、异常堆栈、开始/结束时间、
+目标 SHA、退出码与阶段标记，便于 VPS 本地诊断；其中可能有敏感诊断内容，仅管理员本地读取。
+check 不创建完整诊断日志。脱敏 JSON 在失败时提供 `diagnostic_log` 路径和 `failure_stage`；
+官方脚本失败阶段仅接受内置阶段白名单。未知异常详情只进入 VPS 日志，不回传 SSH。
+Actions 只接收白名单结构字段，客户端再次过滤响应字段；SSH 协议没有读取原始日志的命令，
+工作流只上传 runner 的 `cd-report/`，不会下载或上传 VPS 的完整日志。
 Actions job summary 和 30 天 artifact 包含 `result.json`、`execution.jsonl`；
 审批前 SHA/CI 门禁另存 `ci.json`，即使未进入 SSH job 也记录阻断结果。
 
@@ -187,6 +203,7 @@ runner 轮询 status、检查最终退出结果；45 分钟等待超时或 SSH �
 ```sh
 cat /srv/exchange-platform/backups/deploy/active.json
 cat /srv/exchange-platform/backups/deploy/RUN_ID-ATTEMPT.json
+# 在 VPS 的管理员会话中按 JSON 的 diagnostic_log 路径读取完整日志，勿上传到 Actions。
 lslocks | grep exchange-platform
 pgrep -af '/usr/local/lib/exchange-platform-cd/server.py|scripts/deploy-production.sh'
 ```
@@ -205,9 +222,10 @@ pgrep -af '/usr/local/lib/exchange-platform-cd/server.py|scripts/deploy-producti
 独立部署身份、主机指纹独立确认、Environment/Secrets、审批规则和 Actions check
 仍需按上述步骤完成。没有执行 ACK、迁移、部署、重启或数据维护。
 
-2026-10-19 本地验证：Ubuntu Linux 18 项离线测试全部通过（包含独立进程的 detached worker、
-实际文件锁、防重放和 0600 权限）；官方部署状态机 13 项通过；actionlint v1.7.7、
-Python/Bash 语法、git diff --check 通过。Windows 离线测试 17 项通过、1 项 Linux/root
-生命周期测试跳过；Linux 已补齐该项。既有 CI 的容器 job 只增加这些离线回归和入口语法检查，
+2026-10-19 本地验证：Ubuntu Linux 29 项离线测试全部通过，覆盖独立进程的 detached worker、
+实际文件锁、防重放、真实 Git 的 untracked/ignored/路径冲突、完整日志的 0600 与 root-only
+读取、故障阶段和 Actions 脱敏；另有 13 项官方部署状态机回归通过；actionlint v1.7.7、
+Python/Bash 语法、git diff --check 通过。Windows 离线测试 25 项通过、4 项 Linux/root
+专用测试跳过；Linux 已补齐。Worker 运行隔离检查通过。既有 CI 的容器 job 包含这些回归和入口语法检查，
 没有删除或放宽原检查。新增 sudo 仅在临时 hosted CI runner 内用于根身份入口模拟，
 模拟副本使用临时路径和无副作用部署函数，不连接生产服务。

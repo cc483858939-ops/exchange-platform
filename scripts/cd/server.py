@@ -1,12 +1,16 @@
 #!/usr/bin/python3
 """Root-owned, forced-command SSH gateway. No caller-supplied paths or shell."""
 import datetime
+import contextlib
+import contextvars
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
+import shlex
 import subprocess
 import sys
+import traceback
 
 ROOT = Path("/srv/exchange-platform")
 LOGS = ROOT / "backups/deploy"
@@ -17,6 +21,16 @@ ENV = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
        "HOME": "/root", "LANG": "C.UTF-8", "GIT_TERMINAL_PROMPT": "0"}
 SHA = r"[0-9a-f]{40}"
 REQUEST = re.compile(rf"(check|deploy|status) ({SHA}) ([0-9]{{1,20}}-[0-9]{{1,5}})")
+DIAGNOSTIC = contextvars.ContextVar("diagnostic", default=None)
+OFFICIAL_STAGES = {
+    "startup", "deployment lock", "preconditions", "Compose static validation",
+    "git fetch origin main", "reading current Git head", "reading origin/main",
+    "deployment state directory", "deployment state permissions", "fast-forward ancestry check",
+    "deployment state ancestry check", "classifying runtime Git changes", "classifying Compose Git changes",
+    "internal readiness", "public health", "PostgreSQL backup", "initialization: migrate",
+    "initialization: kafka-init", "initialization: cdc-init", "git fast-forward",
+    "post-merge Compose static validation", "backend image build", "API and Worker update", "Caddy update",
+}
 
 
 class GateError(Exception):
@@ -32,12 +46,61 @@ def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
+def diagnostic_write(text):
+    stream = DIAGNOSTIC.get()
+    if stream is not None:
+        stream.write(text)
+        stream.flush()
+
+
+def stage(record, name):
+    record["stage"] = name
+    diagnostic_write(f"\n{now()} stage={name}\n")
+
+
+@contextlib.contextmanager
+def diagnostics(mode, record):
+    if mode != "deploy":
+        yield
+        return
+    path = LOGS / (record["request_id"] + ".diagnostic.log")
+    # Never truncate an earlier run or follow a link to another file. The
+    # root-only gateway creates this under its root-owned 0700 log directory.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    os.chmod(path, 0o600)
+    record["diagnostic_log"] = str(path)
+    with os.fdopen(fd, "w", encoding="utf-8", errors="backslashreplace") as stream:
+        token = DIAGNOSTIC.set(stream)
+        try:
+            diagnostic_write(f'started_at={record["started_at"]}\ntarget_sha={record["target_sha"]}\n')
+            yield
+        finally:
+            try:
+                diagnostic_write(f'\nfinished_at={now()}\nstatus={record["status"]}\n'
+                                 f'exit_code={record["exit_code"]}\n'
+                                 f'failure_stage={record.get("failure_stage", "none")}\n')
+                os.fsync(stream.fileno())
+            finally:
+                DIAGNOSTIC.reset(token)
+
+
 def command(args, timeout=120):
-    # Never emit stderr: Compose/build/connector errors may contain credentials.
-    result = subprocess.run(args, cwd=ROOT, env=ENV, stdin=subprocess.DEVNULL,
-                            capture_output=True, text=True, timeout=timeout)
+    # Full diagnostics stay local; stdout/stderr are never echoed to SSH.
+    diagnostic_write("\ncommand=" + shlex.join(args) + "\n")
+    try:
+        result = subprocess.run(args, cwd=ROOT, env=ENV, stdin=subprocess.DEVNULL,
+                                capture_output=True, text=True, encoding="utf-8", errors="backslashreplace", timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        for output in (error.stdout, error.stderr):
+            if output:
+                diagnostic_write(output.decode("utf-8", errors="backslashreplace") if isinstance(output, bytes) else output)
+        diagnostic_write("\ncommand_timeout=yes\n")
+        raise
+    diagnostic_write("stdout:\n" + result.stdout + "\nstderr:\n" + result.stderr +
+                     f"\ncommand_exit_code={result.returncode}\n")
     require(result.returncode == 0, "command-failed:" + Path(args[0]).name)
-    return result.stdout.strip()
+    # Keep leading whitespace intact for NUL-delimited Git path output.
+    return result.stdout.rstrip("\n")
 
 
 def git(*args):
@@ -76,7 +139,7 @@ def state(name):
 
 def assert_target(sha):
     require(git("branch", "--show-current") == "main", "server-branch-not-main")
-    require(not git("status", "--porcelain", "--untracked-files=normal"), "server-working-tree-not-clean")
+    require(not git("status", "--porcelain", "--untracked-files=no"), "server-tracked-working-tree-not-clean")
     require(git("remote", "get-url", "origin") in (
         "https://github.com/cc483858939-ops/exchange-platform.git",
         "git@github.com:cc483858939-ops/exchange-platform.git"), "unexpected-origin")
@@ -87,6 +150,20 @@ def assert_target(sha):
     git("merge-base", "--is-ancestor", "HEAD", sha)
     git("merge-base", "--is-ancestor", state("last-successful-runtime-commit"), sha)
     git("merge-base", "--is-ancestor", state("last-applied-compose-commit"), sha)
+    assert_safe_update(sha)
+
+
+def assert_safe_update(sha):
+    # Compare only paths that the target writes. --others with no exclude
+    # options includes ignored files too; NUL delimiters preserve odd names.
+    writes = set(filter(None, git("diff", "--name-only", "--no-renames", "--diff-filter=ACMT",
+                                 "-z", "HEAD", sha, "--").split("\0")))
+    parents = {str(parent) for name in writes for parent in PurePosixPath(name).parents if str(parent) != "."}
+    for name in filter(None, git("ls-files", "--others", "-z", "--").split("\0")):
+        name = name.rstrip("/")
+        ancestors = {str(parent) for parent in PurePosixPath(name).parents if str(parent) != "."}
+        require(name not in writes and name not in parents and not ancestors.intersection(writes),
+                "untracked-path-conflicts-with-target")
 
 
 def schema_contract(sha):
@@ -152,21 +229,28 @@ def official(mode, sha, record):
     env = dict(ENV, DEPLOY_EXPECTED_SHA=sha)
     process = subprocess.Popen(["bash", "scripts/deploy-production.sh", mode], cwd=ROOT, env=env,
                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               text=True)
-    # Allowlist only known structured fields. Build output, SQL, env and arbitrary
-    # errors never enter persistent logs or Actions. No raw temporary log exists.
+                               text=True, encoding="utf-8", errors="backslashreplace")
+    diagnostic_write(f"\ncommand=bash scripts/deploy-production.sh {mode}\n")
+    # Raw output goes only to the root-only local diagnostic stream. The
+    # structured report/SSH response still uses a strict allowlist.
     values = {}
     allowed = {"git_commit", "target_commit", "runtime_commit", "compose_commit",
                "runtime_status", "compose_status", "backend_runtime_changed",
                "devdata_registry_changed", "caddy_changed", "api_ready", "worker_ready", "public_health"}
     for line in process.stdout:
+        diagnostic_write(line)
         key, sep, value = line.strip().partition("=")
+        if key == "stage" and value in OFFICIAL_STAGES:
+            record["official_failure_stage"] = value
         if sep and key in allowed and re.fullmatch(r"[a-z0-9-]{1,64}", value):
             values[key] = value
             record.setdefault("official", []).append({key: value})
             write_json(LOGS / (record["request_id"] + ".json"), record)
     rc = process.wait()
     record["official_exit_code"] = rc
+    diagnostic_write(f"\nofficial_exit_code={rc}\n")
+    if rc != 0:
+        record["failure_stage"] = "official:" + record.get("official_failure_stage", mode)
     require(rc == 0, "official-script-failed:" + mode)
     return values
 
@@ -180,9 +264,12 @@ def compose_diff(base, sha):
 
 
 def preflight(sha, record):
+    stage(record, "preflight-git")
     assert_target(sha)
+    stage(record, "official-check")
     values = official("CHECK", sha, record)
     require(values.get("target_commit") == sha, "official-check-target-mismatch")
+    stage(record, "preflight-schema-and-snapshot")
     contract = schema_contract(sha)
     record.update(git_head=git("rev-parse", "HEAD"),
                   runtime_commit=state("last-successful-runtime-commit"),
@@ -193,11 +280,13 @@ def preflight(sha, record):
     record["risk"] = ("Migration raises schema compatibility floor; no automatic rollback or retry."
                       if record["migration_required"] else "No schema version increase expected.")
     if values.get("compose_status") == "pending":
+        stage(record, "compose-review-gate")
         record["compose_diff"] = compose_diff(record["compose_commit"], sha)
         record["health"] = health()
         raise GateError("compose-pending:manual-review-apply-verify-and-official-ACK-required")
     require(values.get("compose_status") == "up-to-date", "compose-state-not-initialized")
     require(not git("diff", record["compose_commit"], sha, "--", "deploy/compose.prod.yml"), "compose-diff-without-ACK")
+    stage(record, "preflight-health")
     record["health"] = health()
 
 
@@ -205,26 +294,33 @@ def deploy(sha, record):
     preflight(sha, record)
     # Revalidate after preflight, then fast-forward only the immutable commit.
     # Advancing Git is allowed only in deploy mode, after the Compose gate.
+    stage(record, "git-revalidation")
     assert_target(sha)
     pinned_script = git("show", sha + ":scripts/deploy-production.sh")
     require('DEPLOY_EXPECTED_SHA' in pinned_script, "target-lacks-official-sha-guard")
     record["mutation_started"] = True
     write_json(LOGS / (record["request_id"] + ".json"), record)
+    stage(record, "git-fast-forward")
     git("merge", "--ff-only", "--no-overwrite-ignore", sha)
     require(git("rev-parse", "HEAD") == sha, "post-ff-sha-mismatch")
+    stage(record, "post-fast-forward-validation")
     assert_target(sha)
+    stage(record, "official-deploy")
     official("DEPLOY-PRODUCTION", sha, record)
+    stage(record, "final-version-and-compose")
     require(git("rev-parse", "HEAD") == sha, "final-head-mismatch")
     require(state("last-successful-runtime-commit") == sha, "final-runtime-state-mismatch")
     compose_commit = state("last-applied-compose-commit")
     git("merge-base", "--is-ancestor", compose_commit, sha)
     require(not git("diff", compose_commit, sha, "--", "deploy/compose.prod.yml"), "final-compose-state-mismatch")
+    stage(record, "final-schema-and-data-counts")
     after = snapshot()
     record["after"] = after
     require(after["schema"] == record["target_schema"], "final-schema-mismatch")
     require(after["floor"] == record["target_floor"], "final-schema-compatibility-floor-mismatch")
     for key in ("accounts", "mirror_posts", "posts", "media", "mirror_media"):
         require(after[key] >= record["before"][key], "data-count-decreased:" + key)
+    stage(record, "final-health")
     record["health"] = health()
     record["git_head"] = sha
     record["runtime_commit"] = sha
@@ -234,18 +330,24 @@ def deploy(sha, record):
 def execute(mode, sha, request_id):
     record = {"status": "running", "mode": mode, "target_sha": sha,
               "request_id": request_id, "started_at": now(), "exit_code": None, "mutation_started": False}
-    write_json(LOGS / (request_id + ".json"), record)
-    try:
-        if mode == "deploy":
-            deploy(sha, record)
-        else:
-            preflight(sha, record)
-        record.update(status="success", exit_code=0)
-    except GateError as error:
-        record.update(status="failed", reason=str(error), exit_code=1)
-    except Exception:
-        # A lost worker or an unexpected exception must never mean success.
-        record.update(status="unknown", reason="unexpected-error:inspect-server-before-any-retry", exit_code=1)
+    with diagnostics(mode, record):
+        write_json(LOGS / (request_id + ".json"), record)
+        try:
+            if mode == "deploy":
+                deploy(sha, record)
+            else:
+                preflight(sha, record)
+            record.update(status="success", exit_code=0)
+        except GateError as error:
+            if DIAGNOSTIC.get() is not None:
+                traceback.print_exc(file=DIAGNOSTIC.get())
+            record.update(status="failed", reason=str(error), exit_code=1)
+            record.setdefault("failure_stage", record.get("stage", "startup"))
+        except Exception:
+            if DIAGNOSTIC.get() is not None:
+                traceback.print_exc(file=DIAGNOSTIC.get())
+            record.update(status="unknown", reason="unexpected-error:inspect-server-before-any-retry", exit_code=1)
+            record.setdefault("failure_stage", record.get("stage", "startup"))
     record["finished_at"] = now()
     write_json(LOGS / (request_id + ".json"), record)
     # Failed/unknown deployments retain the marker until an administrator has

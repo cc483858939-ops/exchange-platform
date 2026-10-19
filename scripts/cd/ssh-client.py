@@ -8,6 +8,13 @@ import subprocess
 import tempfile
 import time
 
+REPORT_FIELDS = {
+    "status", "mode", "target_sha", "request_id", "started_at", "finished_at", "exit_code",
+    "mutation_started", "official_exit_code", "official_failure_stage", "stage", "failure_stage",
+    "diagnostic_log", "reason", "official", "git_head", "runtime_commit", "compose_commit",
+    "target_schema", "target_floor", "before", "after", "migration_required", "risk", "compose_diff", "health",
+}
+
 
 def run():
     report = Path("cd-report")
@@ -54,7 +61,7 @@ def run():
             completed = subprocess.run(ssh + [f"{action} {sha} {request_id}"],
                                        capture_output=True, text=True, timeout=240)
             # Deliberately do not echo SSH stderr, key paths or raw non-JSON output.
-            data = json.loads(completed.stdout)
+            data = {key: value for key, value in json.loads(completed.stdout).items() if key in REPORT_FIELDS}
             assert data.get("target_sha") == sha and data.get("request_id") == request_id
             save(data)
             assert completed.returncode == 0 or data.get("status") == "failed", "SSH request failed; inspect saved report"
