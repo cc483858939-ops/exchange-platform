@@ -13,6 +13,7 @@ REQUIRED = {
     "Kafka / Topic Bootstrap": ["Provision topics first time", "Provision topics idempotently",
                                 "Assert broker exposes all provisioned topics"],
     "Containers / Build": ["Build backend image", "Validate production Compose and maintenance scripts",
+                           "Validate restricted SSH access policy",
                            "Build frontend image"],
 }
 

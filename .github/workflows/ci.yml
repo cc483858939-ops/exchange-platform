@@ -450,5 +450,8 @@ jobs:
             scripts/tests/deploy-production-state-test.sh
           bash scripts/tests/deploy-production-state-test.sh
 
+      - name: Validate restricted SSH access policy
+        run: sudo bash scripts/tests/run-cd-ssh-access-tests.sh
+
       - name: Build frontend image
         run: docker build -f Exchangeapp_frontend/Dockerfile -t goexchange-frontend:ci Exchangeapp_frontend

@@ -54,11 +54,11 @@
 `/root/reviewed-cd` 表示已经核对提交和文件内容的独立源码副本：
 
 ```sh
-useradd --create-home --shell /bin/sh exchange-deploy
+useradd --create-home --user-group --shell /bin/sh exchange-deploy
 passwd -l exchange-deploy
 chown root:root /home/exchange-deploy
 chmod 0755 /home/exchange-deploy
-install -d -o root -g root -m 0700 /home/exchange-deploy/.ssh
+install -d -o root -g exchange-deploy -m 0750 /home/exchange-deploy/.ssh
 install -d -o root -g root -m 0755 /usr/local/lib/exchange-platform-cd
 install -o root -g root -m 0644 /root/reviewed-cd/scripts/cd/server.py /usr/local/lib/exchange-platform-cd/server.py
 install -o root -g root -m 0755 /root/reviewed-cd/scripts/cd/gateway.sh /usr/local/sbin/exchange-production-cd
@@ -85,9 +85,77 @@ exchange-deploy ALL=(root) NOPASSWD: /usr/local/sbin/exchange-production-cd *
 restrict,command="/usr/bin/sudo -n /usr/local/sbin/exchange-production-cd \"$SSH_ORIGINAL_COMMAND\"" ssh-ed25519 PUBLIC_KEY_FROM_NEW_DEPLOY_IDENTITY exchange-production-actions
 ```
 
-`authorized_keys` 为 root:root 0600。确认 sshd 的现有用户白名单、公钥登录策略允许该身份，
-且身份不具备密码登录能力；需要调整接入规则时由管理员单独审核。不要关闭现有管理会话。
-旧 root 私钥不复制到 GitHub。
+把这一行保存在管理员控制的 `/root/reviewed-cd/authorized_keys` 后安装（已有授权文件时
+先审查并保留必要条目，不盲目覆盖；每个部署 key 都必须保留相同 forced command 与 restrict）：
+
+```sh
+install -o root -g exchange-deploy -m 0640 /root/reviewed-cd/authorized_keys /home/exchange-deploy/.ssh/authorized_keys
+```
+
+权限必须是：home `root:root 0755`、`.ssh` `root:exchange-deploy 0750`、
+`authorized_keys` `root:exchange-deploy 0640`。`exchange-deploy` 组只供该部署账号使用。
+sshd 读取用户授权文件时需要目标身份可遍历父目录并读取文件；原来的 root:root 0700/0600
+组合会阻断这一点。新配置只增加目录遍历和公钥文件读取权限，home、`.ssh` 和授权文件仍由
+root 管理，部署用户不能写入文件、添加替代授权文件或重命名 `.ssh`。
+不把文件 chown 给部署用户，也不通过关闭 `StrictModes` 解决问题。
+授权文件只放公钥和限制项，旧 root 私钥不复制到 GitHub。
+
+### 审核 sshd 的有效配置
+
+`deploy/ssh/exchange-deploy.conf` 是**人工审核后安装**的账号级 Match 模板，不由 CD 自动应用。
+它保留 key 上的 forced command/restrict，并在 sshd 层再次固定同一入口、仅允许公钥认证、
+禁止密码/键盘交互、TTY、用户 rc 和转发。`/bin/sh` 用于执行固定入口，不代表 SSH 客户端
+可以选择 shell；任意命令或空请求都会被入口协议拒绝。模板不授予 sudo/Docker 权限。
+
+管理员可将模板以 root:root 0644 安装到 `/etc/ssh/exchange-platform-cd.conf`，然后审核
+主配置中的 Include 位置：**所有全局指令之后、现有 Match 规则之前**（已有规则的优先级
+必须人工检查），加入如下片段。不要直接放到全局配置前部的 `.d` Include 中，避免后续
+全局专用指令落入 Match 上下文：
+
+```text
+Match all
+Include /etc/ssh/exchange-platform-cd.conf
+```
+
+全局保持 `StrictModes yes`。以下均为管理员本地审计命令，先替换实际客户端来源和监听地址；
+本 PR 的离线测试不会连接生产，也不会读取或修改现网配置：
+
+```sh
+/usr/sbin/sshd -t
+/usr/sbin/sshd -T -C user=exchange-deploy,host=CLIENT_HOSTNAME,addr=CLIENT_IP,laddr=VPS_LISTEN_IP,lport=22
+id exchange-deploy
+sudo -l -U exchange-deploy
+for dir in /home /home/exchange-deploy /home/exchange-deploy/.ssh; do
+  sudo -u exchange-deploy -- test -x "$dir" || exit 1
+done
+sudo -u exchange-deploy -- test -r /home/exchange-deploy/.ssh/authorized_keys
+for path in /home/exchange-deploy /home/exchange-deploy/.ssh /home/exchange-deploy/.ssh/authorized_keys; do
+  sudo -u exchange-deploy -- test ! -w "$path" || exit 1
+done
+```
+
+`sshd -t` 只验证语法，不等于授权可用。`sshd -T -C` 必须显示 `strictmodes yes`、
+`authorizedkeysfile .ssh/authorized_keys`（没有其他用户可写的备用路径）、
+`authorizedkeyscommand none`、`trustedusercakeys none`、`authenticationmethods publickey`、
+`pubkeyauthentication yes`、`passwordauthentication no`、`kbdinteractiveauthentication no`、
+`disableforwarding yes`、`permittty no`、`permituserrc no`，以及模板中的固定 `forcecommand`。
+检查所有 Include 和来源相关 Match；较早的匹配规则可能覆盖模板，发现不一致就停止。
+另检查 `AllowUsers`/`AllowGroups` 是否允许该账号和**实际来源**、`DenyUsers`/`DenyGroups`
+是否拒绝它；sshd 输出这些列表并不代表已判断登录资格。若已有 AllowUsers 白名单，只在
+单独审核后补充部署身份并保留管理员规则，不改成仅允许部署用户，也不清空原白名单。
+
+账号不能属于 docker/sudo 等特权组；`sudo -l -U` 应只允许上面的固定 wrapper。
+账号锁定、PAM 和登录 shell 策略仍需在接入时人工核实，不能以启用密码认证来绕过。
+任何修正和 reload 均由管理员在独立审核后执行，保留现有管理会话；此任务不执行。
+参见 [OpenSSH 授权文件与 key 限制](https://man.openbsd.org/sshd#AUTHORIZED_KEYS_FILE_FORMAT)
+和 [sshd_config](https://man.openbsd.org/sshd_config)。
+
+离线回归入口是 `sudo bash scripts/tests/run-cd-ssh-access-tests.sh`：仅使用临时目录和现有
+非特权身份验证遍历、读取、禁止写入/替换，以及真实 sshd 的 `-T -C` 配置展开；不启动
+监听器、不创建系统账号，不执行 SSH 连接。若本地未装 sshd，只下载并解包发行版二进制，
+不安装软件包或运行服务启动脚本。现网的有效配置和真实认证仍待管理员接入审核。
+测试需要时仅临时创建空的本地 `/run/sshd`，结束后只移除自己创建且仍为空的目录；
+不会更改已有目录，也不会向系统用户数据库添加 privilege-separation 账号。
 
 ## 3. 确认主机身份
 
@@ -229,3 +297,8 @@ Python/Bash 语法、git diff --check 通过。Windows 离线测试 25 项通过
 专用测试跳过；Linux 已补齐。Worker 运行隔离检查通过。既有 CI 的容器 job 包含这些回归和入口语法检查，
 没有删除或放宽原检查。新增 sudo 仅在临时 hosted CI runner 内用于根身份入口模拟，
 模拟副本使用临时路径和无副作用部署函数，不连接生产服务。
+
+SSH 授权配置另有 10 项本地回归：使用现有非特权身份验证目录遍历、文件读取、写入和
+替换拒绝，并用真实 sshd 展开 AuthorizedKeysFile、StrictModes、AllowUsers/DenyUsers、
+User/Address Match 与固定入口策略；同时检查 sudoers 语法和任意 shell/Docker 请求拒绝。
+这些检查不启动 sshd，不代表已核实现网配置、PAM 策略或完成真实公钥认证。
