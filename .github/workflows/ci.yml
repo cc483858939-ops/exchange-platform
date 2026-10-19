@@ -441,6 +441,8 @@ jobs:
               assert "KAFKA_DLQ_DATABASE_DSN" not in environment(name), f"{name} received the maintenance audit DSN"
           PY
           python3 scripts/tests/worker-runtime-isolation-test.py
+          sudo python3 -B scripts/tests/production-cd-test.py
+          bash -n scripts/cd/gateway.sh
           bash -n \
             scripts/backup-postgres.sh \
             scripts/rebuild-production-data.sh \
