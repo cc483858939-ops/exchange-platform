@@ -188,6 +188,14 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	if err := applyRecommendationMetricsMessagesForIntegration(t, db, kafkaConfig, []kafka.Message{clickMessage}); err != nil {
 		t.Fatal(err)
 	}
+	// A later batch with a different event ID cannot count the same opportunity again.
+	lateView, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationImpression, baseAt.Add(10*time.Second), quickPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applyRecommendationMetricsMessagesForIntegration(t, db, kafkaConfig, []kafka.Message{recommendationMessage(t, lateView)}); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Where("user_id = ?", userID).First(&dirty).Error; err != nil {
 		t.Fatal(err)
 	}
