@@ -165,7 +165,6 @@ func TestTranslationConfigDefaultsAndEnvironmentOverrides(t *testing.T) {
 
 func TestValidateEventingConfigByRuntime(t *testing.T) {
 	t.Setenv("LIKE_STATE_EXPIRY_ENABLED", "false")
-	t.Setenv("RECOMMENDATION_CLICK_COOLDOWN_SECONDS", "300")
 	cfg := &Config{Kafka: KafkaConfig{
 		ActivityEventsTopic: "activity",
 		ConsumerDLQTopic:    "consumer-dlq",
@@ -196,50 +195,8 @@ func TestValidateEventingConfigByRuntime(t *testing.T) {
 		t.Fatal("worker without notification group must fail")
 	}
 }
-
-func TestRecommendationTelemetryClickCooldownConfiguration(t *testing.T) {
-	const envName = "RECOMMENDATION_CLICK_COOLDOWN_SECONDS"
-	previous, wasSet := os.LookupEnv(envName)
-	if err := os.Unsetenv(envName); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if wasSet {
-			_ = os.Setenv(envName, previous)
-		} else {
-			_ = os.Unsetenv(envName)
-		}
-	})
-
-	if seconds, err := RecommendationTelemetryClickCooldownSeconds(); err != nil || seconds != 300 {
-		t.Fatalf("default cooldown seconds=%d err=%v want 300", seconds, err)
-	}
-	for _, test := range []struct {
-		value string
-		want  int
-	}{{value: "1", want: 1}, {value: "300", want: 300}, {value: "3600", want: 3600}} {
-		t.Setenv(envName, test.value)
-		seconds, err := RecommendationTelemetryClickCooldownSeconds()
-		if err != nil || seconds != test.want {
-			t.Errorf("configured cooldown %q = %d, %v; want %d", test.value, seconds, err, test.want)
-		}
-	}
-	for _, value := range []string{"", "abc", "0", "-1", "3601", "1.5"} {
-		t.Setenv(envName, value)
-		if _, err := RecommendationTelemetryClickCooldownSeconds(); err == nil || !strings.Contains(err.Error(), envName) {
-			t.Errorf("invalid cooldown %q error=%v want explicit configuration error", value, err)
-		}
-	}
-	t.Setenv(envName, "0")
-	cfg := &Config{Kafka: KafkaConfig{ActivityEventsTopic: "activity"}}
-	if err := ValidateAPIEventingConfig(cfg); err == nil || !strings.Contains(err.Error(), envName) {
-		t.Fatalf("API config validation error=%v want click cooldown validation", err)
-	}
-}
-
 func TestValidateEventingRejectsUnsupportedLikeStateExpiry(t *testing.T) {
 	t.Setenv("LIKE_STATE_EXPIRY_ENABLED", "true")
-	t.Setenv("RECOMMENDATION_CLICK_COOLDOWN_SECONDS", "300")
 	cfg := &Config{Kafka: KafkaConfig{ActivityEventsTopic: "activity", ConsumerDLQTopic: "consumer-dlq", NotificationGroupID: "notifications"}}
 	if err := ValidateAPIEventingConfig(cfg); !errors.Is(err, ErrLikeStateExpiryUnsupported) || !strings.Contains(err.Error(), "persistent User -> Posts relations") {
 		t.Fatalf("API expiry validation error=%v want lifecycle rejection", err)

@@ -20,9 +20,6 @@ func ValidateAPIEventingConfig(cfg *Config) error {
 	if cfg == nil {
 		return errors.New("application configuration is not initialized")
 	}
-	if _, err := RecommendationTelemetryClickCooldownSeconds(); err != nil {
-		return err
-	}
 	if err := ValidateLikeStateExpiryConfig(); err != nil {
 		return err
 	}
@@ -342,22 +339,6 @@ func RecommendationTelemetryEventsPerMinute() int {
 		return 1
 	}
 	return limit
-}
-
-// RecommendationTelemetryClickCooldownSeconds returns the Redis click
-// cooldown duration. Explicit invalid values fail startup instead of silently
-// weakening the protection.
-func RecommendationTelemetryClickCooldownSeconds() (int, error) {
-	const envName = "RECOMMENDATION_CLICK_COOLDOWN_SECONDS"
-	raw, configured := os.LookupEnv(envName)
-	if !configured {
-		return 300, nil
-	}
-	seconds, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || seconds < 1 || seconds > 3600 {
-		return 0, fmt.Errorf("%s must be an integer between 1 and 3600 seconds", envName)
-	}
-	return seconds, nil
 }
 
 func PostViewEventsPerMinute() int {

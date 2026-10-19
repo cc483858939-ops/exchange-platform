@@ -119,6 +119,17 @@ do not expose it as a frontend `VITE_*` variable. If it is absent, the API does
 not issue authenticated recommendation cursors. Snapshot outcomes are counted
 by the bounded `go_exchange_recommendation_snapshot_total{outcome=...}` metric.
 
+## Recommendation Click Cooldown
+
+Only recommendation Click events are cooled down: the same authenticated user
+and Post can produce one effective Click within five minutes, regardless of
+recommendation request ID, and can be counted again after the cooldown. Redis
+holds a 60-second `PENDING` lease while Kafka publishes, then a five-minute
+`COMMITTED` cooldown after a successful publish. This is best-effort protection,
+not Kafka exactly-once; `ConsumerInbox` still deduplicates the same Event ID.
+It does not change global trending ranking. The duration is fixed at 300 seconds
+and has no environment-variable override.
+
 ## Local Development
 
 The local development prerequisites are Docker, Docker Compose, and Go 1.25+ for first-time JWT key generation. Docker-only key generation has not been verified here, so the documented fallback runs the generator with host Go:

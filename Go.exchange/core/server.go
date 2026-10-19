@@ -25,13 +25,20 @@ import (
 	"Go.exchange/runtimehealth"
 	"Go.exchange/services"
 	"Go.exchange/translation"
+
+	"github.com/go-redis/redis/v7"
 )
 
 const (
-	apiShutdownTimeout        = 10 * time.Second
-	defaultTraceDrainTimeout  = 5 * time.Second
-	forcedRequestDrainTimeout = 3 * time.Second
+	apiShutdownTimeout                  = 10 * time.Second
+	defaultTraceDrainTimeout            = 5 * time.Second
+	forcedRequestDrainTimeout           = 3 * time.Second
+	recommendationClickCooldownDuration = 5 * time.Minute
 )
+
+func newRecommendationClickCooldownStore(client *redis.Client) (controllers.RecommendationClickCooldown, error) {
+	return controllers.NewRedisRecommendationClickCooldown(client, recommendationClickCooldownDuration)
+}
 
 type APIRuntime struct {
 	Server              *http.Server
@@ -150,11 +157,7 @@ func StartHttpServerWithTracing(tokens auth.TokenService, publisher eventing.Bat
 		return nil, fmt.Errorf("initialize recommendation handler: %w", err)
 	}
 	telemetryRateLimiter := controllers.NewRecommendationTelemetryRedisRateLimiter(global.RedisDB)
-	clickCooldownSeconds, err := config.RecommendationTelemetryClickCooldownSeconds()
-	if err != nil {
-		return nil, err
-	}
-	clickCooldown, err := controllers.NewRedisRecommendationClickCooldown(global.RedisDB, time.Duration(clickCooldownSeconds)*time.Second)
+	clickCooldown, err := newRecommendationClickCooldownStore(global.RedisDB)
 	if err != nil {
 		return nil, fmt.Errorf("initialize recommendation click cooldown: %w", err)
 	}
