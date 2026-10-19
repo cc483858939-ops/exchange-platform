@@ -241,7 +241,7 @@ func TestRuntimeSchemaCanariesUseStableGORMRegistry(t *testing.T) {
 			}
 		}
 	}
-	for _, required := range []string{"consumer_inboxes", "recommendation_daily_metrics"} {
+	for _, required := range []string{"consumer_inboxes", "recommendation_daily_metrics", "recommendation_ctr_claims"} {
 		if !workerTables[required] {
 			t.Fatalf("Worker schema registry omitted %q", required)
 		}
