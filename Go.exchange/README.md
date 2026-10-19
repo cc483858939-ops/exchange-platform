@@ -119,16 +119,53 @@ do not expose it as a frontend `VITE_*` variable. If it is absent, the API does
 not issue authenticated recommendation cursors. Snapshot outcomes are counted
 by the bounded `go_exchange_recommendation_snapshot_total{outcome=...}` metric.
 
-## Recommendation Click Cooldown
+## Recommendation CTR and Click Deduplication
 
-Only recommendation Click events are cooled down: the same authenticated user
-and Post can produce one effective Click within five minutes, regardless of
-recommendation request ID, and can be counted again after the cooldown. Redis
-holds a 60-second `PENDING` lease while Kafka publishes, then a five-minute
-`COMMITTED` cooldown after a successful publish. This is best-effort protection,
-not Kafka exactly-once; `ConsumerInbox` still deduplicates the same Event ID.
-It does not change global trending ranking. The duration is fixed at 300 seconds
-and has no environment-variable override.
+Recommendation CTR is **clicked opportunities / viewed opportunities**.
+One opportunity is identified by the server-signed (user ID, recommendation
+request ID, Post ID). For each opportunity, at most one impression and one click
+contribute to the CTR counters. A click implies an impression when the user
+opens a card before its one-second visibility threshold; a later impression
+event cannot count it again. Clicks are attributed to their original impression
+UTC date, including clicks across midnight.
+
+The PostgreSQL `recommendation_ctr_claims` table atomically enforces those
+business-level rules inside the same transaction as `ConsumerInbox`, the daily
+metrics and the behavior projection. `event_id` remains the Kafka transport
+idempotency key; refreshing it cannot increase CTR. Read-end, dwell and
+not-interested events retain their own semantics, independent of CTR claims.
+
+As an early duplicate filter, Redis reserves the same *opportunity* during
+Click publication: a 60-second `PENDING` lease becomes a 5-minute
+`COMMITTED` lease after Kafka publish succeeds. A **new** recommendation
+request can count the same Post again immediately, while an old request can
+never increase CTR after the Redis lease expires because the PostgreSQL claim
+persists. The Redis layer is best-effort, not Kafka exactly-once. Its duration
+is fixed at 300 seconds; no environment-variable override exists.
+
+The durable claim ledger grows with recommendation opportunities. Before
+high-volume production rollout, capacity-plan its primary-key index and table
+growth; monitor storage and transaction latency. **Do not purge claims merely
+because their Redis TTL has expired.** Keeping the ledger at least as long as
+any Kafka replay or duplicate delivery window is necessary for durable CTR
+deduplication.
+
+Operational rebuild contract: stop recommendation metric Workers, choose and
+record a consistent Kafka replay boundary, then reset
+`recommendation_daily_metrics`, `recommendation_ctr_claims`, and the
+recommendation-metrics ConsumerInbox rows **as one coordinated recovery
+operation**. Preserve other consumer groups' inbox rows. Rebuilds that include
+the behavior projection must also plan `post_behaviors` and profile-dirty
+state explicitly; blindly replaying after resetting only metrics would
+double-apply behavior. Restore Kafka consumption only after all reset steps
+and the replay range are verified. This document is a recovery prerequisite,
+not an automated production purge mechanism; retention must be implemented
+and reviewed before scheduling destructive cleanup.
+
+If a delayed real impression precedes an already-counted click across UTC
+midnight, the worker moves the provisional CTR counts to the original
+exposure day within the claim/inbox/metric transaction. Non-CTR behavior
+counts and profile invalidation are not repeated.
 
 ## Local Development
 

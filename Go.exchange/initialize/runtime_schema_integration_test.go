@@ -270,6 +270,15 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 		expectIntegrationSchemaCode(t, tx, apiOptions, "schema_column_missing")
 	})
 
+	withIntegrationSavepoint(t, tx, "missing_recommendation_ctr_claim_primary_key", func() {
+		if err := tx.Exec("ALTER TABLE " + qualifiedIntegrationTable(primarySchema, "recommendation_ctr_claims") + " DROP CONSTRAINT recommendation_ctr_claims_pkey").Error; err != nil {
+			t.Fatalf("drop CTR ledger primary key in isolated schema: %v", err)
+		}
+		// The API does not require Worker-only CTR storage.
+		expectIntegrationSchemaCode(t, tx, apiOptions, "")
+		expectIntegrationSchemaCode(t, tx, workerOptions, "schema_constraint_missing")
+	})
+
 	withIntegrationSavepoint(t, tx, "missing_worker_table", func() {
 		if err := tx.Exec("DROP TABLE " + qualifiedIntegrationTable(primarySchema, "consumer_inboxes")).Error; err != nil {
 			t.Fatalf("drop Worker consumer inbox table: %v", err)

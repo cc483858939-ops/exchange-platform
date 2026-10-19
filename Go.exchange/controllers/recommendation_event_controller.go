@@ -188,23 +188,24 @@ func recordRecommendationEvents(ctx *gin.Context, publisher eventing.BatchPublis
 	publishIndexes := make([]int, 0, len(validEvents))
 	publishEnvelopes := make([]eventing.Envelope, 0, len(validEvents))
 	reservations := make([]validatedRecommendationEvent, 0, len(validEvents))
-	seenClickPosts := make(map[uint]struct{})
+	seenClickOpportunities := make(map[string]struct{})
 	for eventIndex, event := range validEvents {
 		if event.EventType == eventing.EventTypeRecommendationClick {
 			postID := event.Payload.PostID
-			if _, duplicateInBatch := seenClickPosts[postID]; duplicateInBatch {
+			clickKey := fmt.Sprintf("%d:%s", postID, event.Payload.RequestID)
+			if _, duplicateInBatch := seenClickOpportunities[clickKey]; duplicateInBatch {
 				markRecommendationEventDuplicate(&response, validIndexes[eventIndex], "click_cooldown")
 				metrics.RecordRecommendationClickCooldown("duplicate")
 				continue
 			}
-			seenClickPosts[postID] = struct{}{}
+			seenClickOpportunities[clickKey] = struct{}{}
 			if clickCooldown == nil {
 				metrics.RecordRecommendationClickCooldown("redis_error")
 				releaseRecommendationClickReservations(userID, clickCooldown, reservations)
 				ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "recommendation click cooldown unavailable"})
 				return
 			}
-			result, acquireErr := clickCooldown.Acquire(ctx.Request.Context(), userID, postID, event.EventID)
+			result, acquireErr := clickCooldown.Acquire(ctx.Request.Context(), userID, postID, event.Payload.RequestID, event.EventID)
 			if acquireErr != nil {
 				metrics.RecordRecommendationClickCooldown("redis_error")
 				log.Printf("[RecommendationTelemetry] click cooldown acquire failed: %v", acquireErr)
@@ -266,7 +267,7 @@ func recordRecommendationEvents(ctx *gin.Context, publisher eventing.BatchPublis
 
 	commitCtx, cancelCommit := context.WithTimeout(context.Background(), recommendationClickCooldownCleanupTimeout)
 	for _, event := range reservations {
-		if err := clickCooldown.Commit(commitCtx, userID, event.Payload.PostID, event.EventID); err != nil {
+		if err := clickCooldown.Commit(commitCtx, userID, event.Payload.PostID, event.Payload.RequestID, event.EventID); err != nil {
 			metrics.RecordRecommendationClickCooldown("commit_error")
 			log.Printf("[RecommendationTelemetry] published click cooldown confirmation failed: %v", err)
 		}
@@ -292,7 +293,7 @@ func releaseRecommendationClickReservations(userID uint, cooldown Recommendation
 	ctx, cancel := context.WithTimeout(context.Background(), recommendationClickCooldownCleanupTimeout)
 	defer cancel()
 	for _, event := range reservations {
-		if err := cooldown.Release(ctx, userID, event.Payload.PostID, event.EventID); err != nil {
+		if err := cooldown.Release(ctx, userID, event.Payload.PostID, event.Payload.RequestID, event.EventID); err != nil {
 			metrics.RecordRecommendationClickCooldown("redis_error")
 			log.Printf("[RecommendationTelemetry] click cooldown release failed: %v", err)
 			continue

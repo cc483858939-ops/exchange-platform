@@ -201,6 +201,37 @@ func TestEmbeddingServingStateRuntimeSchemaCanaryRequiresSingletonConstraints(t 
 	t.Fatal("embedding_serving_state canary is missing")
 }
 
+func TestRecommendationCTRClaimWorkerCanaryRequiresPrimaryKey(t *testing.T) {
+	for _, canary := range workerSchemaObjectCanaries {
+		if canary.Table != "recommendation_ctr_claims" {
+			continue
+		}
+		hasConstraint, hasIndex := false, false
+		for _, constraint := range canary.Constraints {
+			hasConstraint = hasConstraint || constraint == "recommendation_ctr_claims_pkey"
+		}
+		for _, index := range canary.Indexes {
+			hasIndex = hasIndex || index == "recommendation_ctr_claims_pkey"
+		}
+		if !hasConstraint || !hasIndex {
+			t.Fatalf("CTR claim canary must require primary key constraint and index: %#v", canary)
+		}
+		constraintRows := []schemaObjectMetadataRow{{TableName: canary.Table, ObjectName: "recommendation_ctr_claims_pkey"}}
+		indexRows := []schemaObjectMetadataRow{{TableName: canary.Table, ObjectName: "recommendation_ctr_claims_pkey"}}
+		if err := validateSchemaObjects([]schemaObjectCanary{canary}, constraintRows, indexRows); err != nil {
+			t.Fatalf("complete CTR claim primary key was rejected: %v", err)
+		}
+		if got := SchemaReasonCode(validateSchemaObjects([]schemaObjectCanary{canary}, nil, indexRows)); got != "schema_constraint_missing" {
+			t.Fatalf("missing CTR primary key constraint: got %q", got)
+		}
+		if got := SchemaReasonCode(validateSchemaObjects([]schemaObjectCanary{canary}, constraintRows, nil)); got != "schema_index_missing" {
+			t.Fatalf("missing CTR primary key index: got %q", got)
+		}
+		return
+	}
+	t.Fatal("recommendation CTR claims worker object canary is missing")
+}
+
 func TestRuntimeSchemaCanariesUseStableGORMRegistry(t *testing.T) {
 	db, err := gorm.Open(postgres.Open("host=127.0.0.1 user=unused dbname=unused sslmode=disable"), &gorm.Config{
 		DryRun:               true,
@@ -241,7 +272,7 @@ func TestRuntimeSchemaCanariesUseStableGORMRegistry(t *testing.T) {
 			}
 		}
 	}
-	for _, required := range []string{"consumer_inboxes", "recommendation_daily_metrics"} {
+	for _, required := range []string{"consumer_inboxes", "recommendation_daily_metrics", "recommendation_ctr_claims"} {
 		if !workerTables[required] {
 			t.Fatalf("Worker schema registry omitted %q", required)
 		}
