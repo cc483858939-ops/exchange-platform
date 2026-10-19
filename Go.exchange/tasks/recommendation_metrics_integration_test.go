@@ -31,6 +31,7 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 		&models.Post{},
 		&models.ConsumerInbox{},
 		&models.RecommendationDailyMetric{},
+		&models.RecommendationCTRClaim{},
 		&models.PostBehavior{},
 		&models.UserRecoProfileDirty{},
 	); err != nil {
@@ -51,6 +52,7 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	t.Cleanup(func() {
 		db.Unscoped().Where("consumer_name = ?", groupID).Delete(&models.ConsumerInbox{})
 		db.Unscoped().Where("strategy_id LIKE ?", groupID+"%").Delete(&models.RecommendationDailyMetric{})
+		db.Unscoped().Where("user_id = ?", userID).Delete(&models.RecommendationCTRClaim{})
 		db.Unscoped().Where("user_id = ?", userID).Delete(&models.UserRecoProfileDirty{})
 		db.Unscoped().Where("user_id = ? OR post_id = ?", userID, postID).Delete(&models.PostBehavior{})
 		if postID != 0 {
@@ -95,6 +97,7 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	messages = append(messages, recommendationMessage(t, secondClick))
 
 	explorationPayload := base
+	explorationPayload.RequestID = uuid.NewString()
 	explorationPayload.ExplorationOpportunity = true
 	explorationPayload.SelectionMode = eventing.RecommendationSelectionModeExploration
 	explorationPayload.ExplorationReason = eventing.RecommendationExplorationReasonRecent
@@ -106,6 +109,7 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	messages = append(messages, explorationMessage)
 
 	variantPosition := base
+	variantPosition.RequestID = uuid.NewString()
 	variantPosition.Position = 2
 	positionEvent, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationImpression, baseAt, variantPosition)
 	if err != nil {
@@ -114,6 +118,7 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	messages = append(messages, recommendationMessage(t, positionEvent))
 
 	variantStrategy := base
+	variantStrategy.RequestID = uuid.NewString()
 	variantStrategy.StrategyID = groupID + "-strategy-b"
 	strategyEvent, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationImpression, baseAt, variantStrategy)
 	if err != nil {
@@ -121,7 +126,23 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	}
 	messages = append(messages, recommendationMessage(t, strategyEvent))
 
+	// A click before the 1-second viewability threshold must count one
+	// implied impression, even if the impression event arrives later.
+	quickPayload := base
+	quickPayload.RequestID = uuid.NewString()
+	quickPayload.StrategyID = groupID + "-quick-click"
+	quickClick, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationClick, baseAt, quickPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quickImpression, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationImpression, baseAt.Add(time.Second), quickPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages = append(messages, recommendationMessage(t, quickClick), recommendationMessage(t, quickImpression))
+
 	variantDate := base
+	variantDate.RequestID = uuid.NewString()
 	variantDate.ReceivedAt = baseAt.AddDate(0, 0, 1)
 	dateEvent, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationImpression, baseAt.AddDate(0, 0, 1), variantDate)
 	if err != nil {
@@ -161,8 +182,8 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	if err := db.Where("strategy_id = ? AND position = ? AND post_id = ?", groupID, 1, postID).First(&metric).Error; err != nil {
 		t.Fatal(err)
 	}
-	if metric.ImpressionCount != 100 || metric.ClickCount != 2 {
-		t.Fatalf("base metric=%#v want impressions=100 clicks=2", metric)
+	if metric.ImpressionCount != 1 || metric.ClickCount != 1 {
+		t.Fatalf("base metric=%#v want one impression and one click per opportunity", metric)
 	}
 	var explorationMetric models.RecommendationDailyMetric
 	if err := db.Where("strategy_id = ? AND exploration_opportunity = ? AND selection_mode = ? AND exploration_reason = ?", groupID, true, eventing.RecommendationSelectionModeExploration, eventing.RecommendationExplorationReasonRecent).First(&explorationMetric).Error; err != nil {
@@ -172,12 +193,20 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 		t.Fatalf("exploration metric=%#v want one idempotent impression", explorationMetric)
 	}
 
+	var quickMetric models.RecommendationDailyMetric
+	if err := db.Where("strategy_id = ?", groupID+"-quick-click").First(&quickMetric).Error; err != nil {
+		t.Fatal(err)
+	}
+	if quickMetric.ImpressionCount != 1 || quickMetric.ClickCount != 1 {
+		t.Fatalf("quick click metric=%#v want implied impression=1 click=1", quickMetric)
+	}
+
 	var metricRows int64
 	if err := db.Model(&models.RecommendationDailyMetric{}).Where("strategy_id LIKE ?", groupID+"%").Count(&metricRows).Error; err != nil {
 		t.Fatal(err)
 	}
-	if metricRows != 5 {
-		t.Fatalf("metric rows=%d want=5 including ranked/exploration provenance dimensions", metricRows)
+	if metricRows != 6 {
+		t.Fatalf("metric rows=%d want=6 including quick-click and exploration dimensions", metricRows)
 	}
 
 	var clickBehavior models.PostBehavior
@@ -185,7 +214,7 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 		t.Fatal(err)
 	}
 	if clickBehavior.Count != 2 {
-		t.Fatalf("derived click behavior=%#v want two distinct click events", clickBehavior)
+		t.Fatalf("derived click behavior=%#v want one click each for base and quick-click opportunities", clickBehavior)
 	}
 }
 
