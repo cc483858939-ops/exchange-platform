@@ -474,7 +474,7 @@ func insertRecommendationCTRClaim(tx *gorm.DB, record recommendationMetricEvent,
 		UserID: record.Payload.UserID, RequestID: record.Payload.RequestID,
 		PostID: record.Payload.PostID, EventType: eventType,
 		MetricDate: time.Date(occurredAt.Year(), occurredAt.Month(), occurredAt.Day(), 0, 0, 0, 0, time.UTC),
-		CreatedAt: time.Now().UTC(),
+		CreatedAt:  time.Now().UTC(),
 	}
 	result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
 	if result.Error != nil {
