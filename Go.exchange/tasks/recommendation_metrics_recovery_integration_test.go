@@ -26,6 +26,7 @@ func TestRecommendationMetricsProjectionRecoverySemanticsIntegration(t *testing.
 	}
 	if err := db.AutoMigrate(
 		&models.User{}, &models.Post{}, &models.ConsumerInbox{}, &models.RecommendationDailyMetric{},
+		&models.RecommendationCTRClaim{},
 		&models.PostBehavior{}, &models.UserRecoProfileDirty{},
 	); err != nil {
 		t.Fatal(err)
@@ -44,6 +45,7 @@ func TestRecommendationMetricsProjectionRecoverySemanticsIntegration(t *testing.
 	}
 	t.Cleanup(func() {
 		db.Where("consumer_name = ?", consumerName).Delete(&models.ConsumerInbox{})
+		db.Where("user_id = ?", user.ID).Delete(&models.RecommendationCTRClaim{})
 		db.Unscoped().Where("strategy_id LIKE ?", strategy+"%").Delete(&models.RecommendationDailyMetric{})
 		db.Unscoped().Where("user_id = ?", user.ID).Delete(&models.UserRecoProfileDirty{})
 		db.Unscoped().Where("user_id = ? OR post_id = ?", user.ID, post.ID).Delete(&models.PostBehavior{})
@@ -52,10 +54,15 @@ func TestRecommendationMetricsProjectionRecoverySemanticsIntegration(t *testing.
 	})
 
 	baseAt := time.Date(2026, 9, 23, 1, 0, 0, 0, time.UTC)
+	baseRequestID := uuid.NewString()
 	newRecord := func(eventID, eventType, strategyID string) recommendationMetricEvent {
 		t.Helper()
+		requestID := baseRequestID
+		if strategyID != strategy {
+			requestID = uuid.NewString()
+		}
 		payload := eventing.RecommendationBehaviorPayload{
-			UserID: user.ID, PostID: post.ID, RequestID: uuid.NewString(), Scene: "recommendation_page", Position: 1,
+			UserID: user.ID, PostID: post.ID, RequestID: requestID, Scene: "recommendation_page", Position: 1,
 			RankerVersion: "ranker_v1", RankerConfigHash: "hash-recovery", StrategyID: strategyID, ReceivedAt: baseAt,
 			SelectionMode: eventing.RecommendationSelectionModeRanked,
 		}
