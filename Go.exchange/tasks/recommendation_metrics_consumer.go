@@ -387,11 +387,15 @@ func applyRecommendationMetricRecords(ctx context.Context, db *gorm.DB, consumer
 		if err != nil {
 			return err
 		}
-		metricAggregates := aggregateRecommendationMetrics(records, firstDelivery)
+		effectiveRecords, err := claimRecommendationCTREvents(tx, records, firstDelivery)
+		if err != nil {
+			return err
+		}
+		metricAggregates := aggregateRecommendationMetrics(effectiveRecords, firstDelivery)
 		if err := bulkUpsertRecommendationDailyMetrics(tx, metricAggregates); err != nil {
 			return err
 		}
-		behaviorAggregates := aggregateRecommendationBehavior(records, firstDelivery)
+		behaviorAggregates := aggregateRecommendationBehavior(effectiveRecords, firstDelivery)
 		if err := bulkUpsertRecommendationBehavior(tx, behaviorAggregates); err != nil {
 			return err
 		}
@@ -399,7 +403,7 @@ func applyRecommendationMetricRecords(ctx context.Context, db *gorm.DB, consumer
 		if err != nil {
 			return err
 		}
-		return dirtyProfiles.InvalidateProfiles(ctx, recommendationMetricProfileInvalidationUsers(records, firstDelivery), "recommendation_feedback_projection", time.Now().UTC())
+		return dirtyProfiles.InvalidateProfiles(ctx, recommendationMetricProfileInvalidationUsers(effectiveRecords, firstDelivery), "recommendation_feedback_projection", time.Now().UTC())
 	})
 	if err != nil {
 		if ctx.Err() != nil {
@@ -408,6 +412,63 @@ func applyRecommendationMetricRecords(ctx context.Context, db *gorm.DB, consumer
 		return retryableKafkaError(kafkaFailureCodeDatabaseTransaction, err)
 	}
 	return nil
+}
+
+// claimRecommendationCTREvents enforces one counted impression and one counted
+// click per signed recommendation opportunity (user, request, post).
+// Claims share the transaction with inbox and projections. A click claims an
+// implicit impression so that quick clicks and out-of-order delivery cannot
+// create a click without its CTR denominator.
+func claimRecommendationCTREvents(tx *gorm.DB, records []recommendationMetricEvent, firstDelivery map[string]struct{}) ([]recommendationMetricEvent, error) {
+	effective := make([]recommendationMetricEvent, 0, len(records))
+	for _, record := range records {
+		if _, ok := firstDelivery[record.Envelope.ID]; !ok {
+			continue
+		}
+		switch record.Envelope.Type {
+		case eventing.EventTypeRecommendationImpression:
+			first, err := insertRecommendationCTRClaim(tx, record, models.RecommendationEventTypeImpression)
+			if err != nil {
+				return nil, err
+			}
+			if first {
+				effective = append(effective, record)
+			}
+		case eventing.EventTypeRecommendationClick:
+			firstClick, err := insertRecommendationCTRClaim(tx, record, models.RecommendationEventTypeClick)
+			if err != nil {
+				return nil, err
+			}
+			if !firstClick {
+				continue
+			}
+			firstImpression, err := insertRecommendationCTRClaim(tx, record, models.RecommendationEventTypeImpression)
+			if err != nil {
+				return nil, err
+			}
+			if firstImpression {
+				implied := record
+				implied.Envelope.Type = eventing.EventTypeRecommendationImpression
+				effective = append(effective, implied)
+			}
+			effective = append(effective, record)
+		default:
+			effective = append(effective, record)
+		}
+	}
+	return effective, nil
+}
+
+func insertRecommendationCTRClaim(tx *gorm.DB, record recommendationMetricEvent, eventType string) (bool, error) {
+	row := models.RecommendationCTRClaim{
+		UserID: record.Payload.UserID, RequestID: record.Payload.RequestID,
+		PostID: record.Payload.PostID, EventType: eventType, CreatedAt: time.Now().UTC(),
+	}
+	result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
 }
 
 func recommendationMetricProfileInvalidationUsers(records []recommendationMetricEvent, firstDelivery map[string]struct{}) []uint {
