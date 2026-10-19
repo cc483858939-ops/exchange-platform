@@ -28,12 +28,10 @@
 
 ## 1. 网络与 SSH：先确认，再安装
 
-`myserver` 配置为 `154.219.115.17:22`、用户 root、专用本机 IdentityFile。
-首次连接曾在密钥交换前被关闭；2026-10-19 后续重试已通过现有
-`StrictHostKeyChecking=yes` 的管理连接登录并完成只读核验。
-这只证明本机管理连接恢复，不证明 GitHub-hosted runner 或新部署身份可达。
-现场 sshd 允许公钥、root 和密码登录；本次没有修改 SSH 策略或防火墙，
-也没有安装 `exchange-deploy` 账号及受限入口。
+2026-10-19 已通过现有严格主机校验的管理连接完成只读接入核验。
+这只证明本机管理连接可用，不证明 GitHub-hosted runner 或独立部署身份可达。
+本次未修改 SSH 策略或防火墙，也未安装独立部署账号及受限入口。
+具体生产地址、主机指纹、现场服务状态及数据数量只在受控运维渠道核验，不写入 PR。
 
 管理员应从云厂商控制台或既有可信管理通道检查 sshd/接入策略和连接日志，确认原因。
 **不要为接入 Actions 广泛开放 SSH、关闭主机校验或修改防火墙放行未知来源。**
@@ -103,9 +101,8 @@ cat /etc/ssh/ssh_host_ed25519_key.pub
 通过独立可信渠道核对 SHA256 指纹，再构造 `known_hosts`：22 端口为
 `HOST ssh-ed25519 PUBLIC_HOST_KEY`；非 22 端口为
 `[HOST]:PORT ssh-ed25519 PUBLIC_HOST_KEY`。
-HOST 必须与 `DEPLOY_HOST` 完全一致。本次经现有严格校验的管理连接读取的 ED25519 指纹为
-`SHA256:3Y4qVkjle6rSKFoTmBw4bR46msotFluUKBtdRi/IWlE`；
-新部署身份的信任根仍应通过独立可信渠道确认，不能直接信任未验证的 `ssh-keyscan` 输出。
+HOST 必须与 `DEPLOY_HOST` 完全一致。新部署身份的信任根应通过独立可信渠道确认；
+不要把生产指纹或完整主机记录写入 PR，也不能直接信任未验证的 `ssh-keyscan` 输出。
 工作流使用 `StrictHostKeyChecking=yes`，不调用 `ssh-keyscan`。
 
 ## 4. GitHub production Environment
@@ -202,24 +199,11 @@ pgrep -af '/usr/local/lib/exchange-platform-cd/server.py|scripts/deploy-producti
 
 ## 本次验证边界
 
-2026-10-19 实际管理 SSH 已恢复，官方 `CHECK` 成功；只读核验结果：
-
-- Git/runtime/Compose state 均为 `5cc6d9a41072fb4e9e93ab69e1f85ab4492231d7`，受跟踪文件干净。
-- origin/main 为 `63c5294fdb09fadf73f31e83218dda6a81469f8f`，目标 Schema/floor 为 20/20。
-- 当前数据库 Schema/floor 为 19/19；镜像账号 20、帖子 655、媒体 685。
-- `compose_status=pending`，Compose 新增 `RECOMMENDATION_CURSOR_SIGNING_KEY` 配置项。
-  本次没有 ACK、应用 Compose、迁移或部署。
-- API、PostgreSQL、Redis、Kafka、Kafka Connect healthy；CDC connector/task RUNNING；
-  公网 healthz/readyz 200，公共推荐返回 1 个有效 post。
-- **Worker unhealthy，内部 readyz 503**；数据库/Redis/Kafka/Schema 依赖探针均为 ok，
-  readiness 原因为 `worker_pipeline_consecutive_failures`。
-  like_snapshot_projection 为 `kafka_fetch_failed`，notification_projection、post_embedding、
-  recommendation_metrics、user_behavior_projection 为 `projection_failed`。
-  这是现场快照，不代表已确定底层根因；未重启、重放或修复流水线。
-
-Compose pending 和 Worker unhealthy 均会阻止 CD 放行。独立生产身份、主机指纹独立确认、
-Environment/Secrets、审批规则及真正的 Actions check 仍未配置/验证；
-GitHub-hosted 来源可达性仍未验证。PR 尚未合并，生产未升级。
+2026-10-19 管理 SSH 已恢复，并执行了官方 `CHECK` 和只读现场检查。
+具体版本、Schema、服务健康、差异、原因码和数据数量在受控运维渠道报告；
+本 PR 不包含这些生产快照，也不将管理 SSH 验证等同于完整 Actions CD 验证。
+独立部署身份、主机指纹独立确认、Environment/Secrets、审批规则和 Actions check
+仍需按上述步骤完成。没有执行 ACK、迁移、部署、重启或数据维护。
 
 2026-10-19 本地验证：Ubuntu Linux 18 项离线测试全部通过（包含独立进程的 detached worker、
 实际文件锁、防重放和 0600 权限）；官方部署状态机 13 项通过；actionlint v1.7.7、
