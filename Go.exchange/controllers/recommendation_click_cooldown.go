@@ -24,9 +24,9 @@ const (
 // RecommendationClickCooldown atomically reserves a user/Post click until the
 // Kafka publish outcome is known.
 type RecommendationClickCooldown interface {
-	Acquire(ctx context.Context, userID, postID uint, eventID string) (RecommendationClickCooldownAcquireResult, error)
-	Commit(ctx context.Context, userID, postID uint, eventID string) error
-	Release(ctx context.Context, userID, postID uint, eventID string) error
+	Acquire(ctx context.Context, userID, postID uint, requestID, eventID string) (RecommendationClickCooldownAcquireResult, error)
+	Commit(ctx context.Context, userID, postID uint, requestID, eventID string) error
+	Release(ctx context.Context, userID, postID uint, requestID, eventID string) error
 }
 
 type redisRecommendationClickCooldown struct {
@@ -96,11 +96,11 @@ func clickCooldownTTLSeconds(ttl time.Duration) (int64, error) {
 	return int64(ttl / time.Second), nil
 }
 
-func (store *redisRecommendationClickCooldown) Acquire(ctx context.Context, userID, postID uint, eventID string) (RecommendationClickCooldownAcquireResult, error) {
+func (store *redisRecommendationClickCooldown) Acquire(ctx context.Context, userID, postID uint, requestID, eventID string) (RecommendationClickCooldownAcquireResult, error) {
 	if store == nil || store.client == nil {
 		return 0, errors.New("redis click cooldown is unavailable")
 	}
-	key := recommendationClickCooldownKey(userID, postID)
+	key := recommendationClickCooldownKey(userID, postID, requestID)
 	pendingValue := "PENDING:" + eventID
 	result, err := acquireRecommendationClickCooldownScript.Run(
 		store.client.WithContext(ctx), []string{key}, pendingValue, store.pendingSeconds,
@@ -120,12 +120,12 @@ func (store *redisRecommendationClickCooldown) Acquire(ctx context.Context, user
 	}
 }
 
-func (store *redisRecommendationClickCooldown) Commit(ctx context.Context, userID, postID uint, eventID string) error {
+func (store *redisRecommendationClickCooldown) Commit(ctx context.Context, userID, postID uint, requestID, eventID string) error {
 	if store == nil || store.client == nil {
 		return errors.New("redis click cooldown is unavailable")
 	}
 	result, err := commitRecommendationClickCooldownScript.Run(
-		store.client.WithContext(ctx), []string{recommendationClickCooldownKey(userID, postID)},
+		store.client.WithContext(ctx), []string{recommendationClickCooldownKey(userID, postID, requestID)},
 		"PENDING:"+eventID, "COMMITTED:"+eventID, store.cooldownSeconds,
 	).Int()
 	if err != nil {
@@ -137,16 +137,16 @@ func (store *redisRecommendationClickCooldown) Commit(ctx context.Context, userI
 	return nil
 }
 
-func (store *redisRecommendationClickCooldown) Release(ctx context.Context, userID, postID uint, eventID string) error {
+func (store *redisRecommendationClickCooldown) Release(ctx context.Context, userID, postID uint, requestID, eventID string) error {
 	if store == nil || store.client == nil {
 		return errors.New("redis click cooldown is unavailable")
 	}
 	_, err := releaseRecommendationClickCooldownScript.Run(
-		store.client.WithContext(ctx), []string{recommendationClickCooldownKey(userID, postID)}, "PENDING:"+eventID,
+		store.client.WithContext(ctx), []string{recommendationClickCooldownKey(userID, postID, requestID)}, "PENDING:"+eventID,
 	).Result()
 	return err
 }
 
-func recommendationClickCooldownKey(userID, postID uint) string {
-	return fmt.Sprintf("recommendation:telemetry:click:cooldown:%d:%d", userID, postID)
+func recommendationClickCooldownKey(userID, postID uint, requestID string) string {
+	return fmt.Sprintf("recommendation:telemetry:click:cooldown:%d:%s:%d", userID, requestID, postID)
 }
