@@ -31,9 +31,10 @@ const (
 )
 
 type recommendationMetricEvent struct {
-	Envelope eventing.Envelope
-	Payload  eventing.RecommendationBehaviorPayload
-	Message  kafka.Message
+	Envelope           eventing.Envelope
+	Payload            eventing.RecommendationBehaviorPayload
+	Message            kafka.Message
+	MetricDateOverride *time.Time // CTR clicks belong to their impression cohort, even across midnight.
 }
 
 type recommendationMetricsMessageReader interface {
@@ -450,6 +451,14 @@ func claimRecommendationCTREvents(tx *gorm.DB, records []recommendationMetricEve
 				implied := record
 				implied.Envelope.Type = eventing.EventTypeRecommendationImpression
 				effective = append(effective, implied)
+			} else {
+				// Attribute the click to the original impression's UTC date,
+				// not the click's date (which can be after midnight).
+				var impression models.RecommendationCTRClaim
+				if err := tx.Select("metric_date").Where("user_id = ? AND request_id = ? AND post_id = ? AND event_type = ?", record.Payload.UserID, record.Payload.RequestID, record.Payload.PostID, models.RecommendationEventTypeImpression).Take(&impression).Error; err != nil {
+					return nil, err
+				}
+				record.MetricDateOverride = &impression.MetricDate
 			}
 			effective = append(effective, record)
 		default:
@@ -460,9 +469,12 @@ func claimRecommendationCTREvents(tx *gorm.DB, records []recommendationMetricEve
 }
 
 func insertRecommendationCTRClaim(tx *gorm.DB, record recommendationMetricEvent, eventType string) (bool, error) {
+	occurredAt := record.Envelope.OccurredAt.UTC()
 	row := models.RecommendationCTRClaim{
 		UserID: record.Payload.UserID, RequestID: record.Payload.RequestID,
-		PostID: record.Payload.PostID, EventType: eventType, CreatedAt: time.Now().UTC(),
+		PostID: record.Payload.PostID, EventType: eventType,
+		MetricDate: time.Date(occurredAt.Year(), occurredAt.Month(), occurredAt.Day(), 0, 0, 0, 0, time.UTC),
+		CreatedAt: time.Now().UTC(),
 	}
 	result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
 	if result.Error != nil {
@@ -496,6 +508,9 @@ func aggregateRecommendationMetrics(records []recommendationMetricEvent, firstDe
 			continue
 		}
 		occurredAt := record.Envelope.OccurredAt.UTC()
+		if record.MetricDateOverride != nil {
+			occurredAt = record.MetricDateOverride.UTC()
+		}
 		key := recommendationMetricKey{
 			MetricDate: time.Date(occurredAt.Year(), occurredAt.Month(), occurredAt.Day(), 0, 0, 0, 0, time.UTC),
 			Scene:      record.Payload.Scene, RankerVersion: record.Payload.RankerVersion,
