@@ -11,5 +11,6 @@ type RecommendationCTRClaim struct {
 	RequestID string    `gorm:"type:uuid;primaryKey;not null"`
 	PostID    uint      `gorm:"primaryKey;not null"`
 	EventType string    `gorm:"size:16;primaryKey;not null"`
-	CreatedAt time.Time `gorm:"not null"`
+	MetricDate time.Time `gorm:"type:date;not null"`
+	CreatedAt  time.Time `gorm:"not null"`
 }
