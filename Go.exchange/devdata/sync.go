@@ -11,13 +11,18 @@ import (
 	"strings"
 	"time"
 
+	"Go.exchange/config"
 	"Go.exchange/controllers"
+	"Go.exchange/embeddings"
+	"Go.exchange/eventing"
 	"Go.exchange/likes"
 	"Go.exchange/metrics"
 	"Go.exchange/models"
+	"Go.exchange/recommendation"
 	"Go.exchange/utils"
 
 	"github.com/go-redis/redis/v7"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -42,14 +47,16 @@ type SyncResult struct {
 	PurgedPostIDs       []uint
 }
 
-// SyncOptions controls optional localizations and the trusted new-User Like
-// initializer used inside the SQL transaction.
+// SyncOptions controls optional localizations, embedding refresh delivery, and
+// the trusted new-User Like initializer used inside the SQL transaction.
 type SyncOptions struct {
 	AvatarResolutions                    map[string]AvatarResolution
 	CoverResolutions                     map[string]CoverResolution
 	PostMediaResolutions                 map[SourcePostKey][]PostMediaResolution
 	PreserveExistingAvatarWhenUnresolved bool
 	PreserveExistingCoverWhenUnresolved  bool
+	EmbeddingEnabled                     bool
+	PostEmbeddingTopic                   string
 	UserLikeInitializer                  interface {
 		InitializeUserEmpty(context.Context, uint) error
 	}
@@ -553,13 +560,14 @@ func desiredPostByID(posts []SnapshotPost, sourceID string) (SnapshotPost, bool)
 
 func syncExistingPost(tx *gorm.DB, account models.DevDataMirrorAccount, mapping models.DevDataMirrorPost, desired SnapshotPost, syncAt time.Time, options SyncOptions, maintenance *syncMaintenance) error {
 	var post models.Post
-	if err := tx.Unscoped().First(&post, mapping.LocalPostID).Error; err != nil {
+	if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).First(&post, mapping.LocalPostID).Error; err != nil {
 		return fmt.Errorf("%w: load mapped Post %d: %w", ErrMirrorMappingInconsistent, mapping.LocalPostID, err)
 	}
 	if post.ReplyToPostID != nil || post.QuotePostID != nil || post.ConversationID != nil {
 		return fmt.Errorf("%w: imported Post %d is not a root", ErrMirrorMappingInconsistent, post.ID)
 	}
 	contentChanged := post.Content != desired.Text || post.Language != desired.Language || post.AuthorID != account.LocalUserID || post.Visibility != "public" || !post.CreatedAt.Equal(desired.CreatedAt.UTC())
+	embeddingContentChanged := embeddings.PostEmbeddingContentHash(post.Content) != embeddings.PostEmbeddingContentHash(desired.Text)
 	reactivate := mapping.State == models.DevDataMirrorPostStateTombstone || post.DeletedAt.Valid
 	if reactivate {
 		metrics.RecordLikeLifecycleEvent("post_reactivation_refused")
@@ -583,6 +591,42 @@ func syncExistingPost(tx *gorm.DB, account models.DevDataMirrorAccount, mapping 
 			return fmt.Errorf("update imported Post %d: %w", post.ID, update.Error)
 		}
 		return fmt.Errorf("update imported Post %d affected %d rows", post.ID, update.RowsAffected)
+	}
+	if embeddingContentChanged {
+		if err := tx.Where("post_id = ?", post.ID).Delete(&models.PostEmbedding{}).Error; err != nil {
+			return fmt.Errorf("delete stale Post %d embeddings: %w", post.ID, err)
+		}
+		if options.EmbeddingEnabled {
+			envelope, err := eventing.NewPostEmbeddingRequestedEnvelope(uuid.NewString(), post.ID, syncAt)
+			if err != nil {
+				return fmt.Errorf("build Post %d embedding request: %w", post.ID, err)
+			}
+			outboxEvent, err := eventing.NewOutboxEvent(config.KafkaConfig{PostEmbeddingTopic: options.PostEmbeddingTopic}, envelope)
+			if err != nil {
+				return fmt.Errorf("build Post %d embedding outbox event: %w", post.ID, err)
+			}
+			if err := eventing.AddOutboxEvent(tx, outboxEvent); err != nil {
+				return fmt.Errorf("write Post %d embedding outbox event: %w", post.ID, err)
+			}
+		}
+		var users []uint
+		if err := tx.Raw(`
+SELECT user_id FROM post_behaviors WHERE post_id = ?
+UNION
+SELECT user_id FROM post_reaction WHERE post_id = ?`, post.ID, post.ID).Scan(&users).Error; err != nil {
+			return fmt.Errorf("load users affected by Post %d embedding change: %w", post.ID, err)
+		}
+		dirtyProfiles, err := recommendation.NewGormDirtyProfileRepository(tx)
+		if err != nil {
+			return err
+		}
+		ctx := tx.Statement.Context
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if err := dirtyProfiles.InvalidateProfiles(ctx, users, "post_embedding_changed", syncAt); err != nil {
+			return fmt.Errorf("invalidate profiles affected by Post %d embedding change: %w", post.ID, err)
+		}
 	}
 	if contentChanged || reactivate {
 		maintenance.affect(post.ID)

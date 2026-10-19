@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,6 +67,7 @@ func TestPostEmbeddingCoverageCountsOnlyEligibleRootsIntegration(t *testing.T) {
 		coverageIntegrationEmbedding(posts[1], "post_embedding_v2"),
 		coverageIntegrationEmbedding(posts[2], "post_embedding_v1"),
 	}
+	embeddingRows[1].ContentHash = strings.Repeat("0", 64)
 	if err := db.Create(&embeddingRows).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -89,8 +91,31 @@ func TestPostEmbeddingCoverageCountsOnlyEligibleRootsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if coverage.Eligible != 3 || coverage.Ready != 2 || coverage.Missing != 1 || coverage.Percent < 66.6666 || coverage.Percent > 66.6667 {
-		t.Fatalf("coverage=%+v, want eligible=3 ready=2 missing=1", coverage)
+	if coverage.Eligible != 3 || coverage.Ready != 1 || coverage.Missing != 2 || coverage.StaleContent != 1 || coverage.Percent < 33.3333 || coverage.Percent > 33.3334 {
+		t.Fatalf("coverage=%+v, want eligible=3 ready=1 missing=2 stale=1", coverage)
+	}
+	var pages, scannedRows int
+	if err := (gormPostEmbeddingCoverageScanner{db: db}).ScanEligible(context.Background(), "post_embedding_v2", 2, func(rows []postEmbeddingCoverageRow) error {
+		pages++
+		scannedRows += len(rows)
+		return nil
+	}); err != nil {
+		t.Fatalf("scan eligible Posts in keyset pages: %v", err)
+	}
+	if pages != 2 || scannedRows != 3 {
+		t.Fatalf("coverage pages=%d scanned=%d, want pages=2 scanned=3", pages, scannedRows)
+	}
+	if err := db.Model(&models.PostEmbedding{}).
+		Where("post_id = ? AND version = ?", posts[1].ID, "post_embedding_v2").
+		Update("content_hash", embeddings.PostEmbeddingContentHash(posts[1].Content)).Error; err != nil {
+		t.Fatalf("simulate regenerated matching embedding: %v", err)
+	}
+	coverage, err = calculatePostEmbeddingCoverage(context.Background(), gormPostEmbeddingCoverageScanner{db: db}, "post_embedding_v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coverage.Eligible != 3 || coverage.Ready != 2 || coverage.Missing != 1 || coverage.StaleContent != 0 || coverage.Percent < 66.6666 || coverage.Percent > 66.6667 {
+		t.Fatalf("regenerated coverage=%+v, want eligible=3 ready=2 missing=1 stale=0", coverage)
 	}
 }
 

@@ -142,13 +142,17 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(stdout, "Post media: posts=%d attempted=%d uploaded=%d reused=%d failed=%d\n", postMediaReport.PostsWithMedia, postMediaReport.Attempted, postMediaReport.Uploaded, postMediaReport.Reused, postMediaReport.Failed)
-		if err := syncAndVerifyWithDB(ctx, stdout, registry, snapshot, db, redisClient, devdata.SyncOptions{
+		syncOptions, err := withEmbeddingOutboxConfig(devdata.SyncOptions{
 			AvatarResolutions:                    resolutions,
 			CoverResolutions:                     coverResolutions,
 			PostMediaResolutions:                 postMediaResolutions,
 			PreserveExistingAvatarWhenUnresolved: true,
 			PreserveExistingCoverWhenUnresolved:  true,
-		}); err != nil {
+		})
+		if err != nil {
+			return err
+		}
+		if err := syncAndVerifyWithDB(ctx, stdout, registry, snapshot, db, redisClient, syncOptions); err != nil {
 			return err
 		}
 		writeMediaLocalizationWarning(stderr, avatarReport.Failed, postMediaReport.Failed)
@@ -230,13 +234,17 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		defer redisClient.Close()
-		if err := syncAndVerifyWithDB(ctx, stdout, registry, snapshot, db, redisClient, devdata.SyncOptions{
+		syncOptions, err := withEmbeddingOutboxConfig(devdata.SyncOptions{
 			AvatarResolutions:                    avatarResolutions,
 			CoverResolutions:                     coverResolutions,
 			PostMediaResolutions:                 postMediaResolutions,
 			PreserveExistingAvatarWhenUnresolved: true,
 			PreserveExistingCoverWhenUnresolved:  true,
-		}); err != nil {
+		})
+		if err != nil {
+			return err
+		}
+		if err := syncAndVerifyWithDB(ctx, stdout, registry, snapshot, db, redisClient, syncOptions); err != nil {
 			return err
 		}
 		writeMediaLocalizationWarning(stderr, avatarReport.Failed, postMediaReport.Failed)
@@ -616,13 +624,17 @@ func applyIncrementalBatch(ctx context.Context, db *gorm.DB, registry devdata.So
 	if err != nil {
 		return incrementalSyncSummary{}, err
 	}
-	result, err := devdata.SyncIncremental(ctx, db, registry, batch, redisClient, time.Now().UTC(), devdata.SyncOptions{
+	syncOptions, err := withEmbeddingOutboxConfig(devdata.SyncOptions{
 		AvatarResolutions:                    avatarResolutions,
 		CoverResolutions:                     coverResolutions,
 		PostMediaResolutions:                 postMediaResolutions,
 		PreserveExistingAvatarWhenUnresolved: true,
 		PreserveExistingCoverWhenUnresolved:  true,
 	})
+	if err != nil {
+		return incrementalSyncSummary{}, err
+	}
+	result, err := devdata.SyncIncremental(ctx, db, registry, batch, redisClient, time.Now().UTC(), syncOptions)
 	if err != nil {
 		return incrementalSyncSummary{}, err
 	}
@@ -644,6 +656,15 @@ func initDatabase() (*gorm.DB, error) {
 		return nil, errors.New("database is not initialized")
 	}
 	return global.WorkerDb, nil
+}
+
+func withEmbeddingOutboxConfig(options devdata.SyncOptions) (devdata.SyncOptions, error) {
+	if config.AppConfig == nil {
+		return devdata.SyncOptions{}, errors.New("application config is not initialized")
+	}
+	options.EmbeddingEnabled = config.AppConfig.Embedding.Enabled
+	options.PostEmbeddingTopic = config.AppConfig.Kafka.PostEmbeddingTopic
+	return options, nil
 }
 
 func releaseDevDataMutationLock(ctx context.Context, lock interface {

@@ -122,6 +122,10 @@ func runTargetedRefresh(ctx context.Context, baseDir string, options commandOpti
 		PreserveExistingAvatarWhenUnresolved: true,
 		PreserveExistingCoverWhenUnresolved:  true,
 	}
+	syncOptions, err = withEmbeddingOutboxConfig(syncOptions)
+	if err != nil {
+		return err
+	}
 	var result devdata.SyncResult
 	if replacementMode {
 		result, err = devdata.SyncTargetedReplacement(ctx, db, registry, baseline, options.replace, batch, redisClient, now, syncOptions)
