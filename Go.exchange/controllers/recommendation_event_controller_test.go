@@ -287,6 +287,23 @@ func TestRecommendationClickCooldownFiveMinutes(t *testing.T) {
 	}
 }
 
+func TestRecommendationClickCooldownAllowsNewRequestForSamePost(t *testing.T) {
+	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
+	setRecommendationTelemetryTestClock(t, &now)
+	cooldown := newRecommendationTestCooldown(func() time.Time { return now })
+	publisher := &recommendationTestPublisher{}
+	originalToken := signTestRecommendationToken(t, 7, 11, now, 3000, recommendationReadPolicyVersion)
+	nextToken := signTestRecommendationToken(t, 7, 11, now, 3000, recommendationReadPolicyVersion)
+
+	status, response := submitRecommendationTestBatch(t, publisher, cooldown, 7, []recommendationEventInput{
+		recommendationTestInput(uuid.NewString(), models.RecommendationEventTypeClick, originalToken, now),
+		recommendationTestInput(uuid.NewString(), models.RecommendationEventTypeClick, nextToken, now),
+	})
+	if status != http.StatusAccepted || response.Accepted != 2 || response.Duplicates != 0 || len(publisher.events) != 2 {
+		t.Fatalf("new request on same post was suppressed: status=%d response=%#v events=%d", status, response, len(publisher.events))
+	}
+}
+
 func TestRecommendationClickCooldownIsScopedToUserAndPost(t *testing.T) {
 	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
 	setRecommendationTelemetryTestClock(t, &now)
