@@ -195,6 +195,36 @@ func TestHandlerExposesKafkaConsumerRecoveryMetrics(t *testing.T) {
 	}
 }
 
+func TestHandlerExposesPostEmbeddingBatchMetrics(t *testing.T) {
+	RecordPostEmbeddingAPIRequest("success", 5)
+	RecordPostEmbeddingAPIRequest("error", 2)
+	RecordPostEmbeddingAPIRequest("unbounded", 999)
+	ObservePostEmbeddingKafkaBatchSize(5)
+	ObservePostEmbeddingBatchWait(50 * time.Millisecond)
+	RecordPostEmbeddingBatchSplit()
+	RecordPostEmbeddingBatchFailure()
+
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := response.Body.String()
+	for _, sample := range []string{
+		`go_exchange_post_embedding_api_requests_total{outcome="success"} `,
+		`go_exchange_post_embedding_api_requests_total{outcome="error"} `,
+		`go_exchange_post_embedding_api_request_texts_count `,
+		`go_exchange_post_embedding_kafka_batch_size_count `,
+		`go_exchange_post_embedding_batch_wait_seconds_count `,
+		`go_exchange_post_embedding_batch_splits_total `,
+		`go_exchange_post_embedding_batch_failures_total `,
+	} {
+		if !strings.Contains(body, sample) {
+			t.Errorf("Post embedding metric missing %q", sample)
+		}
+	}
+	if strings.Contains(body, `outcome="unbounded"`) {
+		t.Fatalf("Post embedding API metric exposed an unbounded outcome: %s", body)
+	}
+}
+
 func TestHandlerExposesBoundedRecommendationTraceMetrics(t *testing.T) {
 	RecordRecommendationTraceEnqueue("queued")
 	RecordRecommendationTraceEnqueue("dropped_full")

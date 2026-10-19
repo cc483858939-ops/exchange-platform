@@ -18,7 +18,13 @@ var (
 	postEmbeddingEvents                          = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_post_embedding_events_total", Help: "Post embedding event outcomes."}, []string{"result"})
 	postEmbeddingFailures                        = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_post_embedding_failures_total", Help: "Post embedding processing failures by stage."}, []string{"stage"})
 	postEmbeddingPublishFailures                 = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_post_embedding_publish_failures_total", Help: "Post embedding publish failures by source."}, []string{"source"})
-	postEmbeddingProcessingDuration              = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_post_embedding_processing_duration_seconds", Help: "Post embedding message processing duration in seconds.", Buckets: prometheus.DefBuckets})
+	postEmbeddingProcessingDuration              = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_post_embedding_processing_duration_seconds", Help: "Post embedding batch processing duration in seconds.", Buckets: prometheus.DefBuckets})
+	postEmbeddingAPIRequests                     = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_post_embedding_api_requests_total", Help: "Post embedding API requests by outcome."}, []string{"outcome"})
+	postEmbeddingAPIRequestTexts                 = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_post_embedding_api_request_texts", Help: "Number of texts sent in one Post embedding API request.", Buckets: []float64{1, 2, 3, 5, 8, 16, 32}})
+	postEmbeddingKafkaBatchSize                  = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_post_embedding_kafka_batch_size", Help: "Number of Kafka messages collected for one Post embedding processing batch.", Buckets: []float64{1, 2, 3, 5, 8, 16, 32}})
+	postEmbeddingBatchWait                       = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_post_embedding_batch_wait_seconds", Help: "Time spent collecting a Post embedding batch after its first Kafka message.", Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1}})
+	postEmbeddingBatchSplits                     = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_post_embedding_batch_splits_total", Help: "Post embedding batch splits caused by permanent provider or response contract errors."})
+	postEmbeddingBatchFailures                   = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_post_embedding_batch_failures_total", Help: "Post embedding batches that could not reach a safe terminal state or commit."})
 	kafkaConsumerRecovery                        = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_kafka_consumer_recovery_total", Help: "Kafka consumer recovery control-flow events by consumer, outcome, and stable code."}, []string{"consumer", "outcome", "code"})
 	outboxCDCSlotActive                          = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_cdc_slot_active", Help: "Whether the configured PostgreSQL CDC slot is active."})
 	outboxCDCWALLagBytes                         = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_cdc_wal_lag_bytes", Help: "WAL lag behind the outbox CDC slot in bytes."})
@@ -105,7 +111,7 @@ var (
 func init() {
 	registry.MustRegister(
 		databasePoolCollector,
-		httpRequestsTotal, httpRequestDuration, recommendationHTTPDuration, postEmbeddingEvents, postEmbeddingFailures, postEmbeddingPublishFailures, postEmbeddingProcessingDuration, kafkaConsumerRecovery,
+		httpRequestsTotal, httpRequestDuration, recommendationHTTPDuration, postEmbeddingEvents, postEmbeddingFailures, postEmbeddingPublishFailures, postEmbeddingProcessingDuration, postEmbeddingAPIRequests, postEmbeddingAPIRequestTexts, postEmbeddingKafkaBatchSize, postEmbeddingBatchWait, postEmbeddingBatchSplits, postEmbeddingBatchFailures, kafkaConsumerRecovery,
 		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxRowsLastSuccess, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, consumerInboxRowsLastSuccess, notificationProjectionFailures, notificationProjectionLatency, likePipelineDepth, likePipelineDepthLastSuccess, likeClaimDuration, likeQueueOperations, likeLifecycleEvents, postLikeInitJobsBacklog, userLikeRelationsRemoved, userLikeCleanupBatchUsers, userLikeCleanupBatchRelations, userLikeCleanupBatchRemoved, userLikeCleanupBatchDuration, userLikeCleanupCycleDuration, userLikeCleanupLastCycle, userLikeTTLEvents, userLikeRestoreResults, userLikeRestoreDuration, userLikeRestoreRelations, userLikeRestoreInflight, userLikeCapEvents, userLikeActiveRelations, userLikeEvictionDuration,
 		recommendationTelemetryEvents, recommendationClickCooldown, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests, recommendationSnapshotOutcomes,
@@ -122,6 +128,9 @@ func init() {
 	}
 	for _, stage := range []string{"decode", "db_read", "provider", "db_upsert", "kafka_commit"} {
 		postEmbeddingFailures.WithLabelValues(stage)
+	}
+	for _, outcome := range []string{"success", "error"} {
+		postEmbeddingAPIRequests.WithLabelValues(outcome)
 	}
 	for _, source := range []string{"post_create", "requeue"} {
 		postEmbeddingPublishFailures.WithLabelValues(source)
@@ -270,6 +279,27 @@ func RecordPostEmbeddingPublishFailure(source string) {
 func ObservePostEmbeddingProcessingDuration(duration time.Duration) {
 	postEmbeddingProcessingDuration.Observe(duration.Seconds())
 }
+func RecordPostEmbeddingAPIRequest(outcome string, textCount int) {
+	if outcome != "success" && outcome != "error" {
+		outcome = "error"
+	}
+	postEmbeddingAPIRequests.WithLabelValues(outcome).Inc()
+	if textCount > 0 {
+		postEmbeddingAPIRequestTexts.Observe(float64(textCount))
+	}
+}
+func ObservePostEmbeddingKafkaBatchSize(size int) {
+	if size > 0 {
+		postEmbeddingKafkaBatchSize.Observe(float64(size))
+	}
+}
+func ObservePostEmbeddingBatchWait(duration time.Duration) {
+	if duration >= 0 {
+		postEmbeddingBatchWait.Observe(duration.Seconds())
+	}
+}
+func RecordPostEmbeddingBatchSplit()   { postEmbeddingBatchSplits.Inc() }
+func RecordPostEmbeddingBatchFailure() { postEmbeddingBatchFailures.Inc() }
 func RecordKafkaConsumerRecovery(consumer, outcome, code string) {
 	switch consumer {
 	case "like_snapshot_projection", "user_behavior_projection", "recommendation_metrics", "post_embedding", "notification_projection":

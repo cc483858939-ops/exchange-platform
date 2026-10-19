@@ -36,6 +36,13 @@ type postEmbeddingMessageReader interface {
 	Close() error
 }
 
+type postEmbeddingWorkItem struct {
+	Message     kafka.Message
+	PostID      uint
+	ContentHash string
+	Text        string
+}
+
 type postEmbeddingWriteOutcome uint8
 
 const (
@@ -181,7 +188,12 @@ func runPostEmbeddingConsumer(ctx context.Context) {
 		return
 	}
 	kafkaConfig := appConfig.Kafka
-	embeddingConfig := appConfig.Embedding
+	embeddingConfig := appConfig.Embedding.Normalized()
+	if err := embeddingConfig.ValidateBatchSettings(); err != nil {
+		PipelineFailure(PipelinePostEmbedding, "embedding_config_invalid", 0)
+		log.Printf("[PostEmbedding] consumer disabled: %v", err)
+		return
+	}
 	db := global.WorkerDb
 	if db == nil {
 		PipelineFailure(PipelinePostEmbedding, "database_unavailable", 0)
@@ -213,7 +225,10 @@ func runPostEmbeddingConsumer(ctx context.Context) {
 	}()
 	publisher := eventingRawKafkaMessagePublisher{kafkaConfig: kafkaConfig}
 	store := gormPostEmbeddingStore{db: db}
-	if err := consumePostEmbeddingMessages(ctx, reader, publisher, embedder, store, buildVersion, kafkaConfig); err != nil && ctx.Err() == nil {
+	if err := consumePostEmbeddingMessagesWithBatchPolicy(
+		ctx, reader, publisher, embedder, store, buildVersion, kafkaConfig,
+		embeddingConfig.BatchSize, time.Duration(embeddingConfig.BatchMaxWaitMs)*time.Millisecond, defaultKafkaRetryPolicy,
+	); err != nil && ctx.Err() == nil {
 		if errors.Is(err, errPostEmbeddingSourceChanged) {
 			log.Printf("[PostEmbedding] source changed during embedding; leaving Kafka message uncommitted for redelivery")
 			return
@@ -245,6 +260,21 @@ func consumePostEmbeddingMessagesWithPolicy(
 	kafkaConfig config.KafkaConfig,
 	policy kafkaRetryPolicy,
 ) error {
+	return consumePostEmbeddingMessagesWithBatchPolicy(ctx, reader, publisher, embedder, store, buildVersion, kafkaConfig, 1, 0, policy)
+}
+
+func consumePostEmbeddingMessagesWithBatchPolicy(
+	ctx context.Context,
+	reader postEmbeddingMessageReader,
+	publisher rawKafkaMessagePublisher,
+	embedder embeddings.Embedder,
+	store postEmbeddingStore,
+	buildVersion string,
+	kafkaConfig config.KafkaConfig,
+	batchSize int,
+	maxWait time.Duration,
+	policy kafkaRetryPolicy,
+) error {
 	if ctx == nil {
 		return errors.New("post embedding consumer context is nil")
 	}
@@ -257,6 +287,12 @@ func consumePostEmbeddingMessagesWithPolicy(
 	if store == nil {
 		return errors.New("post embedding store is nil")
 	}
+	if batchSize < 1 || batchSize > config.MaxEmbeddingBatchSize {
+		return fmt.Errorf("post embedding batch size must be between 1 and %d", config.MaxEmbeddingBatchSize)
+	}
+	if batchSize > 1 && (maxWait <= 0 || maxWait > time.Duration(config.MaxEmbeddingBatchMaxWaitMs)*time.Millisecond) {
+		return fmt.Errorf("post embedding batch max wait must be between 1ms and %dms", config.MaxEmbeddingBatchMaxWaitMs)
+	}
 	buildVersion = strings.TrimSpace(buildVersion)
 	if buildVersion == "" {
 		return errors.New("build embedding version is required")
@@ -266,16 +302,19 @@ func consumePostEmbeddingMessagesWithPolicy(
 		return errors.New("consumer DLQ topic is required")
 	}
 	for {
-		message, err := reader.FetchMessage(ctx)
+		started := time.Now()
+		batch, err := fetchPostEmbeddingBatch(ctx, reader, batchSize, maxWait)
 		if err != nil {
+			metrics.RecordPostEmbeddingBatchFailure()
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			return err
 		}
-		started := time.Now()
-		processErr := processPostEmbeddingMessage(ctx, message, publisher, embedder, store, buildVersion, kafkaConfig, policy)
+		metrics.ObservePostEmbeddingKafkaBatchSize(len(batch))
+		processErr := processPostEmbeddingBatch(ctx, batch, publisher, embedder, store, buildVersion, kafkaConfig, policy)
 		if processErr != nil {
+			metrics.RecordPostEmbeddingBatchFailure()
 			metrics.ObservePostEmbeddingProcessingDuration(time.Since(started))
 			return processErr
 		}
@@ -283,8 +322,9 @@ func consumePostEmbeddingMessagesWithPolicy(
 			metrics.ObservePostEmbeddingProcessingDuration(time.Since(started))
 			return err
 		}
-		if err := reader.CommitMessages(ctx, message); err != nil {
+		if err := reader.CommitMessages(ctx, batch...); err != nil {
 			metrics.ObservePostEmbeddingProcessingDuration(time.Since(started))
+			metrics.RecordPostEmbeddingBatchFailure()
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -294,13 +334,88 @@ func consumePostEmbeddingMessagesWithPolicy(
 			return commitErr
 		}
 		metrics.ObservePostEmbeddingProcessingDuration(time.Since(started))
+		metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeBatchApplied, kafkaRecoveryCodeNone)
 		PipelineCommit(PipelinePostEmbedding, time.Now().UTC(), 0)
 	}
+}
+
+func fetchPostEmbeddingBatch(
+	ctx context.Context,
+	reader postEmbeddingMessageReader,
+	batchSize int,
+	maxWait time.Duration,
+) ([]kafka.Message, error) {
+	if ctx == nil {
+		return nil, errors.New("post embedding batch context is nil")
+	}
+	if reader == nil {
+		return nil, errors.New("post embedding message reader is nil")
+	}
+	if batchSize < 1 || batchSize > config.MaxEmbeddingBatchSize {
+		return nil, fmt.Errorf("post embedding batch size must be between 1 and %d", config.MaxEmbeddingBatchSize)
+	}
+	if batchSize > 1 && (maxWait <= 0 || maxWait > time.Duration(config.MaxEmbeddingBatchMaxWaitMs)*time.Millisecond) {
+		return nil, fmt.Errorf("post embedding batch max wait must be between 1ms and %dms", config.MaxEmbeddingBatchMaxWaitMs)
+	}
+	first, err := reader.FetchMessage(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, err
+	}
+	batch := []kafka.Message{first}
+	if batchSize == 1 {
+		return batch, nil
+	}
+	collectStarted := time.Now()
+	defer func() { metrics.ObservePostEmbeddingBatchWait(time.Since(collectStarted)) }()
+	deadline := collectStarted.Add(maxWait)
+	for len(batch) < batchSize {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !time.Now().Before(deadline) {
+			return batch, nil
+		}
+		fetchCtx, cancel := context.WithDeadline(ctx, deadline)
+		message, fetchErr := reader.FetchMessage(fetchCtx)
+		fetchDeadlineExceeded := errors.Is(fetchCtx.Err(), context.DeadlineExceeded)
+		cancel()
+		if fetchErr == nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			batch = append(batch, message)
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if fetchDeadlineExceeded && errors.Is(fetchErr, context.DeadlineExceeded) {
+			return batch, nil
+		}
+		return nil, fetchErr
+	}
+	return batch, nil
 }
 
 func processPostEmbeddingMessage(
 	ctx context.Context,
 	message kafka.Message,
+	publisher rawKafkaMessagePublisher,
+	embedder embeddings.Embedder,
+	store postEmbeddingStore,
+	buildVersion string,
+	kafkaConfig config.KafkaConfig,
+	policy kafkaRetryPolicy,
+) error {
+	return processPostEmbeddingBatch(ctx, []kafka.Message{message}, publisher, embedder, store, buildVersion, kafkaConfig, policy)
+}
+
+func processPostEmbeddingBatch(
+	ctx context.Context,
+	messages []kafka.Message,
 	publisher rawKafkaMessagePublisher,
 	embedder embeddings.Embedder,
 	store postEmbeddingStore,
@@ -321,66 +436,110 @@ func processPostEmbeddingMessage(
 	if buildVersion == "" {
 		return errors.New("build embedding version is required")
 	}
-	postID, err := decodePostEmbeddingMessage(message)
+	workItems := make([]postEmbeddingWorkItem, 0, len(messages))
+	for _, message := range messages {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		postID, err := decodePostEmbeddingMessage(message)
+		if err != nil {
+			if kafkaFailureClassOf(err) != kafkaFailurePermanent {
+				return err
+			}
+			log.Printf("[PostEmbedding] route permanent message to DLQ topic=%s partition=%d offset=%d code=%s", message.Topic, message.Partition, message.Offset, kafkaFailureCode(err))
+			metrics.RecordPostEmbeddingFailure("decode")
+			metrics.RecordPostEmbeddingEvent("invalid_event")
+			if err := publishPostEmbeddingDLQ(ctx, publisher, kafkaConfig, message, err); err != nil {
+				return err
+			}
+			continue
+		}
+		post, contentHash, noop, err := loadPostEmbeddingSource(ctx, store, postID, buildVersion, policy)
+		if err != nil {
+			return err
+		}
+		if noop {
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeMessageNoop, kafkaRecoveryCodeNone)
+			continue
+		}
+		workItems = append(workItems, postEmbeddingWorkItem{
+			Message: message, PostID: postID, ContentHash: contentHash,
+			Text: embeddings.BuildPostEmbeddingText(post.Content),
+		})
+	}
+	if len(workItems) == 0 {
+		return nil
+	}
+	return processPostEmbeddingWorkItems(ctx, workItems, publisher, embedder, store, buildVersion, kafkaConfig, policy)
+}
+
+func processPostEmbeddingWorkItems(
+	ctx context.Context,
+	workItems []postEmbeddingWorkItem,
+	publisher rawKafkaMessagePublisher,
+	embedder embeddings.Embedder,
+	store postEmbeddingStore,
+	buildVersion string,
+	kafkaConfig config.KafkaConfig,
+	policy kafkaRetryPolicy,
+) error {
+	texts := make([]string, len(workItems))
+	for index, item := range workItems {
+		texts[index] = item.Text
+	}
+	result, err := generatePostEmbeddingTexts(ctx, embedder, texts, policy)
 	if err != nil {
 		if kafkaFailureClassOf(err) != kafkaFailurePermanent {
 			return err
 		}
-		log.Printf("[PostEmbedding] route permanent message to DLQ topic=%s partition=%d offset=%d code=%s", message.Topic, message.Partition, message.Offset, kafkaFailureCode(err))
-		metrics.RecordPostEmbeddingFailure("decode")
-		metrics.RecordPostEmbeddingEvent("invalid_event")
-		return publishPostEmbeddingDLQ(ctx, publisher, kafkaConfig, message, err)
-	}
-
-	post, contentHash, noop, err := loadPostEmbeddingSource(ctx, store, postID, buildVersion, policy)
-	if err != nil {
-		return err
-	}
-	if noop {
-		metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeMessageNoop, kafkaRecoveryCodeNone)
-		return nil
-	}
-
-	text := embeddings.BuildPostEmbeddingText(post.Content)
-	result, err := generatePostEmbedding(ctx, embedder, text, policy)
-	if err != nil {
-		if kafkaFailureClassOf(err) == kafkaFailurePermanent {
+		if len(workItems) == 1 {
+			message := workItems[0].Message
+			log.Printf("[PostEmbedding] permanent provider failure topic=%s partition=%d offset=%d code=%s", message.Topic, message.Partition, message.Offset, kafkaFailureCode(err))
 			return publishPostEmbeddingDLQ(ctx, publisher, kafkaConfig, message, err)
 		}
-		return err
+		metrics.RecordPostEmbeddingBatchSplit()
+		middle := len(workItems) / 2
+		if err := processPostEmbeddingWorkItems(ctx, workItems[:middle], publisher, embedder, store, buildVersion, kafkaConfig, policy); err != nil {
+			return err
+		}
+		return processPostEmbeddingWorkItems(ctx, workItems[middle:], publisher, embedder, store, buildVersion, kafkaConfig, policy)
 	}
+
 	modelName := strings.TrimSpace(result.Model)
-	dimensions := len(result.Vectors[0])
 	now := time.Now().UTC()
-	vector := pgvector.NewVector(result.Vectors[0])
-	embedding := models.PostEmbedding{
-		PostID: postID, Version: buildVersion, Model: modelName,
-		Dimensions: dimensions, Embedding: vector, ContentHash: contentHash,
-		CreatedAt: now, UpdatedAt: now,
+	for index, item := range workItems {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		vector := result.Vectors[index]
+		embedding := models.PostEmbedding{
+			PostID: item.PostID, Version: buildVersion, Model: modelName,
+			Dimensions: len(vector), Embedding: pgvector.NewVector(vector), ContentHash: item.ContentHash,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		outcome, err := commitPostEmbedding(ctx, store, embedding, now, policy)
+		if err != nil {
+			return err
+		}
+		switch outcome {
+		case postEmbeddingWriteCommitted:
+			metrics.RecordPostEmbeddingEvent("generated")
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeMessageApplied, kafkaRecoveryCodeNone)
+		case postEmbeddingWriteStaleContent:
+			metrics.RecordPostEmbeddingEvent("stale_content_discarded")
+			staleErr := retryableKafkaError(kafkaFailureCodeSourceChanged, errPostEmbeddingSourceChanged)
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(staleErr))
+			return staleErr
+		case postEmbeddingWritePostMissing:
+			metrics.RecordPostEmbeddingEvent("post_missing_after_embed")
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeMessageNoop, kafkaRecoveryCodeNone)
+		default:
+			stateErr := retryableKafkaError(kafkaFailureCodeInternalState, fmt.Errorf("unknown post embedding write outcome %d", outcome))
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(stateErr))
+			return stateErr
+		}
 	}
-	outcome, err := commitPostEmbedding(ctx, store, embedding, now, policy)
-	if err != nil {
-		return err
-	}
-	switch outcome {
-	case postEmbeddingWriteCommitted:
-		metrics.RecordPostEmbeddingEvent("generated")
-		metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeMessageApplied, kafkaRecoveryCodeNone)
-		return nil
-	case postEmbeddingWriteStaleContent:
-		metrics.RecordPostEmbeddingEvent("stale_content_discarded")
-		staleErr := retryableKafkaError(kafkaFailureCodeSourceChanged, errPostEmbeddingSourceChanged)
-		metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(staleErr))
-		return staleErr
-	case postEmbeddingWritePostMissing:
-		metrics.RecordPostEmbeddingEvent("post_missing_after_embed")
-		metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeMessageNoop, kafkaRecoveryCodeNone)
-		return nil
-	default:
-		stateErr := retryableKafkaError(kafkaFailureCodeInternalState, fmt.Errorf("unknown post embedding write outcome %d", outcome))
-		metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(stateErr))
-		return stateErr
-	}
+	return nil
 }
 
 func loadPostEmbeddingSource(
@@ -441,11 +600,12 @@ func loadPostEmbeddingSource(
 	return post, contentHash, false, nil
 }
 
-func generatePostEmbedding(ctx context.Context, embedder embeddings.Embedder, text string, policy kafkaRetryPolicy) (embeddings.EmbedResult, error) {
+func generatePostEmbeddingTexts(ctx context.Context, embedder embeddings.Embedder, texts []string, policy kafkaRetryPolicy) (embeddings.EmbedResult, error) {
 	var result embeddings.EmbedResult
 	err := retryPostEmbeddingStage(ctx, policy, func() error {
-		generated, err := embedder.Embed(ctx, []string{text})
+		generated, err := embedder.Embed(ctx, texts)
 		if err != nil {
+			metrics.RecordPostEmbeddingAPIRequest("error", len(texts))
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -458,10 +618,12 @@ func generatePostEmbedding(ctx context.Context, embedder embeddings.Embedder, te
 			}
 			return permanentKafkaError(kafkaFailureCodeProviderPermanent, err)
 		}
-		if contractErr := validatePostEmbeddingResult(generated); contractErr != nil {
+		if contractErr := validatePostEmbeddingBatchResult(generated, len(texts)); contractErr != nil {
+			metrics.RecordPostEmbeddingAPIRequest("error", len(texts))
 			metrics.RecordPostEmbeddingFailure("provider")
 			return permanentKafkaError(kafkaFailureCodeProviderContractInvalid, contractErr)
 		}
+		metrics.RecordPostEmbeddingAPIRequest("success", len(texts))
 		result = generated
 		result.Model = strings.TrimSpace(result.Model)
 		return nil
@@ -476,18 +638,27 @@ func generatePostEmbedding(ctx context.Context, embedder embeddings.Embedder, te
 	return result, nil
 }
 
-func validatePostEmbeddingResult(result embeddings.EmbedResult) error {
-	if len(result.Vectors) != 1 {
-		return errors.New("embedding provider must return exactly one vector")
+func validatePostEmbeddingBatchResult(result embeddings.EmbedResult, expectedVectors int) error {
+	if expectedVectors < 1 {
+		return errors.New("embedding request must contain at least one text")
 	}
-	if !validPostEmbeddingVector(result.Vectors[0]) {
-		return errors.New("embedding provider returned an empty or non-finite vector")
+	if len(result.Vectors) != expectedVectors {
+		return fmt.Errorf("embedding provider returned %d vectors for %d texts", len(result.Vectors), expectedVectors)
 	}
 	if strings.TrimSpace(result.Model) == "" {
 		return errors.New("embedding provider returned an empty model")
 	}
-	if len(result.Vectors[0]) <= 0 {
-		return errors.New("embedding provider returned invalid dimensions")
+	dimensions := 0
+	for index, vector := range result.Vectors {
+		if !validPostEmbeddingVector(vector) {
+			return fmt.Errorf("embedding provider returned an empty or non-finite vector at index %d", index)
+		}
+		if dimensions == 0 {
+			dimensions = len(vector)
+		}
+		if len(vector) != dimensions {
+			return errors.New("embedding provider returned inconsistent dimensions")
+		}
 	}
 	return nil
 }

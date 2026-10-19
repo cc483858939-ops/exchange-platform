@@ -251,6 +251,20 @@ Go.exchange/
 
 - Redis is the hot path for Post like counts; PostgreSQL stores the durable projection.
 - Post detail responses are cached in Redis.
-- Post embedding analysis is queued through Redis sets and processed by worker goroutines.
+- Post embedding work is requested through Kafka and consumed in bounded batches by a worker.
 - Long-form Post cover images are stored in MinIO and served through `/api/files/*objectKey`.
 - API and worker processes do not run `AutoMigrate`; schema changes belong to the `migrate` job.
+
+## Post Embedding Consumer
+
+The Kafka Post Embedding consumer collects up to `embedding.batch_size` messages
+before calling the configured provider. The shipped configuration uses a batch
+size of 5 and a maximum collection wait of 50 ms after the first message. Older
+configuration files without these fields default to a batch size of 1 and a
+50 ms maximum wait; size 1 skips collection waiting. Valid ranges are 1–32
+messages and 1–1000 ms. `EMBEDDING_BATCH_SIZE` and
+`EMBEDDING_BATCH_MAX_WAIT_MS` override the YAML values. Messages are processed
+serially across batches, and Kafka offsets are committed only after every
+message in that fetched batch is persisted, already current, missing, or
+successfully sent to the DLQ. Provider permanent failures split a batch until
+the failing single message can be isolated.

@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -16,6 +17,35 @@ type EmbeddingConfig struct {
 	Model            string `mapstructure:"model"`
 	BuildVersion     string `mapstructure:"build_version"`
 	TimeoutSeconds   int    `mapstructure:"timeout_seconds"`
+	BatchSize        int    `mapstructure:"batch_size"`
+	BatchMaxWaitMs   int    `mapstructure:"batch_max_wait_ms"`
+}
+
+const (
+	DefaultEmbeddingBatchSize      = 1
+	DefaultEmbeddingBatchMaxWaitMs = 50
+	MaxEmbeddingBatchSize          = 32
+	MaxEmbeddingBatchMaxWaitMs     = 1000
+)
+
+func (c EmbeddingConfig) Normalized() EmbeddingConfig {
+	if c.BatchSize == 0 {
+		c.BatchSize = DefaultEmbeddingBatchSize
+	}
+	if c.BatchMaxWaitMs == 0 {
+		c.BatchMaxWaitMs = DefaultEmbeddingBatchMaxWaitMs
+	}
+	return c
+}
+
+func (c EmbeddingConfig) ValidateBatchSettings() error {
+	if c.BatchSize < 1 || c.BatchSize > MaxEmbeddingBatchSize {
+		return fmt.Errorf("embedding.batch_size must be between 1 and %d", MaxEmbeddingBatchSize)
+	}
+	if c.BatchMaxWaitMs < 1 || c.BatchMaxWaitMs > MaxEmbeddingBatchMaxWaitMs {
+		return fmt.Errorf("embedding.batch_max_wait_ms must be between 1 and %d", MaxEmbeddingBatchMaxWaitMs)
+	}
+	return nil
 }
 
 type TranslationConfig struct {
@@ -425,7 +455,28 @@ func loadConfigFrom(path string) (*Config, error) {
 		return nil, fmt.Errorf("decode application config: %w", err)
 	}
 	cfg.RecommendationPresence = recommendationSettingPresence(reader)
+	batchSizeConfigured := reader.InConfig("embedding.batch_size")
+	maxWaitConfigured := reader.InConfig("embedding.batch_max_wait_ms")
+	if _, exists := os.LookupEnv("EMBEDDING_BATCH_SIZE"); exists {
+		batchSizeConfigured = true
+	}
+	if _, exists := os.LookupEnv("EMBEDDING_BATCH_MAX_WAIT_MS"); exists {
+		maxWaitConfigured = true
+	}
 	applySensitiveEnvironmentOverrides(cfg)
+	if err := applyEmbeddingBatchEnvironmentOverrides(cfg); err != nil {
+		return nil, err
+	}
+	if batchSizeConfigured && cfg.Embedding.BatchSize == 0 {
+		return nil, fmt.Errorf("embedding.batch_size must be between 1 and %d", MaxEmbeddingBatchSize)
+	}
+	if maxWaitConfigured && cfg.Embedding.BatchMaxWaitMs == 0 {
+		return nil, fmt.Errorf("embedding.batch_max_wait_ms must be between 1 and %d", MaxEmbeddingBatchMaxWaitMs)
+	}
+	cfg.Embedding = cfg.Embedding.Normalized()
+	if err := cfg.Embedding.ValidateBatchSettings(); err != nil {
+		return nil, err
+	}
 	if _, err := UserLikeLifecycleSettings(); err != nil {
 		return nil, fmt.Errorf("validate User Like lifecycle settings: %w", err)
 	}
@@ -525,6 +576,24 @@ func applySensitiveEnvironmentOverrides(cfg *Config) {
 	if value := strings.TrimSpace(os.Getenv("MINIO_BUCKET")); value != "" {
 		cfg.Storage.Bucket = value
 	}
+}
+
+func applyEmbeddingBatchEnvironmentOverrides(cfg *Config) error {
+	if value, exists := os.LookupEnv("EMBEDDING_BATCH_SIZE"); exists {
+		parsed, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return fmt.Errorf("EMBEDDING_BATCH_SIZE must be an integer: %w", err)
+		}
+		cfg.Embedding.BatchSize = parsed
+	}
+	if value, exists := os.LookupEnv("EMBEDDING_BATCH_MAX_WAIT_MS"); exists {
+		parsed, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return fmt.Errorf("EMBEDDING_BATCH_MAX_WAIT_MS must be an integer: %w", err)
+		}
+		cfg.Embedding.BatchMaxWaitMs = parsed
+	}
+	return nil
 }
 
 func parseEnvironmentBool(raw string) (bool, bool) {

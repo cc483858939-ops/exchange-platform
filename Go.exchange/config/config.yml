@@ -12,6 +12,8 @@ embedding:
   model: "@cf/baai/bge-m3"
   build_version: "post_embedding_v1"
   timeout_seconds: 10
+  batch_size: 5
+  batch_max_wait_ms: 50
 
 translation:
   enabled: false

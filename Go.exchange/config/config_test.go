@@ -108,23 +108,69 @@ func TestApplySensitiveEnvironmentOverrides(t *testing.T) {
 	t.Setenv("EMBEDDING_MODEL", "text-embedding-3-small")
 	t.Setenv("EMBEDDING_BUILD_VERSION", " post_embedding_build_test ")
 	t.Setenv("EMBEDDING_TIMEOUT_SECONDS", "15")
+	t.Setenv("EMBEDDING_BATCH_SIZE", "5")
+	t.Setenv("EMBEDDING_BATCH_MAX_WAIT_MS", "50")
 	t.Setenv("MINIO_ACCESS_KEY", "runtime-access")
 	t.Setenv("MINIO_SECRET_KEY", "runtime-secret")
 	t.Setenv("KAFKA_BROKERS", " kafka-1:9092, ,kafka-2:9092 ")
 
 	cfg := &Config{}
 	applySensitiveEnvironmentOverrides(cfg)
+	if err := applyEmbeddingBatchEnvironmentOverrides(cfg); err != nil {
+		t.Fatal(err)
+	}
 	if cfg.Database.Dsn != "postgres://runtime" {
 		t.Fatalf("database dsn=%q", cfg.Database.Dsn)
 	}
 	if !cfg.Embedding.Enabled || cfg.Embedding.BaseURL != "https://embedding.example" || cfg.Embedding.APIKey != "runtime-embedding-key" || cfg.Embedding.Model != "text-embedding-3-small" || cfg.Embedding.BuildVersion != "post_embedding_build_test" || cfg.Embedding.TimeoutSeconds != 15 {
 		t.Fatalf("embedding config=%+v", cfg.Embedding)
 	}
+	if cfg.Embedding.BatchSize != 5 || cfg.Embedding.BatchMaxWaitMs != 50 {
+		t.Fatalf("embedding batch config=%+v", cfg.Embedding)
+	}
 	if cfg.Storage.AccessKey != "runtime-access" || cfg.Storage.SecretKey != "runtime-secret" {
 		t.Fatalf("storage credentials were not overridden")
 	}
 	if got, want := cfg.Kafka.Brokers, []string{"kafka-1:9092", "kafka-2:9092"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("Kafka brokers=%v want=%v", got, want)
+	}
+}
+
+func TestEmbeddingBatchSettingsDefaultsAndValidation(t *testing.T) {
+	defaults := (EmbeddingConfig{}).Normalized()
+	if defaults.BatchSize != DefaultEmbeddingBatchSize || defaults.BatchMaxWaitMs != DefaultEmbeddingBatchMaxWaitMs {
+		t.Fatalf("embedding batch defaults=%+v", defaults)
+	}
+	if err := defaults.ValidateBatchSettings(); err != nil {
+		t.Fatalf("default batch settings invalid: %v", err)
+	}
+	if err := (EmbeddingConfig{BatchSize: 1, BatchMaxWaitMs: 1}).ValidateBatchSettings(); err != nil {
+		t.Fatalf("minimum batch settings invalid: %v", err)
+	}
+	if err := (EmbeddingConfig{BatchSize: MaxEmbeddingBatchSize, BatchMaxWaitMs: MaxEmbeddingBatchMaxWaitMs}).ValidateBatchSettings(); err != nil {
+		t.Fatalf("maximum batch settings invalid: %v", err)
+	}
+	for _, test := range []EmbeddingConfig{
+		{BatchSize: -1, BatchMaxWaitMs: 50},
+		{BatchSize: MaxEmbeddingBatchSize + 1, BatchMaxWaitMs: 50},
+		{BatchSize: 5, BatchMaxWaitMs: -1},
+		{BatchSize: 5, BatchMaxWaitMs: MaxEmbeddingBatchMaxWaitMs + 1},
+	} {
+		if err := test.ValidateBatchSettings(); err == nil {
+			t.Errorf("invalid settings unexpectedly accepted: %+v", test)
+		}
+	}
+}
+
+func TestApplyEmbeddingBatchEnvironmentOverridesRejectsNonIntegers(t *testing.T) {
+	t.Setenv("EMBEDDING_BATCH_SIZE", "five")
+	if err := applyEmbeddingBatchEnvironmentOverrides(&Config{}); err == nil || !strings.Contains(err.Error(), "EMBEDDING_BATCH_SIZE") {
+		t.Fatalf("batch size override error=%v", err)
+	}
+	t.Setenv("EMBEDDING_BATCH_SIZE", "5")
+	t.Setenv("EMBEDDING_BATCH_MAX_WAIT_MS", "50ms")
+	if err := applyEmbeddingBatchEnvironmentOverrides(&Config{}); err == nil || !strings.Contains(err.Error(), "EMBEDDING_BATCH_MAX_WAIT_MS") {
+		t.Fatalf("batch max wait override error=%v", err)
 	}
 }
 
