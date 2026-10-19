@@ -97,7 +97,7 @@ flowchart LR
 
 推荐请求记录 request metadata 与结果 trace；启用 telemetry 且命中 rollout 时，为结果附带签名 tracking token，绑定用户、Post、请求、位置及策略上下文。
 
-前端采集 `impression`、`click`、`read_end`、`feed_dwell` 和 `not_interested` 等事件。服务端校验后经 Kafka 异步消费，在事务中去重并更新指标及行为投影，供后续推荐使用。`feed_dwell` 主要用于原始遥测和 Feed 指标。
+前端采集 `impression`、`click`、`read_end`、`feed_dwell` 和 `not_interested` 等事件。服务端校验后经 Kafka 异步消费，在事务中分别进行 `event_id` 消息去重及 `(user_id, request_id, post_id, event_type)` 推荐机会级 CTR 去重，再更新指标和行为投影。每次有效推荐机会最多计一次曝光与一次点击；点击早于可见时长阈值时会补记一次曝光，跨日点击归属原始曝光日。其他阅读及停留事件不受 CTR 去重限制。`feed_dwell` 主要用于原始遥测和 Feed 指标。
 
 ### 6. 全栈体验：关注页面切换和异步响应的正确性
 
