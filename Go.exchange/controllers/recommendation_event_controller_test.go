@@ -34,8 +34,9 @@ func (p *recommendationTestPublisher) PublishBatch(_ context.Context, events []e
 }
 
 type recommendationTestCooldownKey struct {
-	userID uint
-	postID uint
+	userID    uint
+	postID    uint
+	requestID string
 }
 
 type recommendationTestCooldownEntry struct {
@@ -65,8 +66,8 @@ func newRecommendationTestCooldown(now func() time.Time) *recommendationTestCool
 	}
 }
 
-func (store *recommendationTestCooldown) Acquire(_ context.Context, userID, postID uint, eventID string) (RecommendationClickCooldownAcquireResult, error) {
-	key := recommendationTestCooldownKey{userID: userID, postID: postID}
+func (store *recommendationTestCooldown) Acquire(_ context.Context, userID, postID uint, requestID, eventID string) (RecommendationClickCooldownAcquireResult, error) {
+	key := recommendationTestCooldownKey{userID: userID, postID: postID, requestID: requestID}
 	store.acquireCalls = append(store.acquireCalls, key)
 	if store.acquireErrAt > 0 && len(store.acquireCalls) == store.acquireErrAt {
 		return 0, store.acquireErr
@@ -86,8 +87,8 @@ func (store *recommendationTestCooldown) Acquire(_ context.Context, userID, post
 	return RecommendationClickCooldownPending, nil
 }
 
-func (store *recommendationTestCooldown) Commit(_ context.Context, userID, postID uint, eventID string) error {
-	key := recommendationTestCooldownKey{userID: userID, postID: postID}
+func (store *recommendationTestCooldown) Commit(_ context.Context, userID, postID uint, requestID, eventID string) error {
+	key := recommendationTestCooldownKey{userID: userID, postID: postID, requestID: requestID}
 	store.commitCalls = append(store.commitCalls, key)
 	if store.commitErr != nil {
 		return store.commitErr
@@ -102,8 +103,8 @@ func (store *recommendationTestCooldown) Commit(_ context.Context, userID, postI
 	return nil
 }
 
-func (store *recommendationTestCooldown) Release(_ context.Context, userID, postID uint, eventID string) error {
-	key := recommendationTestCooldownKey{userID: userID, postID: postID}
+func (store *recommendationTestCooldown) Release(_ context.Context, userID, postID uint, requestID, eventID string) error {
+	key := recommendationTestCooldownKey{userID: userID, postID: postID, requestID: requestID}
 	store.releaseCalls = append(store.releaseCalls, key)
 	if store.releaseErr != nil {
 		return store.releaseErr
@@ -130,6 +131,15 @@ func recommendationTestInput(eventID, eventType, token string, occurredAt time.T
 	return recommendationEventInput{
 		EventID: eventID, EventType: eventType, TrackingToken: token, OccurredAt: occurredAt.Format(time.RFC3339Nano),
 	}
+}
+
+func recommendationTestKey(t *testing.T, userID, postID uint, token string) recommendationTestCooldownKey {
+	t.Helper()
+	claims, err := recommendation.VerifyTrackingToken(token, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return recommendationTestCooldownKey{userID: userID, postID: postID, requestID: claims.RequestID}
 }
 
 func signTestRecommendationToken(t *testing.T, userID, postID uint, now time.Time, estimated int64, policy string) string {
@@ -252,11 +262,11 @@ func TestRecommendationClickCooldownFiveMinutes(t *testing.T) {
 	if status != http.StatusAccepted || response.Accepted != 1 || response.Duplicates != 0 || len(publisher.events) != 1 {
 		t.Fatalf("first click status=%d response=%#v published=%d", status, response, len(publisher.events))
 	}
-	key := recommendationTestCooldownKey{userID: 7, postID: 11}
+	key := cooldown.acquireCalls[0]
 	firstExpiry := cooldown.entries[key].expiresAt
 
 	now = now.Add(time.Minute)
-	secondToken := signTestRecommendationToken(t, 7, 11, now, 3000, recommendationReadPolicyVersion)
+	secondToken := firstToken
 	status, response = submitRecommendationTestBatch(t, publisher, cooldown, 7, []recommendationEventInput{
 		recommendationTestInput(uuid.NewString(), models.RecommendationEventTypeClick, secondToken, now),
 	})
@@ -325,10 +335,10 @@ func TestRecommendationClickCooldownAllDuplicatesReturnAcceptedWithoutKafka(t *t
 	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
 	setRecommendationTelemetryTestClock(t, &now)
 	cooldown := newRecommendationTestCooldown(func() time.Time { return now })
-	cooldown.entries[recommendationTestCooldownKey{userID: 7, postID: 11}] = recommendationTestCooldownEntry{
+	token := signTestRecommendationToken(t, 7, 11, now, 3000, recommendationReadPolicyVersion)
+	cooldown.entries[recommendationTestKey(t, 7, 11, token)] = recommendationTestCooldownEntry{
 		eventID: "already-published", committed: true, expiresAt: now.Add(5 * time.Minute),
 	}
-	token := signTestRecommendationToken(t, 7, 11, now, 3000, recommendationReadPolicyVersion)
 	status, response := submitRecommendationTestBatch(t, nil, cooldown, 7, []recommendationEventInput{
 		recommendationTestInput(uuid.NewString(), models.RecommendationEventTypeClick, token, now),
 	})
@@ -392,12 +402,12 @@ func TestRecommendationClickCooldownPendingConflictReleasesBatch(t *testing.T) {
 	now := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
 	setRecommendationTelemetryTestClock(t, &now)
 	cooldown := newRecommendationTestCooldown(func() time.Time { return now })
-	cooldown.entries[recommendationTestCooldownKey{userID: 7, postID: 12}] = recommendationTestCooldownEntry{
-		eventID: "other-owner", expiresAt: now.Add(time.Minute),
-	}
 	publisher := &recommendationTestPublisher{}
 	firstToken := signTestRecommendationToken(t, 7, 11, now, 3000, recommendationReadPolicyVersion)
 	secondToken := signTestRecommendationToken(t, 7, 12, now, 3000, recommendationReadPolicyVersion)
+	cooldown.entries[recommendationTestKey(t, 7, 12, secondToken)] = recommendationTestCooldownEntry{
+		eventID: "other-owner", expiresAt: now.Add(time.Minute),
+	}
 	status, _ := submitRecommendationTestBatch(t, publisher, cooldown, 7, []recommendationEventInput{
 		recommendationTestInput(uuid.NewString(), models.RecommendationEventTypeClick, firstToken, now),
 		recommendationTestInput(uuid.NewString(), models.RecommendationEventTypeClick, secondToken, now),
@@ -405,7 +415,7 @@ func TestRecommendationClickCooldownPendingConflictReleasesBatch(t *testing.T) {
 	if status != http.StatusServiceUnavailable || publisher.calls != 0 || len(cooldown.releaseCalls) != 1 {
 		t.Fatalf("status=%d publisher calls=%d releases=%d", status, publisher.calls, len(cooldown.releaseCalls))
 	}
-	if _, exists := cooldown.entries[recommendationTestCooldownKey{userID: 7, postID: 11}]; exists {
+	if _, exists := cooldown.entries[recommendationTestKey(t, 7, 11, firstToken)]; exists {
 		t.Fatal("batch conflict leaked the earlier reservation")
 	}
 }
