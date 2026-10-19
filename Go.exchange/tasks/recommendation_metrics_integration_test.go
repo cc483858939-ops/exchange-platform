@@ -38,7 +38,7 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 		t.Fatal(err)
 	}
 
-	groupID := "test-rec-metrics-" + uuid.NewString()
+	groupID := "rec-metrics-" + uuid.NewString()
 	kafkaConfig := config.KafkaConfig{RecommendationMetricsGroupID: groupID}
 	user := models.User{
 		Username: "test-rec-metrics-" + uuid.NewString(),
@@ -248,6 +248,76 @@ func TestRecommendationMetricsProjectionIsIdempotentAndDimensionAwareIntegration
 	}
 	if clickBehavior.Count != 3 {
 		t.Fatalf("derived click behavior=%#v want one click each for three distinct opportunities", clickBehavior)
+	}
+
+	// A click processed on the following UTC day must be re-attributed when
+	// an earlier real impression arrives in a later Kafka transaction.
+	latePayload := base
+	latePayload.RequestID = uuid.NewString()
+	latePayload.StrategyID = groupID + "-late-cross-day"
+	lateExposureAt := time.Date(2026, 8, 16, 23, 59, 59, 0, time.UTC)
+	clickAt := lateExposureAt.Add(3 * time.Second)
+	lateClick, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationClick, clickAt, latePayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applyRecommendationMetricsMessagesForIntegration(t, db, kafkaConfig, []kafka.Message{recommendationMessage(t, lateClick)}); err != nil {
+		t.Fatal(err)
+	}
+	var nextDay models.RecommendationDailyMetric
+	lateStrategy := latePayload.StrategyID
+	if err := db.Where("strategy_id = ? AND metric_date = ?", lateStrategy, clickAt.Format("2006-01-02")).First(&nextDay).Error; err != nil {
+		t.Fatal(err)
+	}
+	if nextDay.ImpressionCount != 1 || nextDay.ClickCount != 1 {
+		t.Fatalf("click-first provisional cohort=%#v want impression=1 click=1", nextDay)
+	}
+	lateImpression, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationImpression, lateExposureAt, latePayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lateMessage := recommendationMessage(t, lateImpression)
+	if err := applyRecommendationMetricsMessagesForIntegration(t, db, kafkaConfig, []kafka.Message{lateMessage}); err != nil {
+		t.Fatal(err)
+	}
+	// A distinct event ID (or an inbox replay) must not count again.
+	duplicateView, err := eventing.NewRecommendationBehaviorEnvelope(uuid.NewString(), eventing.EventTypeRecommendationImpression, lateExposureAt, latePayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applyRecommendationMetricsMessagesForIntegration(t, db, kafkaConfig, []kafka.Message{lateMessage, recommendationMessage(t, duplicateView)}); err != nil {
+		t.Fatal(err)
+	}
+	var firstDay models.RecommendationDailyMetric
+	if err := db.Where("strategy_id = ? AND metric_date = ?", lateStrategy, lateExposureAt.Format("2006-01-02")).First(&firstDay).Error; err != nil {
+		t.Fatal(err)
+	}
+	if firstDay.ImpressionCount != 1 || firstDay.ClickCount != 1 {
+		t.Fatalf("reconciled original exposure cohort=%#v want impression=1 click=1", firstDay)
+	}
+	if err := db.Where("strategy_id = ? AND metric_date = ?", lateStrategy, clickAt.Format("2006-01-02")).First(&nextDay).Error; err != nil {
+		t.Fatal(err)
+	}
+	if nextDay.ImpressionCount != 0 || nextDay.ClickCount != 0 {
+		t.Fatalf("old provisional cohort=%#v want impression=0 click=0", nextDay)
+	}
+	var claims []models.RecommendationCTRClaim
+	if err := db.Where("user_id = ? AND request_id = ? AND post_id = ?", userID, latePayload.RequestID, postID).Find(&claims).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 2 {
+		t.Fatalf("CTR claims=%d want=2", len(claims))
+	}
+	for _, claim := range claims {
+		if claim.MetricDate.Format("2006-01-02") != lateExposureAt.Format("2006-01-02") {
+			t.Fatalf("CTR claim=%#v has wrong cohort", claim)
+		}
+	}
+	if err := db.Where("user_id = ? AND post_id = ? AND action = ?", userID, postID, eventing.RecommendationBehaviorActionClick).First(&clickBehavior).Error; err != nil {
+		t.Fatal(err)
+	}
+	if clickBehavior.Count != 4 {
+		t.Fatalf("late impression double-counted click behavior: %d want=4", clickBehavior.Count)
 	}
 }
 

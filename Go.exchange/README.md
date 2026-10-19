@@ -143,8 +143,29 @@ never increase CTR after the Redis lease expires because the PostgreSQL claim
 persists. The Redis layer is best-effort, not Kafka exactly-once. Its duration
 is fixed at 300 seconds; no environment-variable override exists.
 
-The durable claim ledger grows with recommendation opportunities and needs
-an explicit retention/rebuild strategy before high-volume production rollout.
+The durable claim ledger grows with recommendation opportunities. Before
+high-volume production rollout, capacity-plan its primary-key index and table
+growth; monitor storage and transaction latency. **Do not purge claims merely
+because their Redis TTL has expired.** Keeping the ledger at least as long as
+any Kafka replay or duplicate delivery window is necessary for durable CTR
+deduplication.
+
+Operational rebuild contract: stop recommendation metric Workers, choose and
+record a consistent Kafka replay boundary, then reset
+`recommendation_daily_metrics`, `recommendation_ctr_claims`, and the
+recommendation-metrics ConsumerInbox rows **as one coordinated recovery
+operation**. Preserve other consumer groups' inbox rows. Rebuilds that include
+the behavior projection must also plan `post_behaviors` and profile-dirty
+state explicitly; blindly replaying after resetting only metrics would
+double-apply behavior. Restore Kafka consumption only after all reset steps
+and the replay range are verified. This document is a recovery prerequisite,
+not an automated production purge mechanism; retention must be implemented
+and reviewed before scheduling destructive cleanup.
+
+If a delayed real impression precedes an already-counted click across UTC
+midnight, the worker moves the provisional CTR counts to the original
+exposure day within the claim/inbox/metric transaction. Non-CTR behavior
+counts and profile invalidation are not repeated.
 
 ## Local Development
 

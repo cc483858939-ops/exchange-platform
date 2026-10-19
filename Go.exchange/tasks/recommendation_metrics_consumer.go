@@ -421,8 +421,14 @@ func applyRecommendationMetricRecords(ctx context.Context, db *gorm.DB, consumer
 // implicit impression so that quick clicks and out-of-order delivery cannot
 // create a click without its CTR denominator.
 func claimRecommendationCTREvents(tx *gorm.DB, records []recommendationMetricEvent, firstDelivery map[string]struct{}) ([]recommendationMetricEvent, error) {
-	effective := make([]recommendationMetricEvent, 0, len(records))
-	for _, record := range records {
+	// Process records in event-time order. This makes a click and an earlier
+	// impression in the same Kafka batch select the same exposure cohort.
+	ordered := append([]recommendationMetricEvent(nil), records...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].Envelope.OccurredAt.Before(ordered[j].Envelope.OccurredAt)
+	})
+	effective := make([]recommendationMetricEvent, 0, len(ordered))
+	for _, record := range ordered {
 		if _, ok := firstDelivery[record.Envelope.ID]; !ok {
 			continue
 		}
@@ -434,6 +440,8 @@ func claimRecommendationCTREvents(tx *gorm.DB, records []recommendationMetricEve
 			}
 			if first {
 				effective = append(effective, record)
+			} else if err := moveRecommendationCTRToEarlierImpression(tx, record); err != nil {
+				return nil, err
 			}
 		case eventing.EventTypeRecommendationClick:
 			firstClick, err := insertRecommendationCTRClaim(tx, record, models.RecommendationEventTypeClick)
@@ -459,6 +467,14 @@ func claimRecommendationCTREvents(tx *gorm.DB, records []recommendationMetricEve
 					return nil, err
 				}
 				record.MetricDateOverride = &impression.MetricDate
+				// Both claim rows reflect the same CTR cohort for replay and
+				// subsequent correction by a delayed, earlier impression.
+				if err := tx.Model(&models.RecommendationCTRClaim{}).
+					Where("user_id = ? AND request_id = ? AND post_id = ? AND event_type = ?",
+						record.Payload.UserID, record.Payload.RequestID, record.Payload.PostID, models.RecommendationEventTypeClick).
+					Update("metric_date", impression.MetricDate).Error; err != nil {
+					return nil, err
+				}
 			}
 			effective = append(effective, record)
 		default:
@@ -481,6 +497,84 @@ func insertRecommendationCTRClaim(tx *gorm.DB, record recommendationMetricEvent,
 		return false, result.Error
 	}
 	return result.RowsAffected == 1, nil
+}
+
+// moveRecommendationCTRToEarlierImpression fixes a click-first delivery that
+// initially counted an implicit exposure on the click's UTC date. A delayed
+// real impression can establish an earlier cohort. Only CTR counters move:
+// transport-idempotency, click behavior and profile invalidation do not repeat.
+// This operates in the same transaction as the Inbox and claim ledger.
+func moveRecommendationCTRToEarlierImpression(tx *gorm.DB, record recommendationMetricEvent) error {
+	payload := record.Payload
+	whereOpportunity := "user_id = ? AND request_id = ? AND post_id = ?"
+	opportunityArgs := []interface{}{payload.UserID, payload.RequestID, payload.PostID}
+
+	var claimed models.RecommendationCTRClaim
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where(whereOpportunity+" AND event_type = ?", append(opportunityArgs, models.RecommendationEventTypeImpression)...).
+		Take(&claimed).Error; err != nil {
+		return err
+	}
+
+	occurredAt := record.Envelope.OccurredAt.UTC()
+	earlierDate := time.Date(occurredAt.Year(), occurredAt.Month(), occurredAt.Day(), 0, 0, 0, 0, time.UTC)
+	if !earlierDate.Before(claimed.MetricDate) {
+		return nil
+	}
+
+	var clicks int64
+	if err := tx.Model(&models.RecommendationCTRClaim{}).
+		Where(whereOpportunity+" AND event_type = ?", append(opportunityArgs, models.RecommendationEventTypeClick)...).
+		Count(&clicks).Error; err != nil {
+		return err
+	}
+
+	// All dimensions of an opportunity are server-signed and immutable.
+	// Decrement only its original CTR numerator/denominator, leaving dwell,
+	// reads, dislikes, and the durable behavior projection untouched.
+	old := tx.Model(&models.RecommendationDailyMetric{}).Where(
+		"metric_date = ? AND scene = ? AND ranker_version = ? AND ranker_config_hash = ? AND strategy_id = ? AND exploration_opportunity = ? AND selection_mode = ? AND exploration_reason = ? AND position = ? AND post_id = ?",
+		claimed.MetricDate, payload.Scene, payload.RankerVersion, payload.RankerConfigHash, payload.StrategyID,
+		payload.ExplorationOpportunity, payload.SelectionMode, payload.ExplorationReason, payload.Position, payload.PostID,
+	).Where("impression_count >= 1")
+	updates := map[string]interface{}{
+		"impression_count": gorm.Expr("impression_count - 1"),
+		"updated_at":       time.Now().UTC(),
+	}
+	if clicks == 1 {
+		old = old.Where("click_count >= 1")
+		updates["click_count"] = gorm.Expr("click_count - 1")
+	}
+	if clicks > 1 {
+		return fmt.Errorf("CTR opportunity has %d click claims", clicks)
+	}
+	result := old.Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("CTR old cohort missing or insufficient counts for request %s", payload.RequestID)
+	}
+
+	result = tx.Model(&models.RecommendationCTRClaim{}).
+		Where(whereOpportunity+" AND event_type IN ?", append(opportunityArgs, []string{models.RecommendationEventTypeImpression, models.RecommendationEventTypeClick})...).
+		Update("metric_date", earlierDate)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1+clicks {
+		return fmt.Errorf("CTR claims changed during cohort correction for request %s", payload.RequestID)
+	}
+
+	return bulkUpsertRecommendationDailyMetrics(tx, []recommendationMetricAggregate{{
+		Key: recommendationMetricKey{
+			MetricDate: earlierDate, Scene: payload.Scene, RankerVersion: payload.RankerVersion,
+			RankerConfigHash: payload.RankerConfigHash, StrategyID: payload.StrategyID,
+			ExplorationOpportunity: payload.ExplorationOpportunity, SelectionMode: payload.SelectionMode,
+			ExplorationReason: payload.ExplorationReason, Position: payload.Position, PostID: payload.PostID,
+		},
+		Delta: recommendationMetricDelta{ImpressionCount: 1, ClickCount: clicks},
+	}})
 }
 
 func recommendationMetricProfileInvalidationUsers(records []recommendationMetricEvent, firstDelivery map[string]struct{}) []uint {
