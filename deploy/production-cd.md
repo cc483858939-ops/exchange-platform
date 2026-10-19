@@ -174,7 +174,8 @@ VPS：`backups/deploy/<run-id>-<attempt>.json`，目录 0700、文件 0600，包
 完整目标 SHA、官方脚本退出码（如已执行）、最终退出码及脱敏阶段记录。
 仅保存官方脚本白名单结构字段，原始 build/SQL/异常/env 输出不落盘、不回传 Actions。
 失败排查需管理员读取容器与系统日志，避免把可能含凭据的原始日志上传到 Actions。
-Actions job summary 和 30 天 artifact 包含 `result.json`、`execution.jsonl`。
+Actions job summary 和 30 天 artifact 包含 `result.json`、`execution.jsonl`；
+审批前 SHA/CI 门禁另存 `ci.json`，即使未进入 SSH job 也记录阻断结果。
 
 deploy 只提交一次。服务器 detached worker 持有独占锁，SSH 断线不杀死部署。
 runner 轮询 status、检查最终退出结果；45 分钟等待超时或 SSH 失败均标记 **unknown**，

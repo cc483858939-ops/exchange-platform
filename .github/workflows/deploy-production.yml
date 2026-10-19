@@ -46,7 +46,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ inputs.target_sha }}
-        run: python3 scripts/cd/verify-ci.py
+        run: |
+          mkdir -p cd-report
+          python3 scripts/cd/verify-ci.py > cd-report/ci.json
+          cat cd-report/ci.json
+      - name: Save CI gate result even when SSH is blocked
+        if: always()
+        run: |
+          mkdir -p cd-report
+          test -s cd-report/ci.json || printf '%s\n' '{"status":"blocked-before-ssh","reason":"SHA or CI gate failed; inspect job logs"}' > cd-report/ci.json
+          printf '### Production CI gate\n\n```json\n' >> "$GITHUB_STEP_SUMMARY"
+          cat cd-report/ci.json >> "$GITHUB_STEP_SUMMARY"
+          printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload CI gate record
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: production-gate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: cd-report/
+          retention-days: 30
+          if-no-files-found: error
 
   production:
     needs: verify-ci
