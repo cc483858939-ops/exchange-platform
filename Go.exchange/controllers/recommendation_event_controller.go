@@ -188,11 +188,11 @@ func recordRecommendationEvents(ctx *gin.Context, publisher eventing.BatchPublis
 	publishIndexes := make([]int, 0, len(validEvents))
 	publishEnvelopes := make([]eventing.Envelope, 0, len(validEvents))
 	reservations := make([]validatedRecommendationEvent, 0, len(validEvents))
-	seenClickOpportunities := make(map[struct { PostID uint; RequestID string }]struct{})
+	seenClickOpportunities := make(map[string]struct{})
 	for eventIndex, event := range validEvents {
 		if event.EventType == eventing.EventTypeRecommendationClick {
 			postID := event.Payload.PostID
-			clickKey := struct { PostID uint; RequestID string }{postID, event.Payload.RequestID}
+			clickKey := fmt.Sprintf("%d:%s", postID, event.Payload.RequestID)
 			if _, duplicateInBatch := seenClickOpportunities[clickKey]; duplicateInBatch {
 				markRecommendationEventDuplicate(&response, validIndexes[eventIndex], "click_cooldown")
 				metrics.RecordRecommendationClickCooldown("duplicate")
