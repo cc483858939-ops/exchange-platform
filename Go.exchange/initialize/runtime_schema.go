@@ -281,6 +281,7 @@ var apiSchemaModels = []interface{}{
 var workerSchemaModels = []interface{}{
 	&models.ConsumerInbox{},
 	&models.RecommendationDailyMetric{},
+	&models.RecommendationCTRClaim{},
 }
 
 type schemaMetadataRow struct {
