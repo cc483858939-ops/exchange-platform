@@ -21,8 +21,9 @@ const (
 	RecommendationClickCooldownPending
 )
 
-// RecommendationClickCooldown atomically reserves a user/Post click until the
-// Kafka publish outcome is known.
+// RecommendationClickCooldown atomically reserves a signed recommendation
+// opportunity (user/request/Post) until the Kafka publish outcome is known.
+// Durable per-opportunity CTR deduplication happens in PostgreSQL.
 type RecommendationClickCooldown interface {
 	Acquire(ctx context.Context, userID, postID uint, requestID, eventID string) (RecommendationClickCooldownAcquireResult, error)
 	Commit(ctx context.Context, userID, postID uint, requestID, eventID string) error
