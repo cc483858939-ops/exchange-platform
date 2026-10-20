@@ -672,86 +672,146 @@ func generatePostEmbeddingTextsWithRuntimeAndGate(
 		if err := ctx.Err(); err != nil {
 			return embeddings.EmbedResult{}, err
 		}
-		var permit *postEmbeddingProviderPermit
-		if providerGate != nil {
-			var err error
-			permit, err = providerGate.acquire(ctx)
-			if err != nil {
-				return embeddings.EmbedResult{}, err
-			}
+		generated, failure, halfOpenProbe, err := callPostEmbeddingProviderOnce(ctx, embedder, texts, policy, attempt, runtime, providerGate)
+		if err != nil {
+			return embeddings.EmbedResult{}, err
 		}
-		generated, err := embedder.Embed(ctx, texts)
-		if err == nil {
-			if contractErr := validatePostEmbeddingBatchResult(generated, len(texts)); contractErr != nil {
-				err = contractErr
-				metrics.RecordEmbeddingProviderFailure(providerReasonContract)
-				decision := ProviderDecision{Reason: providerReasonContract}
-				if len(texts) > 1 {
-					decision.Action = ProviderActionSplitBatch
-				} else {
-					decision.Action = ProviderActionPause
-				}
-				lastFailure = &postEmbeddingProviderFailure{decision: decision, cause: err}
-				if ctx.Err() != nil {
-					providerGate.providerRequestCanceled(permit)
-					return embeddings.EmbedResult{}, ctx.Err()
-				}
-				providerGate.providerRequestFailed(permit, decision, postEmbeddingFailureScopePartition)
-			} else {
-				metrics.RecordPostEmbeddingAPIRequest("success", len(texts))
-				generated.Model = strings.TrimSpace(generated.Model)
-				providerGate.providerRequestSucceeded(permit)
-				return generated, nil
-			}
-		} else {
-			if errors.Is(err, context.Canceled) {
-				providerGate.providerRequestCanceled(permit)
-				return embeddings.EmbedResult{}, err
-			}
-			if ctx.Err() != nil {
-				providerGate.providerRequestCanceled(permit)
-				return embeddings.EmbedResult{}, ctx.Err()
-			}
-			decision := classifyPostEmbeddingProviderError(err, len(texts))
-			lastFailure = &postEmbeddingProviderFailure{decision: decision, cause: err}
-			if providerGate != nil {
-				providerGate.providerRequestFailed(permit, decision, classifyPostEmbeddingFailureScope(decision, len(texts)))
-			}
-			metrics.RecordEmbeddingProviderFailure(decision.Reason)
-			if decision.RetryAfterProvided && !decision.RetryAfterValid {
-				metrics.RecordEmbeddingProviderFailure(providerReasonRetryAfterInvalid)
-				logInvalidRetryAfter(decision.HTTPStatus)
-			}
-			if decision.RetryAfterValid && decision.RetryAfter > postEmbeddingLongRetryAfterAlert {
-				metrics.RecordEmbeddingProviderFailure(providerReasonRetryAfterLong)
-				log.Printf("[PostEmbedding] provider Retry-After is unusually long; honoring the supplied delay status=%d", decision.HTTPStatus)
-			}
+		if failure == nil {
+			return generated, nil
+		}
+		lastFailure = failure
+		decision := failure.decision
+		metrics.RecordEmbeddingProviderFailure(decision.Reason)
+		if decision.RetryAfterProvided && !decision.RetryAfterValid {
+			metrics.RecordEmbeddingProviderFailure(providerReasonRetryAfterInvalid)
+			logInvalidRetryAfter(decision.HTTPStatus)
+		}
+		if decision.RetryAfterValid && decision.RetryAfter > postEmbeddingLongRetryAfterAlert {
+			metrics.RecordEmbeddingProviderFailure(providerReasonRetryAfterLong)
+			log.Printf("[PostEmbedding] provider Retry-After is unusually long; honoring the supplied delay status=%d", decision.HTTPStatus)
 		}
 		metrics.RecordPostEmbeddingAPIRequest("error", len(texts))
 		metrics.RecordPostEmbeddingFailure("provider")
 		if onProviderFailure != nil {
 			onProviderFailure()
 		}
-		if lastFailure.decision.Action != ProviderActionRetry {
+		if decision.Action != ProviderActionRetry || halfOpenProbe {
 			return embeddings.EmbedResult{}, lastFailure
 		}
-		if lastFailure.decision.RetryAfterValid && lastFailure.decision.RetryAfter > policy.MaxBackoff {
+		if decision.RetryAfterValid && decision.RetryAfter > policy.MaxBackoff {
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeRetryExhausted, kafkaFailureCodeProviderRetryable)
 			return embeddings.EmbedResult{}, lastFailure
 		}
 		if attempt == policy.MaxAttempts {
 			metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeRetryExhausted, kafkaFailureCodeProviderRetryable)
 			return embeddings.EmbedResult{}, retryableKafkaError(kafkaFailureCodeProviderRetryable, lastFailure)
 		}
-		metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCodeProviderRetryable)
 		backoff := providerRetryBackoff(policy, attempt, runtime.Jitter)
-		if lastFailure.decision.RetryAfterValid && lastFailure.decision.RetryAfter > backoff {
-			backoff = lastFailure.decision.RetryAfter
+		if decision.RetryAfterValid && decision.RetryAfter > backoff {
+			backoff = decision.RetryAfter
 		}
 		if err := runtime.Sleep(ctx, backoff); err != nil {
 			return embeddings.EmbedResult{}, err
 		}
 	}
 	return embeddings.EmbedResult{}, retryableKafkaError(kafkaFailureCodeProviderRetryable, lastFailure)
+}
+
+func callPostEmbeddingProviderOnce(
+	ctx context.Context,
+	embedder embeddings.Embedder,
+	texts []string,
+	policy kafkaRetryPolicy,
+	attempt int,
+	runtime providerRetryRuntime,
+	providerGate *postEmbeddingProviderGate,
+) (embeddings.EmbedResult, *postEmbeddingProviderFailure, bool, error) {
+	var permit *postEmbeddingProviderPermit
+	if providerGate != nil {
+		var err error
+		permit, err = providerGate.acquire(ctx)
+		if err != nil {
+			return embeddings.EmbedResult{}, nil, false, err
+		}
+	}
+	halfOpenProbe := permit != nil && permit.halfOpen
+	permitReleased := false
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if providerGate != nil {
+				providerGate.providerRequestPanicked(permit)
+			}
+			panic(recovered)
+		}
+		if !permitReleased && providerGate != nil {
+			providerGate.providerRequestPanicked(permit)
+		}
+	}()
+	if err := ctx.Err(); err != nil {
+		if providerGate != nil {
+			providerGate.providerRequestCanceled(permit)
+		}
+		permitReleased = true
+		return embeddings.EmbedResult{}, nil, halfOpenProbe, err
+	}
+
+	if attempt > 1 && !halfOpenProbe {
+		metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCodeProviderRetryable)
+	}
+	generated, requestErr := embedder.Embed(ctx, texts)
+	if requestErr == nil {
+		if contractErr := validatePostEmbeddingBatchResult(generated, len(texts)); contractErr != nil {
+			decision := ProviderDecision{Reason: providerReasonContract}
+			if len(texts) > 1 {
+				decision.Action = ProviderActionSplitBatch
+			} else {
+				decision.Action = ProviderActionPause
+			}
+			if ctx.Err() != nil {
+				if providerGate != nil {
+					providerGate.providerRequestCanceled(permit)
+				}
+				permitReleased = true
+				return embeddings.EmbedResult{}, nil, halfOpenProbe, ctx.Err()
+			}
+			if providerGate != nil {
+				providerGate.providerRequestFailed(permit, decision, postEmbeddingFailureScopePartition, false)
+			}
+			permitReleased = true
+			return embeddings.EmbedResult{}, &postEmbeddingProviderFailure{decision: decision, cause: contractErr}, halfOpenProbe, nil
+		}
+		metrics.RecordPostEmbeddingAPIRequest("success", len(texts))
+		generated.Model = strings.TrimSpace(generated.Model)
+		if providerGate != nil {
+			providerGate.providerRequestSucceeded(permit)
+		}
+		permitReleased = true
+		return generated, nil, halfOpenProbe, nil
+	}
+	if errors.Is(requestErr, context.Canceled) {
+		if providerGate != nil {
+			providerGate.providerRequestCanceled(permit)
+		}
+		permitReleased = true
+		return embeddings.EmbedResult{}, nil, halfOpenProbe, requestErr
+	}
+	if ctx.Err() != nil {
+		if providerGate != nil {
+			providerGate.providerRequestCanceled(permit)
+		}
+		permitReleased = true
+		return embeddings.EmbedResult{}, nil, halfOpenProbe, ctx.Err()
+	}
+
+	decision := classifyPostEmbeddingProviderError(requestErr, len(texts))
+	scope := classifyPostEmbeddingFailureScope(decision, len(texts))
+	longRetryAfter := decision.RetryAfterValid && decision.RetryAfter > policy.MaxBackoff
+	retryExhausted := decision.Action == ProviderActionRetry && (attempt >= policy.MaxAttempts || longRetryAfter)
+	if providerGate != nil {
+		providerGate.providerRequestFailed(permit, decision, scope, retryExhausted)
+	}
+	permitReleased = true
+	return embeddings.EmbedResult{}, &postEmbeddingProviderFailure{decision: decision, cause: requestErr}, halfOpenProbe, nil
 }
 
 func providerRetryBackoff(policy kafkaRetryPolicy, attempt int, jitter func(time.Duration) time.Duration) time.Duration {

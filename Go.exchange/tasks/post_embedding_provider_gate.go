@@ -93,6 +93,15 @@ func (g *postEmbeddingProviderGate) acquire(ctx context.Context) (*postEmbedding
 				waitFor = g.openUntil.Sub(now)
 			}
 		case postEmbeddingCircuitHalfOpen:
+			// A failed partition-scoped probe keeps the breaker HalfOpen. Once
+			// that probe releases its permit, another partition may make the
+			// single recovery attempt instead of leaving the breaker stuck.
+			if g.inFlight == 0 {
+				g.inFlight++
+				permit := &postEmbeddingProviderPermit{gate: g, epoch: g.epoch, halfOpen: true}
+				g.mu.Unlock()
+				return permit, nil
+			}
 		}
 		changed := g.changed
 		g.mu.Unlock()
@@ -159,6 +168,7 @@ func (g *postEmbeddingProviderGate) providerRequestFailed(
 	permit *postEmbeddingProviderPermit,
 	decision ProviderDecision,
 	scope postEmbeddingFailureScope,
+	retryExhausted bool,
 ) {
 	if permit == nil || permit.gate != g {
 		return
@@ -169,11 +179,43 @@ func (g *postEmbeddingProviderGate) providerRequestFailed(
 			g.inFlight--
 		}
 		probeFailed := permit.halfOpen && permit.epoch == g.epoch && g.state == postEmbeddingCircuitHalfOpen
-		if probeFailed || scope != postEmbeddingFailureScopePartition {
+		if probeFailed && scope != postEmbeddingFailureScopePartition {
+			g.openLocked(decision)
+		} else if !probeFailed && permit.epoch == g.epoch && g.state == postEmbeddingCircuitClosed &&
+			scope != postEmbeddingFailureScopePartition &&
+			(decision.Action != ProviderActionRetry || retryExhausted) {
 			g.openLocked(decision)
 		}
 		if probeFailed {
 			metrics.RecordPostEmbeddingHalfOpenProbe("failure")
+		}
+		g.signalLocked()
+		g.mu.Unlock()
+	})
+}
+
+func (g *postEmbeddingProviderGate) providerRequestPanicked(permit *postEmbeddingProviderPermit) {
+	if permit == nil || permit.gate != g {
+		return
+	}
+	permit.once.Do(func() {
+		g.mu.Lock()
+		if g.inFlight > 0 {
+			g.inFlight--
+		}
+		metrics.RecordEmbeddingProviderFailure(providerReasonUnknown)
+		if permit.halfOpen && permit.epoch == g.epoch && g.state == postEmbeddingCircuitHalfOpen {
+			decision := ProviderDecision{Action: ProviderActionRetry, Reason: providerReasonUnknown}
+			delay, normalizedDecision, _ := g.recovery.cooldownFor(&postEmbeddingProviderFailure{
+				decision: decision, cause: errors.New("provider request panicked during HalfOpen probe"),
+			})
+			g.state = postEmbeddingCircuitOpen
+			g.openUntil = g.runtime.Now().Add(delay)
+			g.epoch++
+			g.openReason = normalizedDecision.Reason
+			metrics.SetPostEmbeddingCircuitBreakerState("open")
+			metrics.SetEmbeddingProviderPause(true, g.openReason, g.openUntil.Unix())
+			metrics.RecordPostEmbeddingHalfOpenProbe("panic")
 		}
 		g.signalLocked()
 		g.mu.Unlock()

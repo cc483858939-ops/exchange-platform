@@ -31,6 +31,12 @@ type postEmbeddingGroupTestGeneration struct {
 	commitFn    func(map[string]map[int]int64) error
 }
 
+type postEmbeddingEmbedderFunc func(context.Context, []string) (embeddings.EmbedResult, error)
+
+func (f postEmbeddingEmbedderFunc) Embed(ctx context.Context, texts []string) (embeddings.EmbedResult, error) {
+	return f(ctx, texts)
+}
+
 func newPostEmbeddingGroupTestGeneration(assignments map[string][]kafka.PartitionAssignment) *postEmbeddingGroupTestGeneration {
 	return &postEmbeddingGroupTestGeneration{
 		id: 1, groupID: "post-embedding-test-group", memberID: "member-test",
@@ -183,7 +189,7 @@ func TestPostEmbeddingProvider503KeepsGenerationAndGroupMemberActive(t *testing.
 				return err
 			}
 			decision := ProviderDecision{Action: ProviderActionRetry, Reason: providerReasonServer}
-			gate.providerRequestFailed(permit, decision, postEmbeddingFailureScopeSharedOrUnknown)
+			gate.providerRequestFailed(permit, decision, postEmbeddingFailureScopeSharedOrUnknown, true)
 			select {
 			case <-failureSeen:
 			default:
@@ -525,6 +531,107 @@ func TestPostEmbeddingPartitionWorkerRestartsAfterUnexpectedPanic(t *testing.T) 
 	coordinator.Close()
 }
 
+type postEmbeddingRestartTestReader struct {
+	messages   []kafka.Message
+	index      int
+	panicAtEnd bool
+}
+
+func (r *postEmbeddingRestartTestReader) FetchMessage(ctx context.Context) (kafka.Message, error) {
+	if r.index < len(r.messages) {
+		message := r.messages[r.index]
+		r.index++
+		return message, nil
+	}
+	if r.panicAtEnd {
+		panic("injected panic after confirmed commit")
+	}
+	<-ctx.Done()
+	return kafka.Message{}, ctx.Err()
+}
+
+func (*postEmbeddingRestartTestReader) Close() error { return nil }
+
+func TestPostEmbeddingPartitionWorkerRestartUsesConfirmedOffset(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	generation := newPostEmbeddingGroupTestGeneration(map[string][]kafka.PartitionAssignment{
+		"post-embedding": {{ID: 0, Offset: 100}},
+	})
+	coordinator := newPostEmbeddingOffsetCommitCoordinator(ctx, generation, "post-embedding", generation.Assignments()["post-embedding"], postEmbeddingGenerationHealthIdentity{})
+	var (
+		factoryMu    sync.Mutex
+		factoryCalls int
+		readerStarts []int64
+		sleepCalls   atomic.Int32
+	)
+	secondReaderStarted := make(chan struct{})
+	runtimeConfig := postEmbeddingGroupRuntime{
+		topic: "post-embedding", groupID: generation.groupID, clientID: "worker-offset-restart", batchSize: 3,
+		batchMaxWait: time.Millisecond, retryPolicy: kafkaRetryPolicy{MaxAttempts: 1},
+		retryRuntime: providerRetryRuntime{
+			Now: time.Now, Jitter: func(delay time.Duration) time.Duration { return delay },
+			Sleep: func(context.Context, time.Duration) error {
+				if sleepCalls.Add(1) == 1 {
+					panic("injected Worker Pass panic after commit")
+				}
+				return nil
+			},
+		},
+		readerFactory: func(_ string, _ int, offset int64, _ string) (postEmbeddingPartitionReader, error) {
+			factoryMu.Lock()
+			factoryCalls++
+			call := factoryCalls
+			readerStarts = append(readerStarts, offset)
+			factoryMu.Unlock()
+			if call == 1 {
+				return &postEmbeddingRestartTestReader{
+					panicAtEnd: true,
+					messages: []kafka.Message{
+						{Topic: "post-embedding", Partition: 0, Offset: 100},
+						{Topic: "post-embedding", Partition: 0, Offset: 101},
+						{Topic: "post-embedding", Partition: 0, Offset: 102},
+					},
+				}, nil
+			}
+			if call == 2 {
+				close(secondReaderStarted)
+			}
+			return &postEmbeddingRestartTestReader{}, nil
+		},
+		processBatch: func(context.Context, []kafka.Message) error { return nil },
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runPostEmbeddingPartitionWorker(ctx, kafka.PartitionAssignment{ID: 0, Offset: 100}, runtimeConfig, make(chan struct{}, 1), coordinator, &atomic.Int32{})
+	}()
+	select {
+	case <-secondReaderStarted:
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("partition worker did not restart after the controlled panic")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("restarted partition worker did not stop after cancellation")
+	}
+	factoryMu.Lock()
+	starts := append([]int64(nil), readerStarts...)
+	factoryMu.Unlock()
+	if len(starts) != 2 || starts[0] != 100 || starts[1] != 103 {
+		t.Fatalf("reader restart offsets=%v, want [100 103]", starts)
+	}
+	if got := coordinator.LastConfirmedNextOffset(0, -1); got != 103 {
+		t.Fatalf("confirmed restart offset=%d, want 103", got)
+	}
+	if len(generation.commits) != 1 || generation.commits[0]["post-embedding"][0] != 103 {
+		t.Fatalf("commits=%v, want one commit to 103", generation.commits)
+	}
+	coordinator.Close()
+}
+
 func TestPostEmbeddingFailureScopeKeepsAuthUnknownAnd413PartitionLocal(t *testing.T) {
 	for _, status := range []int{400, 401, 403, 404, 422, 429, 503} {
 		decision := classifyPostEmbeddingProviderError(&embeddings.ProviderHTTPError{StatusCode: status}, 1)
@@ -593,7 +700,7 @@ func TestPostEmbeddingProviderGateLimitsConcurrencyAndAllowsOneHalfOpenProbe(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	gate.providerRequestFailed(permit, ProviderDecision{Action: ProviderActionRetry, Reason: providerReasonServer}, postEmbeddingFailureScopeSharedOrUnknown)
+	gate.providerRequestFailed(permit, ProviderDecision{Action: ProviderActionRetry, Reason: providerReasonServer}, postEmbeddingFailureScopeSharedOrUnknown, true)
 	gate.mu.Lock()
 	gate.openUntil = gate.runtime.Now().Add(-time.Millisecond)
 	gate.mu.Unlock()
@@ -625,6 +732,300 @@ func TestPostEmbeddingProviderGateLimitsConcurrencyAndAllowsOneHalfOpenProbe(t *
 	}
 }
 
+func TestPostEmbeddingHalfOpenPartitionFailureDoesNotReopenGlobalCircuit(t *testing.T) {
+	cleanupPostEmbeddingGateMetrics(t)
+	now := time.Unix(300, 0)
+	held := make(chan struct{})
+	var heldOnce sync.Once
+	runtimeConfig := providerRetryRuntime{
+		Now:    func() time.Time { return now },
+		Jitter: func(delay time.Duration) time.Duration { return delay },
+		Sleep: func(ctx context.Context, delay time.Duration) error {
+			if delay >= postEmbeddingContractPause {
+				heldOnce.Do(func() { close(held) })
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			return nil
+		},
+	}
+	gate := newPostEmbeddingProviderGate(runtimeConfig)
+	initial, err := gate.acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate.providerRequestFailed(initial, ProviderDecision{Action: ProviderActionRetry, Reason: providerReasonServer}, postEmbeddingFailureScopeSharedOrUnknown, true)
+	gate.mu.Lock()
+	gate.openUntil = now.Add(-time.Millisecond)
+	gate.mu.Unlock()
+
+	generation := newPostEmbeddingGroupTestGeneration(map[string][]kafka.PartitionAssignment{
+		"post-embedding": {{ID: 1, Offset: 100}},
+	})
+	coordinator := newPostEmbeddingOffsetCommitCoordinator(context.Background(), generation, "post-embedding", generation.Assignments()["post-embedding"], postEmbeddingGenerationHealthIdentity{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reader := &postEmbeddingPartitionTestReader{message: kafka.Message{Topic: "post-embedding", Partition: 1, Offset: 100}}
+	partitionEmbedder := &postEmbeddingTestEmbedder{err: &embeddings.ProviderHTTPError{StatusCode: 413}}
+	runtimeConfigForPartition := postEmbeddingGroupRuntime{
+		topic: "post-embedding", groupID: generation.groupID, clientID: "worker-half-open", batchSize: 1,
+		retryPolicy: kafkaRetryPolicy{MaxAttempts: 1}, retryRuntime: runtimeConfig, providerGate: gate,
+		readerFactory: func(string, int, int64, string) (postEmbeddingPartitionReader, error) { return reader, nil },
+		processBatch: func(ctx context.Context, _ []kafka.Message) error {
+			_, err := generatePostEmbeddingTextsWithRuntimeAndGate(
+				ctx, partitionEmbedder, []string{"partition one"}, kafkaRetryPolicy{MaxAttempts: 3}, runtimeConfig, nil, gate,
+			)
+			return err
+		},
+	}
+	var heldCount atomic.Int32
+	hold := &postEmbeddingPartitionHold{count: &heldCount}
+	partitionDone := make(chan error, 1)
+	go func() {
+		_, err := runPostEmbeddingPartitionReaderAttempt(ctx, kafka.PartitionAssignment{ID: 1, Offset: 100}, 100,
+			runtimeConfigForPartition, "worker-half-open-p1", coordinator, hold)
+		partitionDone <- err
+	}()
+	select {
+	case <-held:
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("partition 1 did not enter its bounded Hold")
+	}
+	if !hold.active.Load() || partitionEmbedder.calls != 1 {
+		t.Fatalf("partition Hold=%t Provider calls=%d, want held and one single-item 413 request", hold.active.Load(), partitionEmbedder.calls)
+	}
+	gate.mu.Lock()
+	state, inFlight := gate.state, gate.inFlight
+	gate.mu.Unlock()
+	if state != postEmbeddingCircuitHalfOpen || inFlight != 0 {
+		t.Fatalf("breaker after partition-scoped probe failure state=%v inFlight=%d, want HalfOpen/0", state, inFlight)
+	}
+	if len(generation.commits) != 0 || coordinator.LastConfirmedNextOffset(1, 100) != 100 {
+		t.Fatalf("partition 1 advanced while held: commits=%v confirmed=%d", generation.commits, coordinator.LastConfirmedNextOffset(1, 100))
+	}
+
+	recoveryBefore := postEmbeddingScalarMetric(t, "go_exchange_embedding_provider_recoveries_total")
+	if _, err := generatePostEmbeddingTextsWithRuntimeAndGate(
+		context.Background(), &postEmbeddingTestEmbedder{}, []string{"partition two"},
+		kafkaRetryPolicy{MaxAttempts: 3}, runtimeConfig, nil, gate,
+	); err != nil {
+		t.Fatalf("partition 2 HalfOpen probe: %v", err)
+	}
+	if _, err := generatePostEmbeddingTextsWithRuntimeAndGate(
+		context.Background(), &postEmbeddingTestEmbedder{}, []string{"partition zero"},
+		kafkaRetryPolicy{MaxAttempts: 3}, runtimeConfig, nil, gate,
+	); err != nil {
+		t.Fatalf("partition 0 processing after breaker recovery: %v", err)
+	}
+	gate.mu.Lock()
+	state = gate.state
+	gate.mu.Unlock()
+	if state != postEmbeddingCircuitClosed {
+		t.Fatalf("breaker after partition 2 validated response state=%v, want Closed", state)
+	}
+	if got := postEmbeddingScalarMetric(t, "go_exchange_embedding_provider_recoveries_total"); got != recoveryBefore+1 {
+		t.Fatalf("Provider recovery metric=%v want %v", got, recoveryBefore+1)
+	}
+	cancel()
+	if err := <-partitionDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("held partition exit error=%v, want context cancellation", err)
+	}
+	if coordinator.LastConfirmedNextOffset(1, 100) != 100 || len(generation.commits) != 0 {
+		t.Fatalf("partition 1 lost its uncommitted offset: confirmed=%d commits=%v", coordinator.LastConfirmedNextOffset(1, 100), generation.commits)
+	}
+	coordinator.Close()
+}
+
+func TestPostEmbeddingHalfOpenContractFailureStaysAvailableAndSharedFailureReopens(t *testing.T) {
+	tests := []struct {
+		name      string
+		embedder  *postEmbeddingTestEmbedder
+		wantState postEmbeddingCircuitState
+		wantCalls int
+	}{
+		{
+			name:      "contract failure remains partition local",
+			embedder:  &postEmbeddingTestEmbedder{results: []embeddings.EmbedResult{{Model: "test-model"}}},
+			wantState: postEmbeddingCircuitHalfOpen, wantCalls: 1,
+		},
+		{
+			name:      "503 reopens the shared circuit",
+			embedder:  &postEmbeddingTestEmbedder{err: &embeddings.ProviderHTTPError{StatusCode: 503}},
+			wantState: postEmbeddingCircuitOpen, wantCalls: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cleanupPostEmbeddingGateMetrics(t)
+			now := time.Unix(400, 0)
+			runtimeConfig := providerRetryRuntime{
+				Sleep:  func(context.Context, time.Duration) error { return nil },
+				Jitter: func(delay time.Duration) time.Duration { return delay },
+				Now:    func() time.Time { return now },
+			}
+			gate := newPostEmbeddingProviderGate(runtimeConfig)
+			initial, err := gate.acquire(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			gate.providerRequestFailed(initial, ProviderDecision{Action: ProviderActionRetry, Reason: providerReasonServer}, postEmbeddingFailureScopeSharedOrUnknown, true)
+			gate.mu.Lock()
+			gate.openUntil = now.Add(-time.Millisecond)
+			gate.mu.Unlock()
+			_, err = generatePostEmbeddingTextsWithRuntimeAndGate(
+				context.Background(), test.embedder, []string{"half-open probe"},
+				kafkaRetryPolicy{MaxAttempts: 4}, runtimeConfig, nil, gate,
+			)
+			if err == nil || test.embedder.calls != test.wantCalls {
+				t.Fatalf("probe err=%v calls=%d, want failure and %d call(s)", err, test.embedder.calls, test.wantCalls)
+			}
+			gate.mu.Lock()
+			state, inFlight := gate.state, gate.inFlight
+			gate.mu.Unlock()
+			if state != test.wantState || inFlight != 0 {
+				t.Fatalf("breaker after probe failure state=%v inFlight=%d, want %v/0", state, inFlight, test.wantState)
+			}
+			if state == postEmbeddingCircuitHalfOpen {
+				nextProbe, err := gate.acquire(context.Background())
+				if err != nil || !nextProbe.halfOpen {
+					t.Fatalf("next partition could not probe after scoped failure: permit=%+v err=%v", nextProbe, err)
+				}
+				gate.providerRequestSucceeded(nextProbe)
+			}
+		})
+	}
+}
+
+func TestPostEmbeddingProviderPermitReleasedAfterPanic(t *testing.T) {
+	for _, halfOpen := range []bool{false, true} {
+		name := "closed"
+		if halfOpen {
+			name = "half-open"
+		}
+		t.Run(name, func(t *testing.T) {
+			cleanupPostEmbeddingGateMetrics(t)
+			now := time.Unix(500, 0)
+			runtimeConfig := providerRetryRuntime{
+				Sleep:  func(context.Context, time.Duration) error { return nil },
+				Jitter: func(delay time.Duration) time.Duration { return delay },
+				Now:    func() time.Time { return now },
+			}
+			gate := newPostEmbeddingProviderGate(runtimeConfig)
+			if halfOpen {
+				initial, err := gate.acquire(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				gate.providerRequestFailed(initial, ProviderDecision{Action: ProviderActionRetry, Reason: providerReasonServer}, postEmbeddingFailureScopeSharedOrUnknown, true)
+				gate.mu.Lock()
+				gate.openUntil = now.Add(-time.Millisecond)
+				gate.mu.Unlock()
+			}
+			panicEmbedder := postEmbeddingEmbedderFunc(func(context.Context, []string) (embeddings.EmbedResult, error) {
+				panic("injected Provider panic")
+			})
+			panicked := false
+			func() {
+				defer func() { panicked = recover() != nil }()
+				_, _ = generatePostEmbeddingTextsWithRuntimeAndGate(
+					context.Background(), panicEmbedder, []string{"panic"},
+					kafkaRetryPolicy{MaxAttempts: 1}, runtimeConfig, nil, gate,
+				)
+			}()
+			if !panicked {
+				t.Fatal("Provider panic was swallowed")
+			}
+			gate.mu.Lock()
+			state, inFlight, openUntil := gate.state, gate.inFlight, gate.openUntil
+			gate.mu.Unlock()
+			if inFlight != 0 {
+				t.Fatalf("Permit leaked after panic: inFlight=%d", inFlight)
+			}
+			if halfOpen {
+				if state != postEmbeddingCircuitOpen || !openUntil.After(now) {
+					t.Fatalf("HalfOpen panic state=%v cooldown=%s, want safely Open", state, openUntil.Sub(now))
+				}
+				gate.mu.Lock()
+				gate.openUntil = now.Add(-time.Millisecond)
+				gate.mu.Unlock()
+			} else if state != postEmbeddingCircuitClosed {
+				t.Fatalf("Closed-state panic changed breaker to %v", state)
+			}
+			if _, err := generatePostEmbeddingTextsWithRuntimeAndGate(
+				context.Background(), &postEmbeddingTestEmbedder{}, []string{"next request"},
+				kafkaRetryPolicy{MaxAttempts: 1}, runtimeConfig, nil, gate,
+			); err != nil {
+				t.Fatalf("Provider request after panic did not get a Permit: %v", err)
+			}
+			first, err := gate.acquire(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := gate.acquire(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			gate.providerRequestSucceeded(first)
+			gate.providerRequestSucceeded(first)
+			gate.mu.Lock()
+			inFlight = gate.inFlight
+			gate.mu.Unlock()
+			if inFlight != 1 {
+				t.Fatalf("duplicate Permit release changed inFlight=%d, want 1", inFlight)
+			}
+			gate.providerRequestSucceeded(second)
+			gate.mu.Lock()
+			state, inFlight = gate.state, gate.inFlight
+			gate.mu.Unlock()
+			if inFlight != 0 || state != postEmbeddingCircuitClosed {
+				t.Fatalf("Permit cleanup state=%v inFlight=%d, want Closed/0", state, inFlight)
+			}
+		})
+	}
+}
+
+func TestPostEmbeddingProviderPermitReleasedOnCancellation(t *testing.T) {
+	cleanupPostEmbeddingGateMetrics(t)
+	gate := newPostEmbeddingProviderGate(providerRetryRuntime{})
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	embedder := postEmbeddingEmbedderFunc(func(ctx context.Context, _ []string) (embeddings.EmbedResult, error) {
+		close(started)
+		<-ctx.Done()
+		return embeddings.EmbedResult{}, ctx.Err()
+	})
+	done := make(chan error, 1)
+	go func() {
+		_, err := generatePostEmbeddingTextsWithRuntimeAndGate(
+			ctx, embedder, []string{"cancel"}, kafkaRetryPolicy{MaxAttempts: 3}, providerRetryRuntime{}, nil, gate,
+		)
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("Provider request did not start")
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled Provider request error=%v", err)
+	}
+	gate.mu.Lock()
+	state, inFlight := gate.state, gate.inFlight
+	gate.mu.Unlock()
+	if state != postEmbeddingCircuitClosed || inFlight != 0 {
+		t.Fatalf("cancellation Permit cleanup state=%v inFlight=%d, want Closed/0", state, inFlight)
+	}
+	if _, err := generatePostEmbeddingTextsWithRuntimeAndGate(
+		context.Background(), &postEmbeddingTestEmbedder{}, []string{"after cancellation"},
+		kafkaRetryPolicy{MaxAttempts: 1}, providerRetryRuntime{}, nil, gate,
+	); err != nil {
+		t.Fatalf("Provider request after cancellation could not acquire a Permit: %v", err)
+	}
+}
+
 func TestPostEmbeddingNoopAndDLQSuccessDoNotCloseOpenBreaker(t *testing.T) {
 	cleanupPostEmbeddingGateMetrics(t)
 	gate := newPostEmbeddingProviderGate(providerRetryRuntime{})
@@ -632,7 +1033,7 @@ func TestPostEmbeddingNoopAndDLQSuccessDoNotCloseOpenBreaker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gate.providerRequestFailed(permit, ProviderDecision{Action: ProviderActionRetry, Reason: providerReasonServer}, postEmbeddingFailureScopeSharedOrUnknown)
+	gate.providerRequestFailed(permit, ProviderDecision{Action: ProviderActionRetry, Reason: providerReasonServer}, postEmbeddingFailureScopeSharedOrUnknown, true)
 	store := &postEmbeddingTestStore{postErr: gorm.ErrRecordNotFound, embeddingErr: gorm.ErrRecordNotFound}
 	embedder := &postEmbeddingTestEmbedder{}
 	publisher := &fakeRawKafkaMessagePublisher{}
@@ -684,7 +1085,7 @@ func TestPostEmbeddingOpenBreakerDoesNotIssueProviderRequests(t *testing.T) {
 	gate.providerRequestFailed(permit, ProviderDecision{
 		Action: ProviderActionRetry, Reason: providerReasonServer,
 		RetryAfter: time.Hour, RetryAfterValid: true,
-	}, postEmbeddingFailureScopeSharedOrUnknown)
+	}, postEmbeddingFailureScopeSharedOrUnknown, true)
 	embedder := &postEmbeddingTestEmbedder{}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -718,7 +1119,7 @@ func TestPostEmbeddingProviderGatePreservesCooldownBackoffAndRetryAfter(t *testi
 		if err != nil {
 			t.Fatal(err)
 		}
-		gate.providerRequestFailed(permit, decision, postEmbeddingFailureScopeSharedOrUnknown)
+		gate.providerRequestFailed(permit, decision, postEmbeddingFailureScopeSharedOrUnknown, true)
 		gate.mu.Lock()
 		got := gate.openUntil.Sub(now)
 		gate.openUntil = now.Add(-time.Millisecond)
@@ -736,7 +1137,7 @@ func TestPostEmbeddingProviderGatePreservesCooldownBackoffAndRetryAfter(t *testi
 		Action: ProviderActionRetry, Reason: providerReasonRateLimit,
 		RetryAfter: 7 * time.Minute, RetryAfterValid: true,
 	}
-	gate.providerRequestFailed(permit, decision, postEmbeddingFailureScopeSharedOrUnknown)
+	gate.providerRequestFailed(permit, decision, postEmbeddingFailureScopeSharedOrUnknown, true)
 	gate.mu.Lock()
 	got := gate.openUntil.Sub(now)
 	gate.mu.Unlock()
@@ -750,7 +1151,7 @@ func TestPostEmbeddingProviderGatePreservesCooldownBackoffAndRetryAfter(t *testi
 		t.Fatal(err)
 	}
 	decision = ProviderDecision{Action: ProviderActionPause, Reason: providerReasonAuth}
-	authGate.providerRequestFailed(permit, decision, postEmbeddingFailureScopeSharedOrUnknown)
+	authGate.providerRequestFailed(permit, decision, postEmbeddingFailureScopeSharedOrUnknown, true)
 	authGate.mu.Lock()
 	got = authGate.openUntil.Sub(now)
 	authGate.mu.Unlock()

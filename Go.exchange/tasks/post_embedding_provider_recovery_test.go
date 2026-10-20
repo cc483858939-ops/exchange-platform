@@ -94,6 +94,150 @@ func TestPostEmbeddingProviderRetryWaitHonorsRetryAfter(t *testing.T) {
 	}
 }
 
+func TestPostEmbeddingShortRetryDoesNotEnterGlobalCooldownPrematurely(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "503", err: &embeddings.ProviderHTTPError{StatusCode: http.StatusServiceUnavailable}},
+		{name: "429 rate limit", err: &embeddings.ProviderHTTPError{
+			StatusCode: http.StatusTooManyRequests, ProviderCode: "rate_limit_exceeded", ProviderType: "rate_limit_error",
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cleanupPostEmbeddingGateMetrics(t)
+			now := time.Unix(200, 0)
+			var gate *postEmbeddingProviderGate
+			var waits []time.Duration
+			runtime := providerRetryRuntime{
+				Now:    func() time.Time { return now },
+				Jitter: func(delay time.Duration) time.Duration { return delay },
+				Sleep: func(_ context.Context, delay time.Duration) error {
+					gate.mu.Lock()
+					state := gate.state
+					gate.mu.Unlock()
+					if state != postEmbeddingCircuitClosed {
+						t.Fatalf("breaker entered %v during a bounded short retry", state)
+					}
+					waits = append(waits, delay)
+					return nil
+				},
+			}
+			gate = newPostEmbeddingProviderGate(runtime)
+			embedder := &postEmbeddingTestEmbedder{errors: []error{test.err, nil}}
+			retryBefore := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCodeProviderRetryable)
+			exhaustedBefore := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryExhausted, kafkaFailureCodeProviderRetryable)
+			result, err := generatePostEmbeddingTextsWithRuntimeAndGate(
+				context.Background(), embedder, []string{"text"},
+				kafkaRetryPolicy{MaxAttempts: 3, InitialBackoff: 20 * time.Millisecond, MaxBackoff: 100 * time.Millisecond},
+				runtime, nil, gate,
+			)
+			if err != nil || result.Model != "test-model" || embedder.calls != 2 || len(waits) != 1 || waits[0] != 20*time.Millisecond {
+				t.Fatalf("result=%+v err=%v calls=%d waits=%v", result, err, embedder.calls, waits)
+			}
+			gate.mu.Lock()
+			state, inFlight, failures := gate.state, gate.inFlight, gate.recovery.consecutiveRetryFailures
+			gate.mu.Unlock()
+			if state != postEmbeddingCircuitClosed || inFlight != 0 || failures != 0 {
+				t.Fatalf("breaker state=%v inFlight=%d consecutive failures=%d, want Closed/0/0", state, inFlight, failures)
+			}
+			if got := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCodeProviderRetryable); got != retryBefore+1 {
+				t.Fatalf("retry_attempt=%v want %v", got, retryBefore+1)
+			}
+			if got := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryExhausted, kafkaFailureCodeProviderRetryable); got != exhaustedBefore {
+				t.Fatalf("retry_exhausted=%v want unchanged %v", got, exhaustedBefore)
+			}
+		})
+	}
+}
+
+func TestPostEmbeddingRetryExhaustionOpensCircuit(t *testing.T) {
+	cleanupPostEmbeddingGateMetrics(t)
+	now := time.Unix(250, 0)
+	runtime := providerRetryRuntime{
+		Sleep:  func(context.Context, time.Duration) error { return nil },
+		Jitter: func(delay time.Duration) time.Duration { return delay },
+		Now:    func() time.Time { return now },
+	}
+	gate := newPostEmbeddingProviderGate(runtime)
+	embedder := &postEmbeddingTestEmbedder{err: &embeddings.ProviderHTTPError{StatusCode: http.StatusServiceUnavailable}}
+	retryBefore := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCodeProviderRetryable)
+	exhaustedBefore := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryExhausted, kafkaFailureCodeProviderRetryable)
+	_, err := generatePostEmbeddingTextsWithRuntimeAndGate(
+		context.Background(), embedder, []string{"text"},
+		kafkaRetryPolicy{MaxAttempts: 3, InitialBackoff: time.Millisecond, MaxBackoff: 10 * time.Millisecond},
+		runtime, nil, gate,
+	)
+	if _, ok := providerFailureDecision(err); !ok || embedder.calls != 3 {
+		t.Fatalf("provider result err=%v requests=%d, want retryable provider failure after 3 requests", err, embedder.calls)
+	}
+	gate.mu.Lock()
+	state, inFlight := gate.state, gate.inFlight
+	gate.mu.Unlock()
+	if state != postEmbeddingCircuitOpen || inFlight != 0 {
+		t.Fatalf("breaker after retry exhaustion state=%v inFlight=%d, want Open/0", state, inFlight)
+	}
+	if got := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCodeProviderRetryable); got != retryBefore+2 {
+		t.Fatalf("retry_attempt=%v want %v", got, retryBefore+2)
+	}
+	if got := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryExhausted, kafkaFailureCodeProviderRetryable); got != exhaustedBefore+1 {
+		t.Fatalf("retry_exhausted=%v want %v", got, exhaustedBefore+1)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err = generatePostEmbeddingTextsWithRuntimeAndGate(
+		ctx, embedder, []string{"must wait"}, kafkaRetryPolicy{MaxAttempts: 3}, runtime, nil, gate,
+	)
+	if !errors.Is(err, context.DeadlineExceeded) || embedder.calls != 3 {
+		t.Fatalf("open-circuit request err=%v provider calls=%d, want cancelled wait and no additional call", err, embedder.calls)
+	}
+
+	gate.mu.Lock()
+	gate.openUntil = now.Add(-time.Millisecond)
+	gate.mu.Unlock()
+	_, err = generatePostEmbeddingTextsWithRuntimeAndGate(
+		context.Background(), embedder, []string{"single half-open probe"},
+		kafkaRetryPolicy{MaxAttempts: 3}, runtime, nil, gate,
+	)
+	if _, ok := providerFailureDecision(err); !ok || embedder.calls != 4 {
+		t.Fatalf("HalfOpen result err=%v provider calls=%d, want one failing probe", err, embedder.calls)
+	}
+	gate.mu.Lock()
+	state, inFlight = gate.state, gate.inFlight
+	gate.mu.Unlock()
+	if state != postEmbeddingCircuitOpen || inFlight != 0 {
+		t.Fatalf("breaker after failed HalfOpen probe state=%v inFlight=%d, want Open/0", state, inFlight)
+	}
+}
+
+func TestPostEmbeddingQuotaPauseOpensCircuitWithoutShortRetry(t *testing.T) {
+	cleanupPostEmbeddingGateMetrics(t)
+	now := time.Unix(275, 0)
+	var waits int
+	runtime := providerRetryRuntime{
+		Sleep:  func(context.Context, time.Duration) error { waits++; return nil },
+		Jitter: func(delay time.Duration) time.Duration { return delay },
+		Now:    func() time.Time { return now },
+	}
+	gate := newPostEmbeddingProviderGate(runtime)
+	embedder := &postEmbeddingTestEmbedder{err: &embeddings.ProviderHTTPError{
+		StatusCode: http.StatusTooManyRequests, ProviderCode: "insufficient_quota", ProviderType: "rate_limit_error",
+	}}
+	_, err := generatePostEmbeddingTextsWithRuntimeAndGate(
+		context.Background(), embedder, []string{"quota"}, kafkaRetryPolicy{MaxAttempts: 5}, runtime, nil, gate,
+	)
+	decision, ok := providerFailureDecision(err)
+	if !ok || decision.Action != ProviderActionPause || decision.Reason != providerReasonQuota || embedder.calls != 1 || waits != 0 {
+		t.Fatalf("decision=%+v err=%v requests=%d waits=%d, want immediate quota Pause", decision, err, embedder.calls, waits)
+	}
+	gate.mu.Lock()
+	state, inFlight, openUntil := gate.state, gate.inFlight, gate.openUntil
+	gate.mu.Unlock()
+	if state != postEmbeddingCircuitOpen || inFlight != 0 || openUntil.Sub(now) != postEmbeddingServicePause {
+		t.Fatalf("quota breaker state=%v inFlight=%d cooldown=%s, want Open/0/service pause", state, inFlight, openUntil.Sub(now))
+	}
+}
+
 func TestPostEmbeddingInvalidRetryAfterAlertsAndUsesLocalBackoff(t *testing.T) {
 	embedder := &postEmbeddingTestEmbedder{errors: []error{
 		&embeddings.ProviderHTTPError{StatusCode: http.StatusTooManyRequests, RetryAfterProvided: true, RetryAfterValid: false},
@@ -134,14 +278,16 @@ func TestPostEmbeddingLongRetryAfterMovesToCooldownWithoutShortRetry(t *testing.
 	var waits []time.Duration
 	now := time.Date(2026, time.October, 20, 0, 0, 0, 0, time.UTC)
 	longRetryAfterBefore := postEmbeddingDomainMetric(t, "go_exchange_embedding_provider_failures_total", "reason", providerReasonRetryAfterLong)
+	retryExhaustedBefore := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryExhausted, kafkaFailureCodeProviderRetryable)
 	runtime := providerRetryRuntime{
 		Sleep:  func(_ context.Context, delay time.Duration) error { waits = append(waits, delay); return nil },
 		Jitter: func(delay time.Duration) time.Duration { return delay },
 		Now:    func() time.Time { return now },
 	}
-	_, err := generatePostEmbeddingTextsWithRuntime(context.Background(), embedder, []string{"text"}, kafkaRetryPolicy{
+	gate := newPostEmbeddingProviderGate(runtime)
+	_, err := generatePostEmbeddingTextsWithRuntimeAndGate(context.Background(), embedder, []string{"text"}, kafkaRetryPolicy{
 		MaxAttempts: 5, InitialBackoff: 250 * time.Millisecond, MaxBackoff: 2 * time.Second,
-	}, runtime, nil)
+	}, runtime, nil, gate)
 	decision, ok := providerFailureDecision(err)
 	if !ok || decision.Action != ProviderActionRetry || embedder.calls != 1 || len(waits) != 0 {
 		t.Fatalf("decision=%+v typed=%t calls=%d waits=%v err=%v", decision, ok, embedder.calls, waits, err)
@@ -156,6 +302,15 @@ func TestPostEmbeddingLongRetryAfterMovesToCooldownWithoutShortRetry(t *testing.
 	}
 	if got := postEmbeddingDomainMetric(t, "go_exchange_embedding_provider_failures_total", "reason", providerReasonRetryAfterLong); got != longRetryAfterBefore+1 {
 		t.Fatalf("long Retry-After alert counter=%v want %v", got, longRetryAfterBefore+1)
+	}
+	if got := postEmbeddingRecoveryMetric(t, kafkaRecoveryOutcomeRetryExhausted, kafkaFailureCodeProviderRetryable); got != retryExhaustedBefore+1 {
+		t.Fatalf("Retry-After short-retry termination counter=%v want %v", got, retryExhaustedBefore+1)
+	}
+	gate.mu.Lock()
+	state, openUntil := gate.state, gate.openUntil
+	gate.mu.Unlock()
+	if state != postEmbeddingCircuitOpen || openUntil.Sub(now) != 6*time.Minute {
+		t.Fatalf("breaker state=%v cooldown=%s, want Open for the full Retry-After", state, openUntil.Sub(now))
 	}
 }
 
@@ -194,7 +349,7 @@ func TestPostEmbeddingProviderRecoveryRequiresValidatedProviderSuccess(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	gate.providerRequestFailed(permit, ProviderDecision{Action: ProviderActionRetry, Reason: providerReasonServer}, postEmbeddingFailureScopeSharedOrUnknown)
+	gate.providerRequestFailed(permit, ProviderDecision{Action: ProviderActionRetry, Reason: providerReasonServer}, postEmbeddingFailureScopeSharedOrUnknown, true)
 	gate.mu.Lock()
 	gate.openUntil = runtime.Now().Add(-time.Millisecond)
 	gate.mu.Unlock()

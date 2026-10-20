@@ -458,7 +458,8 @@ func runPostEmbeddingPartitionWorker(
 	heldPartitions *atomic.Int32,
 ) {
 	for ctx.Err() == nil {
-		err := runPostEmbeddingPartitionWorkerPass(ctx, assignment, runtime, readerSlots, commitGate, heldPartitions)
+		restartOffset := commitGate.LastConfirmedNextOffset(assignment.ID, assignment.Offset)
+		err := runPostEmbeddingPartitionWorkerPass(ctx, assignment, restartOffset, runtime, readerSlots, commitGate, heldPartitions)
 		if ctx.Err() != nil {
 			return
 		}
@@ -476,6 +477,7 @@ func runPostEmbeddingPartitionWorker(
 func runPostEmbeddingPartitionWorkerPass(
 	ctx context.Context,
 	assignment kafka.PartitionAssignment,
+	startOffset int64,
 	runtime postEmbeddingGroupRuntime,
 	readerSlots chan struct{},
 	commitGate *postEmbeddingOffsetCommitCoordinator,
@@ -487,7 +489,7 @@ func runPostEmbeddingPartitionWorkerPass(
 		}
 	}()
 	partition := assignment.ID
-	nextOffset := assignment.Offset
+	nextOffset := startOffset
 	failureCount := 0
 	hold := &postEmbeddingPartitionHold{count: heldPartitions}
 	defer hold.set(false)

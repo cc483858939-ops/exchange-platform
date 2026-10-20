@@ -129,7 +129,7 @@ func TestPostEmbeddingMultipleMembers503HoldRecoveryAndAssignmentTransferIntegra
 						return err
 					}
 					decision := ProviderDecision{Action: ProviderActionPause, Reason: providerReasonConfig, HTTPStatus: 413}
-					gate.providerRequestFailed(permit, decision, postEmbeddingFailureScopePartition)
+					gate.providerRequestFailed(permit, decision, postEmbeddingFailureScopePartition, false)
 					select {
 					case partitionHeld <- message.Partition:
 					default:
@@ -146,7 +146,7 @@ func TestPostEmbeddingMultipleMembers503HoldRecoveryAndAssignmentTransferIntegra
 					Action: ProviderActionRetry, Reason: providerReasonServer, HTTPStatus: 503,
 					RetryAfter: 12 * time.Second, RetryAfterProvided: true, RetryAfterValid: true,
 				}
-				gate.providerRequestFailed(permit, decision, postEmbeddingFailureScopeSharedOrUnknown)
+				gate.providerRequestFailed(permit, decision, postEmbeddingFailureScopeSharedOrUnknown, true)
 				select {
 				case providerFailures <- clientID:
 				default:
