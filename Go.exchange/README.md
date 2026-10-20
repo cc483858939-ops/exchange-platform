@@ -308,5 +308,12 @@ messages and 1–1000 ms. `EMBEDDING_BATCH_SIZE` and
 `EMBEDDING_BATCH_MAX_WAIT_MS` override the YAML values. Messages are processed
 serially across batches, and Kafka offsets are committed only after every
 message in that fetched batch is persisted, already current, missing, or
-successfully sent to the DLQ. Provider permanent failures split a batch until
-the failing single message can be isolated.
+successfully sent to the DLQ. Provider failures use typed recovery actions:
+HTTP 429 rate-limit errors and retryable server errors receive bounded retries
+and then a category-specific cooldown, honoring a valid `Retry-After`. HTTP 429
+quota exhaustion and authentication, permission, or endpoint failures pause
+provider requests without entering the DLQ. Unrecognized HTTP 400/422 errors
+pause for configuration and input review. HTTP 413 and Provider Contract Errors
+may split a multi-message batch; an unresolved single-message provider error
+remains uncommitted and pauses for recovery. Only confirmed Kafka message-level
+permanent errors, such as invalid event envelopes, are sent to the DLQ.

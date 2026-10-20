@@ -583,11 +583,6 @@ func processPostEmbeddingWorkItemsWithHooks(
 		if !providerFailure {
 			return err
 		}
-		if decision.Action == ProviderActionDeadLetter && len(workItems) == 1 {
-			message := workItems[0].Message
-			log.Printf("[PostEmbedding] confirmed message-level provider failure topic=%s partition=%d offset=%d reason=%s", message.Topic, message.Partition, message.Offset, decision.Reason)
-			return publishPostEmbeddingDLQ(ctx, publisher, kafkaConfig, message, err)
-		}
 		if decision.Action != ProviderActionSplitBatch || len(workItems) < 2 {
 			return err
 		}

@@ -70,7 +70,7 @@ groups:
           description: The Post embedding consumer has paused provider requests for more than one minute; inspect the bounded pause reason and provider configuration.
 
       - alert: GoExchangeEmbeddingProviderRetryExhaustedRepeated
-        expr: increase(go_exchange_kafka_consumer_recovery_total{job="go-exchange-worker",consumer="post_embedding",outcome="retry_exhausted"}[15m]) >= 3
+        expr: increase(go_exchange_kafka_consumer_recovery_total{job="go-exchange-worker",consumer="post_embedding",outcome="retry_exhausted",code="provider_retryable"}[15m]) >= 3
         for: 1m
         labels:
           severity: warning

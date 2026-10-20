@@ -23,7 +23,6 @@ const (
 	ProviderActionRetry      ProviderAction = "retry"
 	ProviderActionPause      ProviderAction = "pause"
 	ProviderActionSplitBatch ProviderAction = "split_batch"
-	ProviderActionDeadLetter ProviderAction = "dead_letter"
 )
 
 const (
@@ -313,8 +312,8 @@ func (r *postEmbeddingRecoveryCoordinator) cooldownFor(err error) (time.Duration
 			delay = postEmbeddingServicePause
 		}
 	default:
-		// SplitBatch and DeadLetter must be resolved while the fetched batch is
-		// still available. They do not normally escape processPostEmbeddingBatch.
+		// SplitBatch must be resolved while the fetched batch is still available.
+		// It does not normally escape processPostEmbeddingBatch.
 		delay = postEmbeddingServicePause
 		decision.Action = ProviderActionPause
 		decision.Reason = providerReasonUnknown

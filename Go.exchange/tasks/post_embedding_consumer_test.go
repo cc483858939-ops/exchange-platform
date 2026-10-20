@@ -738,6 +738,8 @@ func TestPostEmbeddingOpenAICompatibleProviderHTTPStatusRecovery(t *testing.T) {
 	tests := []struct {
 		name         string
 		status       int
+		providerCode string
+		providerType string
 		attempts     int
 		wantRequests int
 		action       ProviderAction
@@ -747,8 +749,9 @@ func TestPostEmbeddingOpenAICompatibleProviderHTTPStatusRecovery(t *testing.T) {
 		wantRetries  float64
 		wantExhaust  float64
 	}{
-		{name: "503 retries", status: http.StatusServiceUnavailable, attempts: 3, wantRequests: 3, action: ProviderActionRetry, reason: providerReasonServer, wantClass: kafkaFailureRetryable, wantCode: kafkaFailureCodeProviderRetryable, wantRetries: 2, wantExhaust: 1},
-		{name: "422 pauses", status: http.StatusUnprocessableEntity, attempts: 5, wantRequests: 1, action: ProviderActionPause, reason: providerReasonConfig},
+		{name: "503 retries", status: http.StatusServiceUnavailable, providerCode: "unknown_code", providerType: "provider_error", attempts: 3, wantRequests: 3, action: ProviderActionRetry, reason: providerReasonServer, wantClass: kafkaFailureRetryable, wantCode: kafkaFailureCodeProviderRetryable, wantRetries: 2, wantExhaust: 1},
+		{name: "429 rate limit retries", status: http.StatusTooManyRequests, providerCode: "rate_limit_exceeded", providerType: "rate_limit_error", attempts: 3, wantRequests: 3, action: ProviderActionRetry, reason: providerReasonRateLimit, wantClass: kafkaFailureRetryable, wantCode: kafkaFailureCodeProviderRetryable, wantRetries: 2, wantExhaust: 1},
+		{name: "422 pauses", status: http.StatusUnprocessableEntity, providerCode: "unknown_code", providerType: "provider_error", attempts: 5, wantRequests: 1, action: ProviderActionPause, reason: providerReasonConfig},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -757,7 +760,7 @@ func TestPostEmbeddingOpenAICompatibleProviderHTTPStatusRecovery(t *testing.T) {
 				requestCount++
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(test.status)
-				_, _ = w.Write([]byte(`{"error":{"code":"unknown_code","type":"provider_error","message":"provider failure"}}`))
+				_, _ = w.Write([]byte(`{"error":{"code":"` + test.providerCode + `","type":"` + test.providerType + `","message":"provider failure"}}`))
 			}))
 			defer server.Close()
 			embedder, err := embeddings.NewOpenAICompatibleEmbedder(config.EmbeddingConfig{
