@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"Go.exchange/embeddings"
+	"Go.exchange/eventing"
 	appmetrics "Go.exchange/metrics"
 
 	"github.com/segmentio/kafka-go"
@@ -133,15 +134,21 @@ func TestPostEmbeddingGenerationSessionRegistersZeroPartitionMemberByClientID(t 
 	now := time.Now().UTC()
 	registerPipelineAt(PipelinePostEmbedding, 1, now)
 	KafkaConsumerSlotStarted(PipelinePostEmbedding, 0)
-	unregister := registerKafkaConsumerGenerationSession(
-		PipelinePostEmbedding, 0, "post-embedding", "post-embedding-group", "stable-client-id", 17, 0,
+	identity, unregister := registerKafkaConsumerGenerationSession(
+		PipelinePostEmbedding, 0, "post-embedding", "post-embedding-group", "stable-client-id", 17, nil,
 	)
+	if !identity.valid() {
+		t.Fatal("zero-partition Generation did not receive a health identity")
+	}
 	workerPipelines.RLock()
 	slot := workerPipelines.states[PipelinePostEmbedding].kafkaSlots[0]
 	workerPipelines.RUnlock()
 	if !slot.sessionActive || !slot.sessionRecoveryEligible || slot.session.clientID != "stable-client-id" ||
 		slot.session.generationID != 17 || !slot.session.generationScoped || slot.session.partitionCount != 0 {
 		t.Fatalf("zero-partition Generation session was not registered as a live member: %+v", slot)
+	}
+	if len(slot.postEmbeddingPartitions) != 0 {
+		t.Fatalf("zero-partition Generation created partition health: %+v", slot.postEmbeddingPartitions)
 	}
 	unregister()
 	workerPipelines.RLock()
@@ -243,7 +250,7 @@ func TestPostEmbeddingOffsetCommitCoordinatorRetriesUncertainTargetMonotonically
 		}
 		return nil
 	}
-	coordinator := newPostEmbeddingOffsetCommitCoordinator(context.Background(), generation, "post-embedding", generation.Assignments()["post-embedding"])
+	coordinator := newPostEmbeddingOffsetCommitCoordinator(context.Background(), generation, "post-embedding", generation.Assignments()["post-embedding"], postEmbeddingGenerationHealthIdentity{})
 	if err := coordinator.Commit(context.Background(), "post-embedding", 2, 103); err == nil {
 		t.Fatal("first ambiguous CommitOffsets call unexpectedly succeeded")
 	}
@@ -297,7 +304,7 @@ func TestPostEmbeddingOffsetCommitGateClosesAroundInFlightRPC(t *testing.T) {
 		return nil
 	}
 	generationCtx, cancelGeneration := context.WithCancel(context.Background())
-	coordinator := newPostEmbeddingOffsetCommitCoordinator(generationCtx, generation, "post-embedding", generation.Assignments()["post-embedding"])
+	coordinator := newPostEmbeddingOffsetCommitCoordinator(generationCtx, generation, "post-embedding", generation.Assignments()["post-embedding"], postEmbeddingGenerationHealthIdentity{})
 	firstDone := make(chan error, 1)
 	go func() { firstDone <- coordinator.Commit(context.Background(), "post-embedding", 0, 2) }()
 	select {
@@ -366,7 +373,7 @@ func TestPostEmbeddingPartitionRetainsBatchUntilSuccessAndCommitsNextOffset(t *t
 	generation := newPostEmbeddingGroupTestGeneration(map[string][]kafka.PartitionAssignment{
 		"post-embedding": {{ID: 1, Offset: 10}},
 	})
-	coordinator := newPostEmbeddingOffsetCommitCoordinator(ctx, generation, "post-embedding", generation.Assignments()["post-embedding"])
+	coordinator := newPostEmbeddingOffsetCommitCoordinator(ctx, generation, "post-embedding", generation.Assignments()["post-embedding"], postEmbeddingGenerationHealthIdentity{})
 	reader := &postEmbeddingPartitionTestReader{message: kafka.Message{Topic: "post-embedding", Partition: 1, Offset: 11, Value: []byte("pending")}}
 	firstFailure, allowRetry, processed, committed := make(chan struct{}), make(chan struct{}), make(chan kafka.Message, 2), make(chan int64, 1)
 	generation.commitFn = func(offsets map[string]map[int]int64) error {
@@ -463,7 +470,7 @@ func TestPostEmbeddingPartitionWorkerRestartsAfterUnexpectedPanic(t *testing.T) 
 	generation := newPostEmbeddingGroupTestGeneration(map[string][]kafka.PartitionAssignment{
 		"post-embedding": {{ID: 3, Offset: 7}},
 	})
-	coordinator := newPostEmbeddingOffsetCommitCoordinator(ctx, generation, "post-embedding", generation.Assignments()["post-embedding"])
+	coordinator := newPostEmbeddingOffsetCommitCoordinator(ctx, generation, "post-embedding", generation.Assignments()["post-embedding"], postEmbeddingGenerationHealthIdentity{})
 	readerOpened := make(chan struct{})
 	var factoryCalls atomic.Int32
 	var sleepCalls atomic.Int32
@@ -654,7 +661,7 @@ func TestPostEmbeddingNoopAndDLQSuccessDoNotCloseOpenBreaker(t *testing.T) {
 	generation := newPostEmbeddingGroupTestGeneration(map[string][]kafka.PartitionAssignment{
 		"post-embedding": {{ID: 0, Offset: 1}},
 	})
-	coordinator := newPostEmbeddingOffsetCommitCoordinator(context.Background(), generation, "post-embedding", generation.Assignments()["post-embedding"])
+	coordinator := newPostEmbeddingOffsetCommitCoordinator(context.Background(), generation, "post-embedding", generation.Assignments()["post-embedding"], postEmbeddingGenerationHealthIdentity{})
 	if err := coordinator.Commit(context.Background(), "post-embedding", 0, 2); err != nil {
 		t.Fatalf("Kafka commit while Provider circuit is open: %v", err)
 	}
@@ -794,5 +801,333 @@ func TestPostEmbeddingPartitionReaderUsesBoundedManualAssignment(t *testing.T) {
 	}
 	if postEmbeddingReaderQueueCapacity != 4 || postEmbeddingMaxPartitionReaders != 6 {
 		t.Fatalf("reader bounds queue=%d max_readers=%d", postEmbeddingReaderQueueCapacity, postEmbeddingMaxPartitionReaders)
+	}
+}
+
+const postEmbeddingHealthTestClientID = "post-embedding-health-client"
+
+func setupPostEmbeddingGenerationHealth(
+	t *testing.T,
+	generationID int32,
+	assignments []kafka.PartitionAssignment,
+	now time.Time,
+) (postEmbeddingGenerationHealthIdentity, func()) {
+	t.Helper()
+	resetPipelineStates(t)
+	registerPipelineAt(PipelinePostEmbedding, 1, now.Add(-workerActiveGrace-time.Second))
+	KafkaConsumerSlotStarted(PipelinePostEmbedding, 0)
+	identity, unregister := registerKafkaConsumerGenerationSession(
+		PipelinePostEmbedding, 0, "post-embedding", "post-embedding-test-group",
+		postEmbeddingHealthTestClientID, generationID, assignments,
+	)
+	if !identity.valid() {
+		t.Fatal("Post Embedding Generation health identity was not registered")
+	}
+	t.Cleanup(unregister)
+	recordPostEmbeddingReadySample(t, now)
+	return identity, unregister
+}
+
+func recordPostEmbeddingReadySample(t *testing.T, now time.Time) {
+	t.Helper()
+	sampleVersion, candidate := beginKafkaBacklogSample(PipelinePostEmbedding)
+	if !recordKafkaBacklogSample(PipelinePostEmbedding, sampleVersion, 0, now, true) {
+		t.Fatal("could not record fresh zero Lag sample")
+	}
+	description := eventing.KafkaGroupDescription{
+		GroupID: "post-embedding-test-group", State: "Stable",
+		Members: []eventing.KafkaGroupMember{{ClientID: postEmbeddingHealthTestClientID, Topics: []string{"post-embedding"}}},
+	}
+	if !recordKafkaMembershipSample(context.Background(), PipelinePostEmbedding, candidate, description.GroupID, description, now, true) {
+		t.Fatal("could not record Stable Post Embedding membership")
+	}
+}
+
+func postEmbeddingHealthTestGeneration(assignments []kafka.PartitionAssignment) *postEmbeddingGroupTestGeneration {
+	return newPostEmbeddingGroupTestGeneration(map[string][]kafka.PartitionAssignment{
+		"post-embedding": assignments,
+	})
+}
+
+func postEmbeddingPartitionState(t *testing.T, partition int) postEmbeddingPartitionHealth {
+	t.Helper()
+	workerPipelines.RLock()
+	pipelineState, found := workerPipelines.states[PipelinePostEmbedding]
+	if !found {
+		workerPipelines.RUnlock()
+		t.Fatal("Post Embedding pipeline state is missing")
+	}
+	partitionState, found := pipelineState.kafkaSlots[0].postEmbeddingPartitions[partition]
+	workerPipelines.RUnlock()
+	if !found {
+		t.Fatalf("partition %d health state is missing", partition)
+	}
+	return partitionState
+}
+
+func TestPostEmbeddingOneStalledPartitionCannotBeMaskedByOtherCommits(t *testing.T) {
+	now := time.Now().UTC()
+	assignments := []kafka.PartitionAssignment{{ID: 0, Offset: 10}, {ID: 1, Offset: 20}}
+	identity, unregister := setupPostEmbeddingGenerationHealth(t, 31, assignments, now)
+	defer unregister()
+	pendingSince := now.Add(-postEmbeddingPartitionStallGrace - time.Second)
+	if !recordPostEmbeddingPartitionBatchPending(identity, 0, 12, pendingSince) {
+		t.Fatal("partition A pending work was not recorded")
+	}
+	generation := postEmbeddingHealthTestGeneration(assignments)
+	coordinator := newPostEmbeddingOffsetCommitCoordinator(
+		context.Background(), generation, "post-embedding", assignments, identity,
+	)
+	if err := coordinator.Commit(context.Background(), "post-embedding", 1, 21); err != nil {
+		t.Fatalf("partition B commit failed: %v", err)
+	}
+	KafkaConsumerSlotCommitted(PipelinePostEmbedding, 0, time.Now().UTC())
+	if reasons := evaluatePipelineHealth(time.Now().UTC()); !containsWorkerReason(reasons, "worker_post_embedding_partition_stalled") {
+		t.Fatalf("partition B progress masked partition A stall: %v", reasons)
+	}
+	state := pipelineSnapshots()[PipelinePostEmbedding]
+	if state.ConsecutiveFailures != 0 {
+		t.Fatalf("readiness evaluation accumulated consumer failures: %+v", state)
+	}
+	coordinator.Close()
+}
+
+func TestPostEmbeddingPartitionCommitClearsStall(t *testing.T) {
+	now := time.Now().UTC()
+	assignments := []kafka.PartitionAssignment{{ID: 0, Offset: 10}}
+	identity, unregister := setupPostEmbeddingGenerationHealth(t, 32, assignments, now)
+	defer unregister()
+	if !recordPostEmbeddingPartitionBatchPending(identity, 0, 12, now.Add(-postEmbeddingPartitionStallGrace-time.Second)) {
+		t.Fatal("partition pending work was not recorded")
+	}
+	if reasons := evaluatePipelineHealth(now); !containsWorkerReason(reasons, "worker_post_embedding_partition_stalled") {
+		t.Fatalf("aged partition pending state did not stall readiness: %v", reasons)
+	}
+	generation := postEmbeddingHealthTestGeneration(assignments)
+	coordinator := newPostEmbeddingOffsetCommitCoordinator(
+		context.Background(), generation, "post-embedding", assignments, identity,
+	)
+	if err := coordinator.Commit(context.Background(), "post-embedding", 0, 12); err != nil {
+		t.Fatalf("confirmed partition commit failed: %v", err)
+	}
+	KafkaConsumerSlotCommitted(PipelinePostEmbedding, 0, time.Now().UTC())
+	if state := postEmbeddingPartitionState(t, 0); state.Pending || state.LastConfirmedOffset != 12 {
+		t.Fatalf("confirmed offset did not clear the matching Pending state: %+v", state)
+	}
+	if reasons := evaluatePipelineHealth(time.Now().UTC()); containsWorkerReason(reasons, "worker_post_embedding_partition_stalled") {
+		t.Fatalf("confirmed partition commit did not restore readiness: %v", reasons)
+	}
+	coordinator.Close()
+}
+
+func TestPostEmbeddingUncertainCommitKeepsPending(t *testing.T) {
+	now := time.Now().UTC()
+	assignments := []kafka.PartitionAssignment{{ID: 0, Offset: 4}}
+	identity, unregister := setupPostEmbeddingGenerationHealth(t, 33, assignments, now)
+	defer unregister()
+	if !recordPostEmbeddingPartitionBatchPending(identity, 0, 7, now) {
+		t.Fatal("partition pending work was not recorded")
+	}
+	generation := postEmbeddingHealthTestGeneration(assignments)
+	generation.commitFn = func(map[string]map[int]int64) error {
+		return errors.New("CommitOffsets response was lost")
+	}
+	coordinator := newPostEmbeddingOffsetCommitCoordinator(
+		context.Background(), generation, "post-embedding", assignments, identity,
+	)
+	if err := coordinator.Commit(context.Background(), "post-embedding", 0, 7); err == nil {
+		t.Fatal("uncertain commit unexpectedly succeeded")
+	}
+	coordinator.RecordPartitionBatchPending(0, 7, now.Add(30*time.Second))
+	state := postEmbeddingPartitionState(t, 0)
+	if !state.Pending || !state.PendingSince.Equal(now) || state.PendingNextOffset != 7 || state.LastConfirmedOffset != 4 {
+		t.Fatalf("uncertain commit cleared or changed Pending state: %+v", state)
+	}
+	coordinator.Close()
+}
+
+func TestPostEmbeddingRetriesDoNotResetPendingSince(t *testing.T) {
+	now := time.Now().UTC()
+	assignments := []kafka.PartitionAssignment{{ID: 2, Offset: 100}}
+	identity, unregister := setupPostEmbeddingGenerationHealth(t, 34, assignments, now)
+	defer unregister()
+	for attempt, target := range []int64{103, 103, 105} {
+		if !recordPostEmbeddingPartitionBatchPending(identity, 2, target, now.Add(time.Duration(attempt)*10*time.Second)) {
+			t.Fatalf("retry attempt %d did not retain pending work", attempt+1)
+		}
+	}
+	state := postEmbeddingPartitionState(t, 2)
+	if !state.Pending || !state.PendingSince.Equal(now) || state.PendingNextOffset != 105 {
+		t.Fatalf("retries reset the pending timer or target: %+v", state)
+	}
+}
+
+func TestPostEmbeddingIdlePartitionIsNotStalled(t *testing.T) {
+	initial := time.Now().UTC()
+	assignments := []kafka.PartitionAssignment{{ID: 0, Offset: 50}}
+	_, unregister := setupPostEmbeddingGenerationHealth(t, 35, assignments, initial)
+	defer unregister()
+	checkAt := initial.Add(postEmbeddingPartitionStallGrace + time.Second)
+	recordPostEmbeddingReadySample(t, checkAt)
+	if reasons := evaluatePipelineHealth(checkAt); containsWorkerReason(reasons, "worker_post_embedding_partition_stalled") {
+		t.Fatalf("idle assigned partition was treated as stalled: %v", reasons)
+	}
+}
+
+func TestPostEmbeddingZeroAssignmentDoesNotCreateStall(t *testing.T) {
+	initial := time.Now().UTC()
+	_, unregister := setupPostEmbeddingGenerationHealth(t, 36, nil, initial)
+	defer unregister()
+	checkAt := initial.Add(postEmbeddingPartitionStallGrace + time.Second)
+	recordPostEmbeddingReadySample(t, checkAt)
+	if blocked, reason := pipelineBacklogBlocked(PipelinePostEmbedding, checkAt, func() workerPipelineState {
+		workerPipelines.RLock()
+		defer workerPipelines.RUnlock()
+		return workerPipelines.states[PipelinePostEmbedding]
+	}()); blocked {
+		t.Fatalf("zero-partition assignment created a stall: %s", reason)
+	}
+}
+
+func TestPostEmbeddingOldGenerationCannotClearNewPartitionState(t *testing.T) {
+	now := time.Now().UTC()
+	assignmentsA := []kafka.PartitionAssignment{{ID: 0, Offset: 10}}
+	identityA, unregisterA := setupPostEmbeddingGenerationHealth(t, 37, assignmentsA, now)
+	if !recordPostEmbeddingPartitionBatchPending(identityA, 0, 12, now) {
+		t.Fatal("Generation A pending work was not recorded")
+	}
+	generationA := postEmbeddingHealthTestGeneration(assignmentsA)
+	coordinatorA := newPostEmbeddingOffsetCommitCoordinator(
+		context.Background(), generationA, "post-embedding", assignmentsA, identityA,
+	)
+	unregisterA()
+	assignmentsB := []kafka.PartitionAssignment{{ID: 0, Offset: 20}}
+	identityB, unregisterB := registerKafkaConsumerGenerationSession(
+		PipelinePostEmbedding, 0, "post-embedding", "post-embedding-test-group",
+		postEmbeddingHealthTestClientID, 38, assignmentsB,
+	)
+	defer unregisterB()
+	if !identityB.valid() || identityB.sessionVersion == identityA.sessionVersion {
+		t.Fatalf("Generation B did not receive a new Session Version: A=%+v B=%+v", identityA, identityB)
+	}
+	if !recordPostEmbeddingPartitionBatchPending(identityB, 0, 23, now.Add(time.Second)) {
+		t.Fatal("Generation B pending work was not recorded")
+	}
+	if err := coordinatorA.Commit(context.Background(), "post-embedding", 0, 12); err != nil {
+		t.Fatalf("late Generation A commit failed unexpectedly: %v", err)
+	}
+	state := postEmbeddingPartitionState(t, 0)
+	if !state.Pending || state.PendingNextOffset != 23 || !state.PendingSince.Equal(now.Add(time.Second)) || state.LastConfirmedOffset != 20 {
+		t.Fatalf("old Generation commit changed Generation B partition state: %+v", state)
+	}
+	coordinatorA.Close()
+}
+
+func TestPostEmbeddingReaderRestartDoesNotResetPending(t *testing.T) {
+	startedAt := time.Now().UTC()
+	assignments := []kafka.PartitionAssignment{{ID: 3, Offset: 70}}
+	identity, unregister := setupPostEmbeddingGenerationHealth(t, 39, assignments, startedAt)
+	defer unregister()
+	if !recordPostEmbeddingPartitionBatchPending(identity, 3, 74, startedAt) {
+		t.Fatal("initial Reader batch was not marked pending")
+	}
+	// A replacement partition Reader in the same Generation re-fetches the
+	// uncommitted target through the same generation identity.
+	if !recordPostEmbeddingPartitionBatchPending(identity, 3, 74, startedAt.Add(40*time.Second)) {
+		t.Fatal("replacement Reader batch was not recognized as the same pending work")
+	}
+	state := postEmbeddingPartitionState(t, 3)
+	if !state.Pending || !state.PendingSince.Equal(startedAt) || state.PendingNextOffset != 74 {
+		t.Fatalf("Reader restart reset pending timer: %+v", state)
+	}
+}
+
+func TestPostEmbeddingShutdownClearsAndRejectsPartitionHealth(t *testing.T) {
+	now := time.Now().UTC()
+	assignments := []kafka.PartitionAssignment{{ID: 1, Offset: 20}}
+	identity, unregister := setupPostEmbeddingGenerationHealth(t, 42, assignments, now)
+	defer unregister()
+	if !recordPostEmbeddingPartitionBatchPending(identity, 1, 22, now) {
+		t.Fatal("partition pending work was not recorded before shutdown")
+	}
+	KafkaConsumerSlotCommitted(PipelinePostEmbedding, 0, now.Add(-time.Second))
+	sampleVersion, _ := beginKafkaBacklogSample(PipelinePostEmbedding)
+	workerPipelines.RLock()
+	beforeShutdown := workerPipelines.states[PipelinePostEmbedding].kafkaSlots[0]
+	workerPipelines.RUnlock()
+	previousSnapshot := workerSnapshot.Load()
+	t.Cleanup(func() { workerSnapshot.Store(previousSnapshot) })
+	MarkWorkerShuttingDown()
+	if recordPostEmbeddingPartitionBatchPending(identity, 1, 23, now.Add(time.Second)) {
+		t.Fatal("shutdown accepted new positive partition health state")
+	}
+	if confirmPostEmbeddingPartitionCommit(identity, 1, 22) {
+		t.Fatal("shutdown accepted a partition health commit event")
+	}
+	if recordKafkaBacklogSample(PipelinePostEmbedding, sampleVersion, 0, now.Add(time.Second), true) {
+		t.Fatal("shutdown accepted a positive Kafka backlog sample")
+	}
+	KafkaConsumerSlotCommitted(PipelinePostEmbedding, 0, now.Add(time.Second))
+	registerKafkaConsumerSession(PipelinePostEmbedding, 0, "post-embedding", "post-embedding-test-group", "replacement-client")()
+	workerPipelines.RLock()
+	afterShutdown := workerPipelines.states[PipelinePostEmbedding].kafkaSlots[0]
+	workerPipelines.RUnlock()
+	if len(afterShutdown.postEmbeddingPartitions) != 0 {
+		t.Fatalf("shutdown retained partition health state: %+v", afterShutdown.postEmbeddingPartitions)
+	}
+	if !afterShutdown.lastCommittedOffsetAt.Equal(beforeShutdown.lastCommittedOffsetAt) {
+		t.Fatalf("shutdown accepted a Kafka commit event: before=%s after=%s", beforeShutdown.lastCommittedOffsetAt, afterShutdown.lastCommittedOffsetAt)
+	}
+	if afterShutdown.session != beforeShutdown.session || afterShutdown.sessionVersion != beforeShutdown.sessionVersion+1 {
+		t.Fatalf("shutdown replaced the Kafka consumer session: before=%+v after=%+v", beforeShutdown, afterShutdown)
+	}
+}
+
+func TestPostEmbeddingGenerationMembershipAndIdleRecovery(t *testing.T) {
+	now := time.Now().UTC()
+	assignmentsA := []kafka.PartitionAssignment{{ID: 0, Offset: 10}}
+	_, unregisterA := setupPostEmbeddingGenerationHealth(t, 40, assignmentsA, now)
+	for i := 0; i < 3; i++ {
+		KafkaConsumerSlotFailed(PipelinePostEmbedding, 0, "kafka_fetch_failed", pipelineFailureTransport)
+	}
+	_, _, valid, accepted, err := sampleKafkaPipelineBacklog(context.Background(), PipelinePostEmbedding, "post-embedding", "post-embedding-test-group",
+		func(context.Context, string, string) (int64, error) { return 0, nil },
+		func(context.Context, string) (eventing.KafkaGroupDescription, error) {
+			return eventing.KafkaGroupDescription{
+				GroupID: "post-embedding-test-group", State: "Stable",
+				Members: []eventing.KafkaGroupMember{{ClientID: postEmbeddingHealthTestClientID, Topics: []string{"post-embedding"}}},
+			}, nil
+		},
+	)
+	if err != nil || !valid || !accepted {
+		t.Fatalf("Generation A membership/idle sample valid=%v accepted=%v err=%v", valid, accepted, err)
+	}
+	if state := pipelineSnapshots()[PipelinePostEmbedding]; state.ConsecutiveFailures != 0 {
+		t.Fatalf("Generation A zero-Lag recovery left failures: %+v", state)
+	}
+	unregisterA()
+	workerPipelines.RLock()
+	oldProof := workerPipelines.states[PipelinePostEmbedding].kafkaSlots[0].membership.Verified
+	workerPipelines.RUnlock()
+	if oldProof {
+		t.Fatal("Generation stop retained old membership proof")
+	}
+	identityB, unregisterB := registerKafkaConsumerGenerationSession(
+		PipelinePostEmbedding, 0, "post-embedding", "post-embedding-test-group",
+		postEmbeddingHealthTestClientID, 41, nil,
+	)
+	defer unregisterB()
+	if !identityB.valid() {
+		t.Fatal("Generation B health identity was not registered")
+	}
+	workerPipelines.RLock()
+	slot := workerPipelines.states[PipelinePostEmbedding].kafkaSlots[0]
+	workerPipelines.RUnlock()
+	if slot.membership.Verified || slot.sessionVersion != identityB.sessionVersion {
+		t.Fatalf("Generation B inherited old Session membership: %+v", slot)
+	}
+	recordPostEmbeddingReadySample(t, time.Now().UTC())
+	if reasons := evaluatePipelineHealth(time.Now().UTC()); len(reasons) != 0 {
+		t.Fatalf("new Stable zero-partition Generation did not become ready: %v", reasons)
 	}
 }

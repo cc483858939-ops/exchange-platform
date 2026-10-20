@@ -18,6 +18,7 @@ type kafkaConsumerSlotState struct {
 	lastSuccessAt           time.Time
 	lastFailureAt           time.Time
 	lastCommittedOffsetAt   time.Time
+	postEmbeddingPartitions map[int]postEmbeddingPartitionHealth
 	state                   string
 	reasonCode              string
 }
@@ -28,13 +29,129 @@ type kafkaConsumerMembershipState struct {
 	SessionVersion uint64
 }
 
+type postEmbeddingPartitionHealth struct {
+	Pending             bool
+	PendingSince        time.Time
+	PendingNextOffset   int64
+	LastConfirmedOffset int64
+}
+
+type postEmbeddingGenerationHealthIdentity struct {
+	pipeline       string
+	slotID         int
+	generationID   int32
+	sessionVersion uint64
+}
+
+func (identity postEmbeddingGenerationHealthIdentity) valid() bool {
+	return identity.pipeline == PipelinePostEmbedding && identity.sessionVersion != 0
+}
+
+func recordPostEmbeddingPartitionBatchPending(
+	identity postEmbeddingGenerationHealthIdentity,
+	partition int,
+	nextOffset int64,
+	now time.Time,
+) bool {
+	if !identity.valid() || partition < 0 || nextOffset < 0 || workerShuttingDown.Load() {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	workerPipelines.Lock()
+	defer workerPipelines.Unlock()
+	if workerShuttingDown.Load() {
+		return false
+	}
+	state, found := workerPipelines.states[identity.pipeline]
+	if !found {
+		return false
+	}
+	slot, found := state.kafkaSlots[identity.slotID]
+	if !postEmbeddingGenerationSessionMatches(slot, found, identity) {
+		return false
+	}
+	partitionHealth, assigned := slot.postEmbeddingPartitions[partition]
+	if !assigned || nextOffset <= partitionHealth.LastConfirmedOffset {
+		return false
+	}
+	if !partitionHealth.Pending {
+		partitionHealth.Pending = true
+		partitionHealth.PendingSince = now.UTC()
+		partitionHealth.PendingNextOffset = nextOffset
+	} else if nextOffset > partitionHealth.PendingNextOffset {
+		partitionHealth.PendingNextOffset = nextOffset
+		if partitionHealth.PendingSince.IsZero() {
+			partitionHealth.PendingSince = now.UTC()
+		}
+	}
+	slot.postEmbeddingPartitions[partition] = partitionHealth
+	state.kafkaSlots[identity.slotID] = slot
+	workerPipelines.states[identity.pipeline] = state
+	return true
+}
+
+func confirmPostEmbeddingPartitionCommit(
+	identity postEmbeddingGenerationHealthIdentity,
+	partition int,
+	nextOffset int64,
+) bool {
+	if !identity.valid() || partition < 0 || nextOffset < 0 || workerShuttingDown.Load() {
+		return false
+	}
+	workerPipelines.Lock()
+	defer workerPipelines.Unlock()
+	if workerShuttingDown.Load() {
+		return false
+	}
+	state, found := workerPipelines.states[identity.pipeline]
+	if !found {
+		return false
+	}
+	slot, found := state.kafkaSlots[identity.slotID]
+	if !postEmbeddingGenerationSessionMatches(slot, found, identity) {
+		return false
+	}
+	partitionHealth, assigned := slot.postEmbeddingPartitions[partition]
+	if !assigned || nextOffset < partitionHealth.LastConfirmedOffset {
+		return false
+	}
+	partitionHealth.LastConfirmedOffset = nextOffset
+	if partitionHealth.Pending && nextOffset >= partitionHealth.PendingNextOffset {
+		partitionHealth.Pending = false
+		partitionHealth.PendingSince = time.Time{}
+		partitionHealth.PendingNextOffset = 0
+	}
+	slot.postEmbeddingPartitions[partition] = partitionHealth
+	state.kafkaSlots[identity.slotID] = slot
+	workerPipelines.states[identity.pipeline] = state
+	return true
+}
+
+func postEmbeddingGenerationSessionMatches(
+	slot kafkaConsumerSlotState,
+	found bool,
+	identity postEmbeddingGenerationHealthIdentity,
+) bool {
+	return found && slot.workerStarted && slot.sessionActive && slot.sessionRecoveryEligible &&
+		slot.session.generationScoped && slot.session.generationID == identity.generationID &&
+		slot.sessionVersion == identity.sessionVersion
+}
+
 const kafkaMembershipMaxAge = 30 * time.Second
 
 // KafkaConsumerSlotStarted marks the long-lived worker loop for a Kafka
 // consumer. Reader retries keep the same slot ID.
 func KafkaConsumerSlotStarted(pipeline string, slotID int) {
+	if workerShuttingDown.Load() {
+		return
+	}
 	workerPipelines.Lock()
 	defer workerPipelines.Unlock()
+	if workerShuttingDown.Load() {
+		return
+	}
 	state, found := workerPipelines.states[pipeline]
 	if !found || !isKafkaPipeline(pipeline) {
 		return
@@ -47,6 +164,8 @@ func KafkaConsumerSlotStarted(pipeline string, slotID int) {
 		slot.workerStarted = true
 		slot.startedAt = time.Now().UTC()
 		slot.membership = kafkaConsumerMembershipState{}
+		slot.postEmbeddingPartitions = nil
+		state.membershipSampleVersion++
 		if state.startedAt.IsZero() {
 			state.startedAt = slot.startedAt
 		}
@@ -78,6 +197,8 @@ func KafkaConsumerSlotStopped(pipeline string, slotID int) {
 	slot.session = kafkaConsumerSession{}
 	slot.sessionVersion++
 	slot.membership = kafkaConsumerMembershipState{}
+	slot.postEmbeddingPartitions = nil
+	state.membershipSampleVersion++
 	slot.workerStarted = false
 	state.kafkaSlots[slotID] = slot
 	recomputeKafkaPipelineAggregate(&state, "")
@@ -111,12 +232,18 @@ func KafkaConsumerSlotFailed(pipeline string, slotID int, reason string, kind pi
 }
 
 func KafkaConsumerSlotCommitted(pipeline string, slotID int, offset time.Time) {
+	if workerShuttingDown.Load() {
+		return
+	}
 	now := time.Now().UTC()
 	if offset.IsZero() {
 		offset = now
 	}
 	workerPipelines.Lock()
 	defer workerPipelines.Unlock()
+	if workerShuttingDown.Load() {
+		return
+	}
 	state, found := workerPipelines.states[pipeline]
 	if !found || !isKafkaPipeline(pipeline) {
 		return
@@ -158,6 +285,8 @@ func invalidateKafkaReaderSession(reader interface{}) {
 	slot.sessionRecoveryEligible = false
 	slot.sessionVersion++
 	slot.membership = kafkaConsumerMembershipState{}
+	slot.postEmbeddingPartitions = nil
+	state.membershipSampleVersion++
 	state.kafkaSlots[tracked.slotID] = slot
 	workerPipelines.states[tracked.pipeline] = state
 }

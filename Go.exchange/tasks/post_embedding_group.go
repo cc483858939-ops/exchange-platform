@@ -306,13 +306,13 @@ func runPostEmbeddingKafkaGroup(ctx context.Context, group postEmbeddingConsumer
 		if runtime.onGenerationStart != nil {
 			runtime.onGenerationStart(generation.ID(), partitions)
 		}
-		generationContext := registerKafkaConsumerGenerationSession(
+		healthIdentity, generationContext := registerKafkaConsumerGenerationSession(
 			PipelinePostEmbedding, runtime.slotID, runtime.topic, runtime.groupID,
-			runtime.clientID, generation.ID(), len(partitions),
+			runtime.clientID, generation.ID(), generation.Assignments()[runtime.topic],
 		)
 		generation.Start(func(generationCtx context.Context) {
 			defer generationContext()
-			runPostEmbeddingGenerationSupervisor(generationCtx, generation, runtime)
+			runPostEmbeddingGenerationSupervisor(generationCtx, generation, runtime, healthIdentity)
 		})
 	}
 }
@@ -326,45 +326,65 @@ func generationPartitionIDs(assignments map[string][]kafka.PartitionAssignment, 
 	return ids
 }
 
-func registerKafkaConsumerGenerationSession(pipeline string, slotID int, topic, groupID, clientID string, generationID int32, partitionCount int) func() {
+func registerKafkaConsumerGenerationSession(
+	pipeline string,
+	slotID int,
+	topic, groupID, clientID string,
+	generationID int32,
+	assignments []kafka.PartitionAssignment,
+) (postEmbeddingGenerationHealthIdentity, func()) {
 	pipeline = strings.TrimSpace(pipeline)
 	session := kafkaConsumerSession{
 		clientID: strings.TrimSpace(clientID), topic: strings.TrimSpace(topic), groupID: strings.TrimSpace(groupID),
-		generationID: generationID, generationScoped: true, partitionCount: max(0, partitionCount),
+		generationID: generationID, generationScoped: true, partitionCount: len(assignments),
 	}
-	if pipeline == "" || session.clientID == "" || session.topic == "" || session.groupID == "" {
-		return func() {}
+	if pipeline == "" || session.clientID == "" || session.topic == "" || session.groupID == "" || workerShuttingDown.Load() {
+		return postEmbeddingGenerationHealthIdentity{}, func() {}
 	}
 	workerPipelines.Lock()
 	state, found := workerPipelines.states[pipeline]
-	if !found || !isKafkaPipeline(pipeline) {
+	if workerShuttingDown.Load() || !found || !isKafkaPipeline(pipeline) {
 		workerPipelines.Unlock()
-		return func() {}
+		return postEmbeddingGenerationHealthIdentity{}, func() {}
 	}
 	slot, found := state.kafkaSlots[slotID]
 	if !found || !slot.workerStarted {
 		workerPipelines.Unlock()
-		return func() {}
+		return postEmbeddingGenerationHealthIdentity{}, func() {}
 	}
 	slot.session = session
 	slot.sessionActive = true
 	slot.sessionRecoveryEligible = true
 	slot.sessionVersion++
+	slot.membership = kafkaConsumerMembershipState{}
+	slot.postEmbeddingPartitions = make(map[int]postEmbeddingPartitionHealth, len(assignments))
+	for _, assignment := range assignments {
+		slot.postEmbeddingPartitions[assignment.ID] = postEmbeddingPartitionHealth{
+			LastConfirmedOffset: assignment.Offset,
+		}
+	}
+	identity := postEmbeddingGenerationHealthIdentity{
+		pipeline: pipeline, slotID: slotID, generationID: generationID, sessionVersion: slot.sessionVersion,
+	}
 	state.kafkaSlots[slotID] = slot
+	state.membershipSampleVersion++
 	workerPipelines.states[pipeline] = state
 	workerPipelines.Unlock()
 
 	var once sync.Once
-	return func() {
+	return identity, func() {
 		once.Do(func() {
 			workerPipelines.Lock()
 			if state, found := workerPipelines.states[pipeline]; found {
-				if slot, found := state.kafkaSlots[slotID]; found && slot.sessionActive && slot.session == session {
+				if slot, found := state.kafkaSlots[slotID]; found && slot.sessionActive && slot.sessionVersion == identity.sessionVersion && slot.session == session {
 					slot.session = kafkaConsumerSession{}
 					slot.sessionActive = false
 					slot.sessionRecoveryEligible = false
 					slot.sessionVersion++
+					slot.membership = kafkaConsumerMembershipState{}
+					slot.postEmbeddingPartitions = nil
 					state.kafkaSlots[slotID] = slot
+					state.membershipSampleVersion++
 					workerPipelines.states[pipeline] = state
 				}
 			}
@@ -373,14 +393,19 @@ func registerKafkaConsumerGenerationSession(pipeline string, slotID int, topic, 
 	}
 }
 
-func runPostEmbeddingGenerationSupervisor(ctx context.Context, generation postEmbeddingGeneration, runtime postEmbeddingGroupRuntime) {
+func runPostEmbeddingGenerationSupervisor(
+	ctx context.Context,
+	generation postEmbeddingGeneration,
+	runtime postEmbeddingGroupRuntime,
+	healthIdentity postEmbeddingGenerationHealthIdentity,
+) {
 	if ctx == nil || generation == nil {
 		return
 	}
 	assignments := append([]kafka.PartitionAssignment(nil), generation.Assignments()[runtime.topic]...)
 	metrics.SetPostEmbeddingAssignedPartitions(len(assignments))
 	var heldPartitions atomic.Int32
-	commitGate := newPostEmbeddingOffsetCommitCoordinator(ctx, generation, runtime.topic, assignments)
+	commitGate := newPostEmbeddingOffsetCommitCoordinator(ctx, generation, runtime.topic, assignments, healthIdentity)
 	partitionCtx, cancel := context.WithCancel(ctx)
 	var workers sync.WaitGroup
 	defer func() {
@@ -555,6 +580,8 @@ func consumePostEmbeddingPartitionReader(
 			hold.set(true)
 			return nextOffset, err
 		}
+		targetNextOffset := fetch.Messages[len(fetch.Messages)-1].Offset + 1
+		commitGate.RecordPartitionBatchPending(partition, targetNextOffset, time.Now().UTC())
 		for ctx.Err() == nil {
 			processErr := callPostEmbeddingBatchProcessor(ctx, runtime.processBatch, fetch.Messages)
 			if processErr == nil {
@@ -575,7 +602,6 @@ func consumePostEmbeddingPartitionReader(
 			return nextOffset, err
 		}
 
-		targetNextOffset := fetch.Messages[len(fetch.Messages)-1].Offset + 1
 		for attempt := 1; attempt <= postEmbeddingCommitAttempts; attempt++ {
 			if err := ctx.Err(); err != nil {
 				return nextOffset, err
@@ -682,16 +708,23 @@ type postEmbeddingOffsetProgress struct {
 }
 
 type postEmbeddingOffsetCommitCoordinator struct {
-	ctx        context.Context
-	generation postEmbeddingGeneration
-	topic      string
-	mu         sync.Mutex
-	rpcMu      sync.Mutex
-	closing    atomic.Bool
-	progress   map[int]postEmbeddingOffsetProgress
+	ctx            context.Context
+	generation     postEmbeddingGeneration
+	topic          string
+	healthIdentity postEmbeddingGenerationHealthIdentity
+	mu             sync.Mutex
+	rpcMu          sync.Mutex
+	closing        atomic.Bool
+	progress       map[int]postEmbeddingOffsetProgress
 }
 
-func newPostEmbeddingOffsetCommitCoordinator(ctx context.Context, generation postEmbeddingGeneration, topic string, assignments []kafka.PartitionAssignment) *postEmbeddingOffsetCommitCoordinator {
+func newPostEmbeddingOffsetCommitCoordinator(
+	ctx context.Context,
+	generation postEmbeddingGeneration,
+	topic string,
+	assignments []kafka.PartitionAssignment,
+	healthIdentity postEmbeddingGenerationHealthIdentity,
+) *postEmbeddingOffsetCommitCoordinator {
 	progress := make(map[int]postEmbeddingOffsetProgress, len(assignments))
 	for _, assignment := range assignments {
 		progress[assignment.ID] = postEmbeddingOffsetProgress{
@@ -699,8 +732,15 @@ func newPostEmbeddingOffsetCommitCoordinator(ctx context.Context, generation pos
 		}
 	}
 	return &postEmbeddingOffsetCommitCoordinator{
-		ctx: ctx, generation: generation, topic: topic, progress: progress,
+		ctx: ctx, generation: generation, topic: topic, healthIdentity: healthIdentity, progress: progress,
 	}
+}
+
+func (c *postEmbeddingOffsetCommitCoordinator) RecordPartitionBatchPending(partition int, nextOffset int64, now time.Time) bool {
+	if c == nil {
+		return false
+	}
+	return recordPostEmbeddingPartitionBatchPending(c.healthIdentity, partition, nextOffset, now)
 }
 
 func (c *postEmbeddingOffsetCommitCoordinator) Commit(ctx context.Context, topic string, partition int, nextOffset int64) error {
@@ -770,6 +810,7 @@ func (c *postEmbeddingOffsetCommitCoordinator) Commit(ctx context.Context, topic
 	state.pendingNextOffset = 0
 	c.progress[partition] = state
 	c.mu.Unlock()
+	confirmPostEmbeddingPartitionCommit(c.healthIdentity, partition, nextOffset)
 	return nil
 }
 

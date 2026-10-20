@@ -235,13 +235,13 @@ func registerKafkaConsumerSession(pipeline string, slotID int, topic, groupID, c
 		topic:    strings.TrimSpace(topic),
 		groupID:  strings.TrimSpace(groupID),
 	}
-	if pipeline == "" || session.clientID == "" || session.topic == "" || session.groupID == "" {
+	if pipeline == "" || session.clientID == "" || session.topic == "" || session.groupID == "" || workerShuttingDown.Load() {
 		return func() {}
 	}
 
 	workerPipelines.Lock()
 	state, found := workerPipelines.states[pipeline]
-	if !found || !isKafkaPipeline(pipeline) {
+	if workerShuttingDown.Load() || !found || !isKafkaPipeline(pipeline) {
 		workerPipelines.Unlock()
 		return func() {}
 	}
@@ -255,6 +255,9 @@ func registerKafkaConsumerSession(pipeline string, slotID int, topic, groupID, c
 	slotState.sessionRecoveryEligible = true
 	slotState.sessionVersion++
 	slotState.membership = kafkaConsumerMembershipState{}
+	slotState.postEmbeddingPartitions = nil
+	registeredSessionVersion := slotState.sessionVersion
+	state.membershipSampleVersion++
 	state.kafkaSlots[slotID] = slotState
 	workerPipelines.states[pipeline] = state
 	workerPipelines.Unlock()
@@ -264,12 +267,16 @@ func registerKafkaConsumerSession(pipeline string, slotID int, topic, groupID, c
 		once.Do(func() {
 			workerPipelines.Lock()
 			if state, found := workerPipelines.states[pipeline]; found {
-				if slotState, found := state.kafkaSlots[slotID]; found && slotState.sessionActive && slotState.session == session {
+				if slotState, found := state.kafkaSlots[slotID]; found && slotState.sessionActive && slotState.session == session &&
+					(slotState.sessionVersion == registeredSessionVersion ||
+						(slotState.sessionVersion == registeredSessionVersion+1 && !slotState.sessionRecoveryEligible)) {
 					slotState.session = kafkaConsumerSession{}
 					slotState.sessionActive = false
 					slotState.sessionRecoveryEligible = false
 					slotState.sessionVersion++
 					slotState.membership = kafkaConsumerMembershipState{}
+					slotState.postEmbeddingPartitions = nil
+					state.membershipSampleVersion++
 					state.kafkaSlots[slotID] = slotState
 					workerPipelines.states[pipeline] = state
 				}
@@ -339,10 +346,13 @@ func beginKafkaBacklogSample(name string) (uint64, kafkaRecoveryCandidate) {
 }
 
 func recordKafkaBacklogSample(name string, sampleVersion uint64, backlog int64, now time.Time, valid bool) bool {
+	if workerShuttingDown.Load() {
+		return false
+	}
 	workerPipelines.Lock()
 	defer workerPipelines.Unlock()
 	state, found := workerPipelines.states[name]
-	if !found || sampleVersion == 0 || state.backlogSampleVersion != sampleVersion {
+	if workerShuttingDown.Load() || !found || sampleVersion == 0 || state.backlogSampleVersion != sampleVersion {
 		return false
 	}
 	state.backlogSampleValid = valid && backlog >= 0
@@ -386,6 +396,7 @@ func kafkaGroupMatchesLocalSessions(description eventing.KafkaGroupDescription, 
 // and only while every sampled local slot still identifies the same Reader
 // session. A failed or non-Stable result revokes the previous proof.
 func recordKafkaMembershipSample(
+	ctx context.Context,
 	pipeline string,
 	candidate kafkaRecoveryCandidate,
 	groupID string,
@@ -393,10 +404,13 @@ func recordKafkaMembershipSample(
 	verifiedAt time.Time,
 	querySucceeded bool,
 ) bool {
+	if ctx == nil || ctx.Err() != nil {
+		return false
+	}
 	workerPipelines.Lock()
 	defer workerPipelines.Unlock()
 	state, found := workerPipelines.states[pipeline]
-	if workerShuttingDown.Load() || !found || candidate.pipeline != pipeline || candidate.expectedWorkers != state.expectedWorkers || len(candidate.slots) != candidate.expectedWorkers ||
+	if ctx.Err() != nil || workerShuttingDown.Load() || !found || candidate.pipeline != pipeline || candidate.expectedWorkers != state.expectedWorkers || len(candidate.slots) != candidate.expectedWorkers ||
 		candidate.membershipSampleVersion == 0 || candidate.membershipSampleVersion != state.membershipSampleVersion {
 		return false
 	}
@@ -408,6 +422,9 @@ func recordKafkaMembershipSample(
 		if exists && (current.workerStarted != sampled.workerStarted || current.sessionActive != sampled.sessionActive || current.sessionRecoveryEligible != sampled.sessionRecoveryEligible || current.sessionVersion != sampled.sessionVersion || current.session != sampled.session) {
 			return false
 		}
+	}
+	if ctx.Err() != nil || workerShuttingDown.Load() {
+		return false
 	}
 	verified := querySucceeded && kafkaGroupMatchesLocalSessions(description, groupID, candidate)
 	if verified && verifiedAt.IsZero() {
@@ -462,10 +479,13 @@ func kafkaFetchFailureKind(err error) pipelineFailureKinds {
 	return pipelineFailureTransport
 }
 
-func markKafkaIdleRecovered(candidate kafkaRecoveryCandidate, now time.Time) bool {
+func markKafkaIdleRecovered(ctx context.Context, candidate kafkaRecoveryCandidate, now time.Time) bool {
+	if ctx == nil || ctx.Err() != nil {
+		return false
+	}
 	workerPipelines.Lock()
 	state, found := workerPipelines.states[candidate.pipeline]
-	if workerShuttingDown.Load() || !found ||
+	if ctx.Err() != nil || workerShuttingDown.Load() || !found ||
 		state.backlogSampleVersion != candidate.sampleVersion || state.membershipSampleVersion != candidate.membershipSampleVersion || state.expectedWorkers != candidate.expectedWorkers || state.activeWorkers != candidate.activeWorkers || state.failureKinds != pipelineFailureTransportOnly || state.unattributedFailures != 0 ||
 		state.consecutiveFailures == 0 || !state.registered || state.activeWorkers < state.expectedWorkers ||
 		state.backlog != 0 || !state.backlogSampleValid || state.backlogSampleAt.IsZero() || now.Sub(state.backlogSampleAt) > kafkaBacklogMaxAge ||
@@ -480,6 +500,10 @@ func markKafkaIdleRecovered(candidate kafkaRecoveryCandidate, now time.Time) boo
 			workerPipelines.Unlock()
 			return false
 		}
+	}
+	if ctx.Err() != nil || workerShuttingDown.Load() {
+		workerPipelines.Unlock()
+		return false
 	}
 	failuresBefore := state.consecutiveFailures
 	for _, candidateSlot := range candidate.slots {
@@ -519,18 +543,34 @@ type kafkaGroupSampleResult struct {
 }
 
 func kafkaSampleCompletedBeforeDeadline(ctx context.Context, completedAt time.Time) bool {
-	if completedAt.IsZero() {
+	if ctx == nil || ctx.Err() != nil || completedAt.IsZero() {
 		return false
 	}
 	if deadline, ok := ctx.Deadline(); ok && completedAt.After(deadline) {
 		return false
 	}
-	return true
+	return ctx.Err() == nil
 }
 
 func sampleKafkaPipelineBacklog(ctx context.Context, pipeline, topic, groupID string, lagQuery kafkaLagQuery, groupQuery kafkaGroupQuery) (int64, time.Time, bool, bool, error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	return sampleKafkaPipelineBacklogWithGroupContext(ctx, ctx, pipeline, topic, groupID, lagQuery, groupQuery)
+}
+
+func sampleKafkaPipelineBacklogWithGroupContext(
+	ctx context.Context,
+	groupCtx context.Context,
+	pipeline, topic, groupID string,
+	lagQuery kafkaLagQuery,
+	groupQuery kafkaGroupQuery,
+) (int64, time.Time, bool, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if groupCtx == nil {
+		groupCtx = ctx
 	}
 	sampleVersion, candidate := beginKafkaBacklogSample(pipeline)
 	lagResults := make(chan kafkaLagSampleResult, 1)
@@ -548,13 +588,14 @@ func sampleKafkaPipelineBacklog(ctx context.Context, pipeline, topic, groupID st
 			groupResults <- kafkaGroupSampleResult{err: errors.New("Kafka consumer group query is nil"), completedAt: time.Now().UTC()}
 			return
 		}
-		description, err := groupQuery(ctx, groupID)
+		description, err := groupQuery(groupCtx, groupID)
 		groupResults <- kafkaGroupSampleResult{description: description, err: err, completedAt: time.Now().UTC()}
 	}()
 
 	var lagResult kafkaLagSampleResult
 	var groupResult kafkaGroupSampleResult
 	lagDone, groupDone := false, false
+	groupDoneCh := groupCtx.Done()
 collect:
 	for !lagDone || !groupDone {
 		select {
@@ -562,6 +603,11 @@ collect:
 			lagDone = true
 		case groupResult = <-groupResults:
 			groupDone = true
+			groupDoneCh = nil
+		case <-groupDoneCh:
+			groupResult = kafkaGroupSampleResult{err: groupCtx.Err(), completedAt: time.Now().UTC()}
+			groupDone = true
+			groupDoneCh = nil
 		case <-ctx.Done():
 			break collect
 		}
@@ -595,13 +641,13 @@ collect:
 	}
 	sampleAccepted := recordKafkaBacklogSample(pipeline, sampleVersion, lagResult.lag, now, valid)
 
-	groupSucceeded := groupDone && groupResult.err == nil && kafkaSampleCompletedBeforeDeadline(ctx, groupResult.completedAt)
+	groupSucceeded := groupDone && groupResult.err == nil && kafkaSampleCompletedBeforeDeadline(groupCtx, groupResult.completedAt)
 	membershipAccepted := recordKafkaMembershipSample(
-		pipeline, candidate, groupID, groupResult.description, groupResult.completedAt, groupSucceeded,
+		groupCtx, pipeline, candidate, groupID, groupResult.description, groupResult.completedAt, groupSucceeded,
 	)
 	groupMatched := groupSucceeded && kafkaGroupMatchesLocalSessions(groupResult.description, groupID, candidate)
 	if sampleAccepted && valid && lagResult.lag == 0 && candidate.potentialRecovery && membershipAccepted && groupMatched {
-		markKafkaIdleRecovered(candidate, now)
+		markKafkaIdleRecovered(groupCtx, candidate, now)
 	}
 	return lagResult.lag, now, valid, sampleAccepted, err
 }
@@ -640,8 +686,8 @@ func sampleKafkaBacklogGroups(
 			defer workers.Done()
 			for target := range jobs {
 				groupCtx, groupCancel := context.WithTimeout(overallCtx, perGroupBudget)
-				lag, sampledAt, valid, accepted, err := sampleKafkaPipelineBacklog(
-					groupCtx, target.pipeline, target.topic, target.group, lagQuery, groupQuery,
+				lag, sampledAt, valid, accepted, err := sampleKafkaPipelineBacklogWithGroupContext(
+					overallCtx, groupCtx, target.pipeline, target.topic, target.group, lagQuery, groupQuery,
 				)
 				groupTimedOut := groupCtx.Err() != nil
 				groupCancel()

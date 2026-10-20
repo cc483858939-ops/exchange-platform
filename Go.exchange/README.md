@@ -330,6 +330,9 @@ configured topic. Reader creation alone never makes a pipeline ready. Group
 membership and committed Lag are sampled independently; failed or non-Stable
 Group samples revoke the previous membership proof, while the `/readyz`
 evaluator reads only the latest cached snapshot and never queries Kafka.
+Cancelled Group samples are rejected both when their result is checked and at
+the membership state write boundary, so they cannot refresh a proof or trigger
+idle recovery.
 
 A batch collection deadline is a normal end to the collection window. A
 terminal Kafka fetch error lets the consumer finish and commit messages already
@@ -338,10 +341,19 @@ can create a new session. Shutdown cancellation does not create a transport
 failure.
 
 Committed Lag is sampled by a bounded pool with a five-second overall budget,
-a four-second per-group budget, and at most five concurrent groups. Each
+a four-second per-Group-query budget, and at most five concurrent groups. Lag
+queries use the overall context independently of the Group-query timeout. Each
 pipeline publishes its own sample. A successful Lag sample remains valid when
 the consumer-group query fails, but that failure revokes readiness membership
 and cannot trigger idle recovery. Idle recovery requires fresh zero Lag, the
 same Stable Group membership proof used by readiness, and unchanged failure
 and session versions. The `/readyz` endpoint reads the latest background
 readiness snapshot and does not query Kafka synchronously.
+
+Post Embedding readiness also tracks uncommitted work by assigned partition
+within the active Consumer Group Generation. Pending starts when a valid batch
+is fetched, survives processing and commit retries and Reader restarts, and
+clears only after a confirmed Offset Commit covers its target. A pending batch
+older than two minutes reports `worker_post_embedding_partition_stalled`;
+idle or unassigned partitions do not create Pending state. Generation ID and
+Session Version checks reject late events from an older Generation.

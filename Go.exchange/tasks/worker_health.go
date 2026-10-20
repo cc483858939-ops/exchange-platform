@@ -49,7 +49,10 @@ const (
 	workerTotalCheckTimeout = 2 * time.Second
 	workerActiveGrace       = 15 * time.Second
 	workerBacklogGrace      = 60 * time.Second
-	workerDueQueueGrace     = 120 * time.Second
+	// The default Embedder call timeout is 10 seconds with five attempts; two
+	// minutes leaves a finite margin for retries and batch writes.
+	postEmbeddingPartitionStallGrace = 2 * workerBacklogGrace
+	workerDueQueueGrace              = 120 * time.Second
 )
 
 type workerPipelineState struct {
@@ -191,6 +194,7 @@ func MarkWorkerShuttingDown() {
 		for slotID, slot := range state.kafkaSlots {
 			slot.sessionVersion++
 			slot.membership = kafkaConsumerMembershipState{}
+			slot.postEmbeddingPartitions = nil
 			state.kafkaSlots[slotID] = slot
 		}
 		state.membershipSampleVersion++
@@ -581,6 +585,13 @@ func evaluatePipelineHealth(now time.Time) []string {
 		if len(state.kafkaSlots) > 0 {
 			slots := make(map[int]kafkaConsumerSlotState, len(state.kafkaSlots))
 			for slotID, slot := range state.kafkaSlots {
+				if len(slot.postEmbeddingPartitions) > 0 {
+					partitions := make(map[int]postEmbeddingPartitionHealth, len(slot.postEmbeddingPartitions))
+					for partitionID, partition := range slot.postEmbeddingPartitions {
+						partitions[partitionID] = partition
+					}
+					slot.postEmbeddingPartitions = partitions
+				}
 				slots[slotID] = slot
 			}
 			state.kafkaSlots = slots
@@ -653,11 +664,28 @@ func pipelineBacklogBlocked(name string, now time.Time, state workerPipelineStat
 	if isKafkaPipeline(name) && (!state.backlogSampleValid || state.backlogSampleAt.IsZero() || now.Sub(state.backlogSampleAt) > kafkaBacklogMaxAge) {
 		return true, "worker_pipeline_backlog_unknown"
 	}
+	if name == PipelinePostEmbedding && postEmbeddingPartitionStalled(state, now) {
+		return true, "worker_post_embedding_partition_stalled"
+	}
 	policy := backlogPolicy(name)
 	if state.backlog <= 0 || !backlogExceeded(now, state, policy.Grace) {
 		return false, ""
 	}
 	return true, policy.Reason
+}
+
+func postEmbeddingPartitionStalled(state workerPipelineState, now time.Time) bool {
+	for _, slot := range state.kafkaSlots {
+		if !slot.sessionActive || !slot.sessionRecoveryEligible || !slot.session.generationScoped {
+			continue
+		}
+		for _, partition := range slot.postEmbeddingPartitions {
+			if partition.Pending && !partition.PendingSince.IsZero() && now.Sub(partition.PendingSince) > postEmbeddingPartitionStallGrace {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func backlogExceeded(now time.Time, state workerPipelineState, grace time.Duration) bool {
