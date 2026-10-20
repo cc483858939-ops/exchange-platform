@@ -3,6 +3,7 @@ package tasks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -23,12 +24,463 @@ func setupKafkaPipeline(t *testing.T, name string, expected int, clients []strin
 			unregister = append(unregister, registerKafkaConsumerSession(name, slotID, "events", "projection", clients[slotID]))
 		}
 	}
+	if expected > 0 && len(clients) == expected {
+		_, candidate := beginKafkaBacklogSample(name)
+		members := make([]eventing.KafkaGroupMember, 0, len(clients))
+		for _, clientID := range clients {
+			members = append(members, eventing.KafkaGroupMember{ClientID: clientID, Topics: []string{"events"}})
+		}
+		recordKafkaMembershipSample(name, candidate, "projection", eventing.KafkaGroupDescription{
+			GroupID: "projection", State: "Stable", Members: members,
+		}, now, true)
+	}
 	t.Cleanup(func() {
 		for _, closeSession := range unregister {
 			closeSession()
 		}
 	})
 	return unregister
+}
+
+func expireKafkaStartupGrace(name string) {
+	workerPipelines.Lock()
+	state := workerPipelines.states[name]
+	state.registeredAt = time.Now().UTC().Add(-workerActiveGrace - time.Second)
+	workerPipelines.states[name] = state
+	workerPipelines.Unlock()
+}
+
+func TestReaderCreatedButNotJoinedGroupIsNotReady(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	now := time.Now().UTC()
+	registerPipelineAt(name, 1, now.Add(-workerActiveGrace-time.Second))
+	KafkaConsumerSlotStarted(name, 0)
+	closeSession := registerKafkaConsumerSession(name, 0, "events", "projection", "reader-a")
+	t.Cleanup(closeSession)
+	pipelineKafkaBacklogSample(name, 0, now, true)
+
+	workerPipelines.RLock()
+	slot := workerPipelines.states[name].kafkaSlots[0]
+	workerPipelines.RUnlock()
+	if !slot.sessionActive || slot.membership.Verified {
+		t.Fatalf("new Reader session must remain locally active but group-unverified: %+v", slot)
+	}
+	if reasons := evaluatePipelineHealth(now); !containsWorkerReason(reasons, "worker_kafka_consumer_group_unverified") {
+		t.Fatalf("Reader creation made the pipeline ready without group proof: %v", reasons)
+	}
+}
+
+func TestStableGroupMembershipMakesConsumerReady(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 1, nil)
+	closeSession := registerKafkaConsumerSession(name, 0, "events", "projection", "reader-a")
+	t.Cleanup(closeSession)
+	lag := func(context.Context, string, string) (int64, error) { return 0, nil }
+	group := func(context.Context, string) (eventing.KafkaGroupDescription, error) {
+		return eventing.KafkaGroupDescription{GroupID: "projection", State: "Stable", Members: []eventing.KafkaGroupMember{{ClientID: "reader-a", Topics: []string{"events"}}}}, nil
+	}
+	_, _, valid, accepted, err := sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection", lag, group)
+	if err != nil || !valid || !accepted {
+		t.Fatalf("sample valid=%v accepted=%v err=%v", valid, accepted, err)
+	}
+	if reasons := evaluatePipelineHealth(time.Now().UTC()); len(reasons) != 0 {
+		t.Fatalf("Stable local membership did not make the pipeline ready: %v", reasons)
+	}
+}
+
+func TestGroupVerificationRunsWithoutHistoricalFailure(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 1, nil)
+	closeSession := registerKafkaConsumerSession(name, 0, "events", "projection", "reader-a")
+	t.Cleanup(closeSession)
+	groupCalls := 0
+	_, _, valid, accepted, err := sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
+		func(context.Context, string, string) (int64, error) { return 0, nil },
+		func(context.Context, string) (eventing.KafkaGroupDescription, error) {
+			groupCalls++
+			return eventing.KafkaGroupDescription{GroupID: "projection", State: "Stable", Members: []eventing.KafkaGroupMember{{ClientID: "reader-a", Topics: []string{"events"}}}}, nil
+		})
+	if err != nil || !valid || !accepted || groupCalls != 1 {
+		t.Fatalf("zero-failure sample did not verify group: valid=%v accepted=%v calls=%d err=%v", valid, accepted, groupCalls, err)
+	}
+	workerPipelines.RLock()
+	verified := workerPipelines.states[name].kafkaSlots[0].membership.Verified
+	workerPipelines.RUnlock()
+	if !verified {
+		t.Fatal("Stable membership was not recorded without historical failures")
+	}
+}
+
+func TestMembershipVerificationDoesNotRequireZeroLag(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 1, nil)
+	closeSession := registerKafkaConsumerSession(name, 0, "events", "projection", "reader-a")
+	t.Cleanup(closeSession)
+	_, _, valid, accepted, err := sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
+		func(context.Context, string, string) (int64, error) { return 7, nil },
+		func(context.Context, string) (eventing.KafkaGroupDescription, error) {
+			return eventing.KafkaGroupDescription{GroupID: "projection", State: "Stable", Members: []eventing.KafkaGroupMember{{ClientID: "reader-a", Topics: []string{"events"}}}}, nil
+		})
+	if err != nil || !valid || !accepted {
+		t.Fatalf("positive lag sample valid=%v accepted=%v err=%v", valid, accepted, err)
+	}
+	workerPipelines.RLock()
+	verified := workerPipelines.states[name].kafkaSlots[0].membership.Verified
+	workerPipelines.RUnlock()
+	if !verified {
+		t.Fatal("positive lag incorrectly blocked membership verification")
+	}
+	if reasons := evaluatePipelineHealth(time.Now().UTC()); len(reasons) != 0 {
+		t.Fatalf("fresh in-grace backlog should not block membership readiness: %v", reasons)
+	}
+}
+
+func TestReaderRestartInvalidatesOldMembership(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 1, nil)
+	closeA := registerKafkaConsumerSession(name, 0, "events", "projection", "reader-a")
+	_, candidate := beginKafkaBacklogSample(name)
+	descriptionA := eventing.KafkaGroupDescription{GroupID: "projection", State: "Stable", Members: []eventing.KafkaGroupMember{{ClientID: "reader-a", Topics: []string{"events"}}}}
+	if !recordKafkaMembershipSample(name, candidate, "projection", descriptionA, time.Now().UTC(), true) {
+		t.Fatal("could not record Reader A membership")
+	}
+	closeA()
+	closeB := registerKafkaConsumerSession(name, 0, "events", "projection", "reader-b")
+	t.Cleanup(closeB)
+	workerPipelines.RLock()
+	slot := workerPipelines.states[name].kafkaSlots[0]
+	workerPipelines.RUnlock()
+	if !slot.sessionActive || slot.session.clientID != "reader-b" || slot.membership.Verified {
+		t.Fatalf("Reader B inherited Reader A membership: %+v", slot)
+	}
+	_, _, _, _, err := sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
+		func(context.Context, string, string) (int64, error) { return 0, nil },
+		func(context.Context, string) (eventing.KafkaGroupDescription, error) {
+			return eventing.KafkaGroupDescription{GroupID: "projection", State: "Stable", Members: []eventing.KafkaGroupMember{{ClientID: "reader-b", Topics: []string{"events"}}}}, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerPipelines.RLock()
+	slot = workerPipelines.states[name].kafkaSlots[0]
+	workerPipelines.RUnlock()
+	if !slot.membership.Verified || slot.membership.SessionVersion != slot.sessionVersion {
+		t.Fatalf("Reader B did not receive its own membership proof: %+v", slot)
+	}
+}
+
+func TestRebalanceInvalidatesMembership(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 1, []string{"reader-a"})
+	expireKafkaStartupGrace(name)
+	query := func(groupState string) kafkaGroupQuery {
+		return func(context.Context, string) (eventing.KafkaGroupDescription, error) {
+			return eventing.KafkaGroupDescription{GroupID: "projection", State: groupState, Members: []eventing.KafkaGroupMember{{ClientID: "reader-a", Topics: []string{"events"}}}}, nil
+		}
+	}
+	lag := func(context.Context, string, string) (int64, error) { return 0, nil }
+	if _, _, _, _, err := sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection", lag, query("PreparingRebalance")); err != nil {
+		t.Fatal(err)
+	}
+	if reasons := evaluatePipelineHealth(time.Now().UTC()); !containsWorkerReason(reasons, "worker_kafka_consumer_group_unverified") {
+		t.Fatalf("rebalance did not make the pipeline not-ready: %v", reasons)
+	}
+	workerPipelines.RLock()
+	verified := workerPipelines.states[name].kafkaSlots[0].membership.Verified
+	workerPipelines.RUnlock()
+	if verified {
+		t.Fatal("PreparingRebalance retained the previous proof")
+	}
+	if _, _, _, _, err := sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection", lag, query("Stable")); err != nil {
+		t.Fatal(err)
+	}
+	if reasons := evaluatePipelineHealth(time.Now().UTC()); len(reasons) != 0 {
+		t.Fatalf("Stable group did not restore readiness: %v", reasons)
+	}
+}
+
+func TestMissingLocalMemberIsNotReady(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 2, []string{"reader-a", "reader-b"})
+	expireKafkaStartupGrace(name)
+	_, _, _, _, err := sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
+		func(context.Context, string, string) (int64, error) { return 0, nil },
+		func(context.Context, string) (eventing.KafkaGroupDescription, error) {
+			return eventing.KafkaGroupDescription{GroupID: "projection", State: "Stable", Members: []eventing.KafkaGroupMember{{ClientID: "reader-a", Topics: []string{"events"}}}}, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reasons := evaluatePipelineHealth(time.Now().UTC()); !containsWorkerReason(reasons, "worker_kafka_consumer_group_unverified") {
+		t.Fatalf("one remote/local member incorrectly represented both slots: %v", reasons)
+	}
+}
+
+func TestGroupQueryFailureFailsClosedAndPreservesLag(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 1, []string{"reader-a"})
+	expireKafkaStartupGrace(name)
+	_, _, valid, accepted, err := sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
+		func(context.Context, string, string) (int64, error) { return 12, nil },
+		func(context.Context, string) (eventing.KafkaGroupDescription, error) {
+			return eventing.KafkaGroupDescription{}, errors.New("group unavailable")
+		})
+	if err != nil || !valid || !accepted {
+		t.Fatalf("valid lag was lost with group error: valid=%v accepted=%v err=%v", valid, accepted, err)
+	}
+	state := pipelineSnapshots()[name]
+	if !state.BacklogSampleValid || state.Backlog != 12 {
+		t.Fatalf("group failure replaced valid lag: %+v", state)
+	}
+	if reasons := evaluatePipelineHealth(time.Now().UTC()); !containsWorkerReason(reasons, "worker_kafka_consumer_group_unverified") {
+		t.Fatalf("old membership proof survived group query failure: %v", reasons)
+	}
+}
+
+func TestLagQueryFailurePreservesSuccessfulMembership(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 1, nil)
+	closeSession := registerKafkaConsumerSession(name, 0, "events", "projection", "reader-a")
+	t.Cleanup(closeSession)
+	expectedErr := errors.New("lag unavailable")
+	_, _, valid, accepted, err := sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
+		func(context.Context, string, string) (int64, error) { return 0, expectedErr },
+		func(context.Context, string) (eventing.KafkaGroupDescription, error) {
+			return eventing.KafkaGroupDescription{GroupID: "projection", State: "Stable", Members: []eventing.KafkaGroupMember{{ClientID: "reader-a", Topics: []string{"events"}}}}, nil
+		})
+	if valid || !accepted || !errors.Is(err, expectedErr) {
+		t.Fatalf("lag failure sample valid=%v accepted=%v err=%v", valid, accepted, err)
+	}
+	workerPipelines.RLock()
+	verified := workerPipelines.states[name].kafkaSlots[0].membership.Verified
+	workerPipelines.RUnlock()
+	if !verified {
+		t.Fatal("successful Group proof was discarded because the independent Lag query failed")
+	}
+	if reasons := evaluatePipelineHealth(time.Now().UTC()); !containsWorkerReason(reasons, "worker_pipeline_backlog_unknown") {
+		t.Fatalf("failed Lag sample did not independently block readiness: %v", reasons)
+	}
+}
+
+func TestMembershipProofExpires(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 1, []string{"reader-a"})
+	expireKafkaStartupGrace(name)
+	workerPipelines.Lock()
+	slot := workerPipelines.states[name].kafkaSlots[0]
+	slot.membership.VerifiedAt = time.Now().UTC().Add(-kafkaMembershipMaxAge)
+	workerPipelines.states[name].kafkaSlots[0] = slot
+	workerPipelines.Unlock()
+	if reasons := evaluatePipelineHealth(time.Now().UTC().Add(time.Nanosecond)); !containsWorkerReason(reasons, "worker_kafka_consumer_group_unverified") {
+		t.Fatalf("expired proof remained ready: %v", reasons)
+	}
+}
+
+func TestOldGroupSampleCannotVerifyNewSession(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 1, nil)
+	closeA := registerKafkaConsumerSession(name, 0, "events", "projection", "reader-a")
+	groupStarted := make(chan struct{})
+	releaseGroup := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		_, _, _, _, _ = sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
+			func(context.Context, string, string) (int64, error) { return 0, nil },
+			func(context.Context, string) (eventing.KafkaGroupDescription, error) {
+				close(groupStarted)
+				<-releaseGroup
+				return eventing.KafkaGroupDescription{GroupID: "projection", State: "Stable", Members: []eventing.KafkaGroupMember{{ClientID: "reader-a", Topics: []string{"events"}}}}, nil
+			})
+	}()
+	select {
+	case <-groupStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("group query did not start")
+	}
+	closeA()
+	closeB := registerKafkaConsumerSession(name, 0, "events", "projection", "reader-b")
+	t.Cleanup(closeB)
+	close(releaseGroup)
+	select {
+	case <-finished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("group sample did not finish")
+	}
+	workerPipelines.RLock()
+	slot := workerPipelines.states[name].kafkaSlots[0]
+	workerPipelines.RUnlock()
+	if slot.session.clientID != "reader-b" || slot.membership.Verified {
+		t.Fatalf("old Group sample verified the replacement session: %+v", slot)
+	}
+}
+
+func TestOldStableSampleCannotOverrideNewRebalanceResult(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 1, []string{"reader-a"})
+	expireKafkaStartupGrace(name)
+	groupStarted := make(chan struct{})
+	releaseGroup := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		_, _, _, _, _ = sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
+			func(context.Context, string, string) (int64, error) { return 0, nil },
+			func(context.Context, string) (eventing.KafkaGroupDescription, error) {
+				close(groupStarted)
+				<-releaseGroup
+				return eventing.KafkaGroupDescription{GroupID: "projection", State: "Stable", Members: []eventing.KafkaGroupMember{{ClientID: "reader-a", Topics: []string{"events"}}}}, nil
+			})
+	}()
+	select {
+	case <-groupStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("older group query did not start")
+	}
+	_, _, _, _, err := sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
+		func(context.Context, string, string) (int64, error) { return 0, nil },
+		func(context.Context, string) (eventing.KafkaGroupDescription, error) {
+			return eventing.KafkaGroupDescription{GroupID: "projection", State: "PreparingRebalance", Members: []eventing.KafkaGroupMember{{ClientID: "reader-a", Topics: []string{"events"}}}}, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(releaseGroup)
+	select {
+	case <-finished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("older group sample did not finish")
+	}
+	workerPipelines.RLock()
+	verified := workerPipelines.states[name].kafkaSlots[0].membership.Verified
+	workerPipelines.RUnlock()
+	if verified {
+		t.Fatal("older Stable sample overrode the newer PreparingRebalance result")
+	}
+}
+
+func TestIdleRecoveryStillWorksWithNoNewMessages(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 1, []string{"reader-a"})
+	for i := 0; i < 3; i++ {
+		KafkaConsumerSlotFailed(name, 0, "kafka_fetch_failed", pipelineFailureTransport)
+	}
+	_, _, valid, accepted, err := sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
+		func(context.Context, string, string) (int64, error) { return 0, nil },
+		func(context.Context, string) (eventing.KafkaGroupDescription, error) {
+			return eventing.KafkaGroupDescription{GroupID: "projection", State: "Stable", Members: []eventing.KafkaGroupMember{{ClientID: "reader-a", Topics: []string{"events"}}}}, nil
+		})
+	if err != nil || !valid || !accepted {
+		t.Fatalf("idle recovery sample valid=%v accepted=%v err=%v", valid, accepted, err)
+	}
+	state := pipelineSnapshots()[name]
+	if state.ConsecutiveFailures != 0 || state.State != "idle" {
+		t.Fatalf("transport failure did not recover without a new commit: %+v", state)
+	}
+	if reasons := evaluatePipelineHealth(time.Now().UTC()); len(reasons) != 0 {
+		t.Fatalf("idle recovery left pipeline unhealthy: %v", reasons)
+	}
+}
+
+func TestCommitDoesNotBypassMembership(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	registerPipelineAt(name, 1, time.Now().UTC().Add(-workerActiveGrace-time.Second))
+	KafkaConsumerSlotStarted(name, 0)
+	closeSession := registerKafkaConsumerSession(name, 0, "events", "projection", "reader-a")
+	t.Cleanup(closeSession)
+	KafkaConsumerSlotCommitted(name, 0, time.Now().UTC())
+	pipelineKafkaBacklogSample(name, 0, time.Now().UTC(), true)
+	if reasons := evaluatePipelineHealth(time.Now().UTC()); !containsWorkerReason(reasons, "worker_kafka_consumer_group_unverified") {
+		t.Fatalf("successful commit bypassed membership proof: %v", reasons)
+	}
+}
+
+func TestMultiConsumerMembershipAndFailureIsolation(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 2, []string{"reader-a", "reader-b"})
+	expireKafkaStartupGrace(name)
+	KafkaConsumerSlotCommitted(name, 1, time.Now().UTC())
+	workerPipelines.Lock()
+	slotA := workerPipelines.states[name].kafkaSlots[0]
+	slotA.membership = kafkaConsumerMembershipState{}
+	workerPipelines.states[name].kafkaSlots[0] = slotA
+	workerPipelines.Unlock()
+	if reasons := evaluatePipelineHealth(time.Now().UTC()); !containsWorkerReason(reasons, "worker_kafka_consumer_group_unverified") {
+		t.Fatalf("verified and committed Slot B represented unverified Slot A: %v", reasons)
+	}
+}
+
+func TestShutdownImmediatelyInvalidatesMembership(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 1, []string{"reader-a"})
+	workerPipelines.RLock()
+	versionBefore := workerPipelines.states[name].kafkaSlots[0].sessionVersion
+	workerPipelines.RUnlock()
+	MarkWorkerShuttingDown()
+	workerPipelines.RLock()
+	slot := workerPipelines.states[name].kafkaSlots[0]
+	workerPipelines.RUnlock()
+	if slot.membership.Verified || slot.sessionVersion <= versionBefore {
+		t.Fatalf("shutdown retained or failed to fence membership: %+v", slot)
+	}
+}
+
+func TestTerminalFetchFailureInvalidatesMembership(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 1, []string{"reader-a"})
+	reader := trackKafkaConsumerReader(name, 0, "events", "projection", "reader-a", &scriptedKafkaReader{
+		steps: []kafkaFetchStep{{err: errors.New("terminal fetch error")}},
+	})
+	result := fetchKafkaBatch(context.Background(), reader, 1, 0)
+	if result.TerminalFetchErr == nil {
+		t.Fatal("expected terminal fetch error")
+	}
+	workerPipelines.RLock()
+	slot := workerPipelines.states[name].kafkaSlots[0]
+	workerPipelines.RUnlock()
+	if slot.sessionRecoveryEligible || slot.membership.Verified {
+		t.Fatalf("terminal fetch left session or membership eligible: %+v", slot)
+	}
+	_ = reader.Close()
+}
+
+func TestEvaluatePipelineHealthConcurrentKafkaSlotMutation(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 1, []string{"reader-initial"})
+	var workers sync.WaitGroup
+	workers.Add(2)
+	go func() {
+		defer workers.Done()
+		for i := 0; i < 500; i++ {
+			evaluatePipelineHealth(time.Now().UTC())
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		for i := 0; i < 500; i++ {
+			closeSession := registerKafkaConsumerSession(name, 0, "events", "projection", fmt.Sprintf("reader-%d", i))
+			closeSession()
+		}
+	}()
+	workers.Wait()
 }
 
 func TestKafkaBacklogRequiresFreshGroupSamplesAndIgnoresReaderUpdates(t *testing.T) {
@@ -60,8 +512,8 @@ func TestKafkaBacklogRequiresFreshGroupSamplesAndIgnoresReaderUpdates(t *testing
 	if reasons := evaluatePipelineHealth(base.Add(2 * time.Second)); len(reasons) != 0 {
 		t.Fatalf("successful empty sample not healthy: %v", reasons)
 	}
-	if reasons := evaluatePipelineHealth(base.Add(2*time.Second + kafkaBacklogMaxAge + time.Nanosecond)); !containsWorkerReason(reasons, "worker_pipeline_backlog_unknown") {
-		t.Fatalf("stale empty sample healthy: %v", reasons)
+	if reasons := evaluatePipelineHealth(base.Add(2*time.Second + kafkaBacklogMaxAge + time.Nanosecond)); !containsWorkerReason(reasons, "worker_kafka_consumer_group_unverified") {
+		t.Fatalf("expired membership proof did not fail closed: %v", reasons)
 	}
 }
 
@@ -156,8 +608,8 @@ func TestKafkaTransportIdleRecoveryRequiresAllEvidence(t *testing.T) {
 			if valid != (test.lagErr == nil) || !accepted || (err != nil) != (test.lagErr != nil) {
 				t.Fatalf("valid=%v accepted=%v err=%v, lagErr=%v", valid, accepted, err, test.lagErr)
 			}
-			if (groupCalls > 0) != test.wantGroupCall {
-				t.Fatalf("group query calls=%d, wantCalled=%v", groupCalls, test.wantGroupCall)
+			if groupCalls != 1 {
+				t.Fatalf("group query calls=%d, want one membership check on every sample", groupCalls)
 			}
 			state := pipelineSnapshots()[name]
 			if test.wantRecovered {

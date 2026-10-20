@@ -73,6 +73,7 @@ type workerPipelineState struct {
 	backlogSampleAt          time.Time
 	backlogSampleValid       bool
 	backlogSampleVersion     uint64
+	membershipSampleVersion  uint64
 	state                    string
 	reasonCode               string
 }
@@ -183,6 +184,18 @@ func WorkerReadinessSnapshot() runtimehealth.WorkerReadinessSnapshot {
 func MarkWorkerShuttingDown() {
 	workerPipelines.Lock()
 	workerShuttingDown.Store(true)
+	for name, state := range workerPipelines.states {
+		if !isKafkaPipeline(name) {
+			continue
+		}
+		for slotID, slot := range state.kafkaSlots {
+			slot.sessionVersion++
+			slot.membership = kafkaConsumerMembershipState{}
+			state.kafkaSlots[slotID] = slot
+		}
+		state.membershipSampleVersion++
+		workerPipelines.states[name] = state
+	}
 	workerPipelines.Unlock()
 	storeWorkerSnapshot(runtimehealth.WorkerReadinessSnapshot{
 		Status: "not_ready", Role: workerReadinessRole,
@@ -565,6 +578,13 @@ func evaluatePipelineHealth(now time.Time) []string {
 	workerPipelines.RLock()
 	states := make(map[string]workerPipelineState, len(workerPipelines.states))
 	for name, state := range workerPipelines.states {
+		if len(state.kafkaSlots) > 0 {
+			slots := make(map[int]kafkaConsumerSlotState, len(state.kafkaSlots))
+			for slotID, slot := range state.kafkaSlots {
+				slots[slotID] = slot
+			}
+			state.kafkaSlots = slots
+		}
 		states[name] = state
 	}
 	workerPipelines.RUnlock()
@@ -585,10 +605,12 @@ func evaluatePipelineHealth(now time.Time) []string {
 			reason = "worker_supervisor_not_registered"
 		case state.consecutiveFailures >= 3:
 			reason = "worker_pipeline_consecutive_failures"
-		case isKafkaPipeline(name) && !kafkaConsumerSlotsReady(state) && !state.registeredAt.IsZero() && now.Sub(state.registeredAt) <= workerActiveGrace:
+		case isKafkaPipeline(name) && !kafkaConsumerSlotsReady(state, now) && !state.registeredAt.IsZero() && now.Sub(state.registeredAt) <= workerActiveGrace:
 			reason = "worker_pipeline_starting"
-		case isKafkaPipeline(name) && !kafkaConsumerSlotsReady(state):
+		case isKafkaPipeline(name) && !kafkaConsumerSlotsSessionReady(state):
 			reason = "worker_kafka_consumer_session_unavailable"
+		case isKafkaPipeline(name) && !kafkaConsumerSlotsReady(state, now):
+			reason = "worker_kafka_consumer_group_unverified"
 		case state.activeWorkers < state.expectedWorkers && !state.registeredAt.IsZero() && now.Sub(state.registeredAt) <= workerActiveGrace:
 			reason = "worker_pipeline_starting"
 		case state.activeWorkers < state.expectedWorkers:

@@ -10,6 +10,7 @@ type kafkaConsumerSlotState struct {
 	sessionActive           bool
 	sessionRecoveryEligible bool
 	sessionVersion          uint64
+	membership              kafkaConsumerMembershipState
 	failureVersion          uint64
 	consecutiveFailures     int
 	failureKinds            pipelineFailureKinds
@@ -20,6 +21,14 @@ type kafkaConsumerSlotState struct {
 	state                   string
 	reasonCode              string
 }
+
+type kafkaConsumerMembershipState struct {
+	Verified       bool
+	VerifiedAt     time.Time
+	SessionVersion uint64
+}
+
+const kafkaMembershipMaxAge = 30 * time.Second
 
 // KafkaConsumerSlotStarted marks the long-lived worker loop for a Kafka
 // consumer. Reader retries keep the same slot ID.
@@ -37,6 +46,7 @@ func KafkaConsumerSlotStarted(pipeline string, slotID int) {
 	if !slot.workerStarted {
 		slot.workerStarted = true
 		slot.startedAt = time.Now().UTC()
+		slot.membership = kafkaConsumerMembershipState{}
 		if state.startedAt.IsZero() {
 			state.startedAt = slot.startedAt
 		}
@@ -63,12 +73,11 @@ func KafkaConsumerSlotStopped(pipeline string, slotID int) {
 	if !found {
 		return
 	}
-	if slot.sessionActive {
-		slot.sessionActive = false
-		slot.sessionRecoveryEligible = false
-		slot.session = kafkaConsumerSession{}
-		slot.sessionVersion++
-	}
+	slot.sessionActive = false
+	slot.sessionRecoveryEligible = false
+	slot.session = kafkaConsumerSession{}
+	slot.sessionVersion++
+	slot.membership = kafkaConsumerMembershipState{}
 	slot.workerStarted = false
 	state.kafkaSlots[slotID] = slot
 	recomputeKafkaPipelineAggregate(&state, "")
@@ -148,6 +157,7 @@ func invalidateKafkaReaderSession(reader interface{}) {
 	}
 	slot.sessionRecoveryEligible = false
 	slot.sessionVersion++
+	slot.membership = kafkaConsumerMembershipState{}
 	state.kafkaSlots[tracked.slotID] = slot
 	workerPipelines.states[tracked.pipeline] = state
 }
@@ -228,13 +238,27 @@ func recomputeKafkaPipelineAggregate(state *workerPipelineState, recoveredState 
 	}
 }
 
-func kafkaConsumerSlotsReady(state workerPipelineState) bool {
+func kafkaConsumerSlotsSessionReady(state workerPipelineState) bool {
 	if state.expectedWorkers < 1 {
 		return false
 	}
 	for slotID := 0; slotID < state.expectedWorkers; slotID++ {
 		slot, found := state.kafkaSlots[slotID]
 		if !found || !slot.workerStarted || !slot.sessionActive || !slot.sessionRecoveryEligible {
+			return false
+		}
+	}
+	return true
+}
+
+func kafkaConsumerSlotsReady(state workerPipelineState, now time.Time) bool {
+	if !kafkaConsumerSlotsSessionReady(state) {
+		return false
+	}
+	for slotID := 0; slotID < state.expectedWorkers; slotID++ {
+		slot := state.kafkaSlots[slotID]
+		membership := slot.membership
+		if !membership.Verified || membership.SessionVersion != slot.sessionVersion || membership.VerifiedAt.IsZero() || now.Sub(membership.VerifiedAt) > kafkaMembershipMaxAge {
 			return false
 		}
 	}

@@ -324,7 +324,12 @@ Kafka consumer health is tracked per stable worker slot. A successful commit
 clears failures only for the slot that committed, and the pipeline failure
 metric reports the maximum consecutive failure count across its required slots.
 Readiness also requires an active, recovery-eligible Reader session for every
-required slot after the startup grace period.
+required slot and a fresh (30-second maximum age) background proof that each
+Reader belongs to its configured `Stable` consumer group and subscribes to the
+configured topic. Reader creation alone never makes a pipeline ready. Group
+membership and committed Lag are sampled independently; failed or non-Stable
+Group samples revoke the previous membership proof, while the `/readyz`
+evaluator reads only the latest cached snapshot and never queries Kafka.
 
 A batch collection deadline is a normal end to the collection window. A
 terminal Kafka fetch error lets the consumer finish and commit messages already
@@ -335,8 +340,8 @@ failure.
 Committed Lag is sampled by a bounded pool with a five-second overall budget,
 a four-second per-group budget, and at most five concurrent groups. Each
 pipeline publishes its own sample. A successful Lag sample remains valid when
-the additional consumer-group query fails, but that failure cannot trigger idle
-recovery. Idle recovery requires fresh zero Lag, a stable group containing all
-local Reader sessions, and unchanged failure and session versions. The
-`/readyz` endpoint reads the latest background readiness snapshot and does not
-query Kafka synchronously.
+the consumer-group query fails, but that failure revokes readiness membership
+and cannot trigger idle recovery. Idle recovery requires fresh zero Lag, the
+same Stable Group membership proof used by readiness, and unchanged failure
+and session versions. The `/readyz` endpoint reads the latest background
+readiness snapshot and does not query Kafka synchronously.
