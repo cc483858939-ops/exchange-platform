@@ -57,16 +57,17 @@ func startLikeSnapshotProjectionConsumer(ctx context.Context, wg *sync.WaitGroup
 
 func runLikeSnapshotProjectionConsumer(ctx context.Context) {
 	kafkaConfig := config.AppConfig.Kafka
-	reader, err := eventing.NewKafkaReader(kafkaConfig, kafkaConfig.LikeSnapshotTopic, kafkaConfig.LikeSnapshotGroupID)
+	reader, clientID, err := eventing.NewKafkaReader(kafkaConfig, kafkaConfig.LikeSnapshotTopic, kafkaConfig.LikeSnapshotGroupID)
 	if err != nil {
-		PipelineFailure(PipelineLikeSnapshotProjection, "kafka_reader_unavailable", 0)
+		pipelineFailureWithKind(PipelineLikeSnapshotProjection, "kafka_reader_unavailable", 0, pipelineFailureConfiguration)
 		log.Printf("[LikeSnapshotProjection] create reader: %v", err)
 		return
 	}
+	trackedReader := trackKafkaConsumerReader(PipelineLikeSnapshotProjection, kafkaConfig.LikeSnapshotTopic, kafkaConfig.LikeSnapshotGroupID, clientID, reader)
 	likeSnapshotConsumers.Add(1)
 	defer likeSnapshotConsumers.Add(-1)
 	publisher := eventingRawKafkaMessagePublisher{kafkaConfig: kafkaConfig}
-	_ = consumeLikeSnapshotMessages(ctx, reader, publisher, global.WorkerDb, kafkaConfig)
+	_ = consumeLikeSnapshotMessages(ctx, trackedReader, publisher, global.WorkerDb, kafkaConfig)
 }
 
 func consumeLikeSnapshotMessages(ctx context.Context, reader likeSnapshotMessageReader, publisher rawKafkaMessagePublisher, db *gorm.DB, kafkaConfig config.KafkaConfig) error {
@@ -97,7 +98,7 @@ func consumeLikeSnapshotMessagesWithApply(
 		message, err := reader.FetchMessage(ctx)
 		if err != nil {
 			if ctx.Err() == nil {
-				PipelineFailure(PipelineLikeSnapshotProjection, "kafka_fetch_failed", 0)
+				pipelineFailureWithKind(PipelineLikeSnapshotProjection, "kafka_fetch_failed", 0, kafkaFetchFailureKind(err))
 				log.Printf("[LikeSnapshotProjection] fetch: %v", err)
 				return err
 			}
@@ -107,7 +108,7 @@ func consumeLikeSnapshotMessagesWithApply(
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			PipelineFailure(PipelineLikeSnapshotProjection, "projection_failed", 0)
+			pipelineFailureWithKind(PipelineLikeSnapshotProjection, "projection_failed", 0, pipelineFailureProcessing)
 			log.Printf("[LikeSnapshotProjection] process topic=%s partition=%d offset=%d: %v", message.Topic, message.Partition, message.Offset, err)
 			return err
 		}
@@ -116,7 +117,7 @@ func consumeLikeSnapshotMessagesWithApply(
 		}
 		if err := reader.CommitMessages(ctx, message); err != nil {
 			if ctx.Err() == nil {
-				PipelineFailure(PipelineLikeSnapshotProjection, "kafka_commit_failed", 0)
+				pipelineFailureWithKind(PipelineLikeSnapshotProjection, "kafka_commit_failed", 0, pipelineFailureCommit)
 				commitErr := retryableKafkaError(kafkaFailureCodeKafkaCommit, err)
 				metrics.RecordKafkaConsumerRecovery(kafkaConsumerLikeSnapshotProjection, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(commitErr))
 				log.Printf("[LikeSnapshotProjection] commit topic=%s partition=%d offset=%d code=%s: %v", message.Topic, message.Partition, message.Offset, kafkaFailureCode(commitErr), err)

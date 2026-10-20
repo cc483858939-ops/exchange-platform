@@ -56,6 +56,9 @@ type workerPipelineState struct {
 	registered            bool
 	expectedWorkers       int
 	activeWorkers         int
+	failureKinds          pipelineFailureKinds
+	failureVersion        uint64
+	sessionVersion        uint64
 	registeredAt          time.Time
 	startedAt             time.Time
 	lastSuccessAt         time.Time
@@ -67,14 +70,29 @@ type workerPipelineState struct {
 	backlog               int64
 	backlogSampleAt       time.Time
 	backlogSampleValid    bool
+	backlogSampleVersion  uint64
 	state                 string
 	reasonCode            string
 }
+
+type pipelineFailureKinds uint8
+
+const (
+	pipelineFailureUnclassified pipelineFailureKinds = 1 << iota
+	pipelineFailureTransport
+	pipelineFailureCommit
+	pipelineFailureProcessing
+	pipelineFailureConfiguration
+)
+
+const pipelineFailureTransportOnly = pipelineFailureTransport
 
 var workerPipelines = struct {
 	sync.RWMutex
 	states map[string]workerPipelineState
 }{states: make(map[string]workerPipelineState)}
+
+var workerPipelineVersion atomic.Uint64
 
 var workerSnapshot atomic.Value
 var workerShuttingDown atomic.Bool
@@ -163,7 +181,9 @@ func WorkerReadinessSnapshot() runtimehealth.WorkerReadinessSnapshot {
 }
 
 func MarkWorkerShuttingDown() {
+	workerPipelines.Lock()
 	workerShuttingDown.Store(true)
+	workerPipelines.Unlock()
 	storeWorkerSnapshot(runtimehealth.WorkerReadinessSnapshot{
 		Status: "not_ready", Role: workerReadinessRole,
 		Checks:    map[string]string{"database": "not_checked", "schema": "not_checked", "redis": "not_checked", "kafka": "not_checked"},
@@ -227,6 +247,7 @@ func registerPipelineAt(name string, expectedWorkers int, now time.Time) {
 func UnregisterPipeline(name string) {
 	workerPipelines.Lock()
 	delete(workerPipelines.states, name)
+	delete(workerKafkaSessions, name)
 	workerPipelines.Unlock()
 }
 
@@ -242,8 +263,10 @@ func pipelineStartedAt(name string, now time.Time) {
 		if state.startedAt.IsZero() {
 			state.startedAt = now
 		}
-		state.state = "running"
-		state.reasonCode = ""
+		if state.consecutiveFailures == 0 && state.failureKinds == 0 {
+			state.state = "running"
+			state.reasonCode = ""
+		}
 		workerPipelines.states[name] = state
 	}
 	workerPipelines.Unlock()
@@ -273,11 +296,7 @@ func pipelineSuccessAt(name string, backlog int64, now time.Time) {
 	state, ok := workerPipelines.states[name]
 	if ok {
 		setPipelineLocalBacklog(name, &state, backlog, now)
-		state.lastSuccessAt = now
-		state.lastProgressAt = now
-		state.consecutiveFailures = 0
-		state.state = "running"
-		state.reasonCode = ""
+		markPipelineSuccess(&state, now, "running")
 		workerPipelines.states[name] = state
 	}
 	workerPipelines.Unlock()
@@ -296,11 +315,7 @@ func pipelineCommitAt(name string, offset time.Time, backlog int64, now time.Tim
 		}
 		setPipelineLocalBacklog(name, &state, backlog, now)
 		state.lastCommittedOffsetAt = offset
-		state.lastSuccessAt = now
-		state.lastProgressAt = now
-		state.consecutiveFailures = 0
-		state.state = "running"
-		state.reasonCode = ""
+		markPipelineSuccess(&state, now, "running")
 		workerPipelines.states[name] = state
 	}
 	workerPipelines.Unlock()
@@ -316,12 +331,16 @@ func pipelineIdleAt(name string, backlog int64, now time.Time) {
 	state, ok := workerPipelines.states[name]
 	if ok {
 		setPipelineLocalBacklog(name, &state, backlog, now)
-		if backlog == 0 && (!isKafkaPipeline(name) || state.backlogSampleValid && state.backlog == 0 && now.Sub(state.backlogSampleAt) <= kafkaBacklogMaxAge) {
-			state.lastSuccessAt = now
-			state.lastProgressAt = now
-			state.consecutiveFailures = 0
-			state.state = "idle"
-			state.reasonCode = ""
+		if isKafkaPipeline(name) {
+			// Kafka idle notifications are not recovery evidence. Only the
+			// dedicated sampler can clear a transport failure after checking the
+			// committed lag, stable group, and every local consumer session.
+			if state.consecutiveFailures == 0 && state.failureKinds == 0 && backlog == 0 {
+				state.state = "idle"
+				state.reasonCode = ""
+			}
+		} else if backlog == 0 {
+			markPipelineSuccess(&state, now, "idle")
 		} else {
 			state.state = "idle"
 		}
@@ -331,21 +350,47 @@ func pipelineIdleAt(name string, backlog int64, now time.Time) {
 }
 
 func PipelineFailure(name, reason string, backlog int64) {
-	pipelineFailureAt(name, reason, backlog, time.Now().UTC())
+	pipelineFailureAtWithKind(name, reason, backlog, pipelineFailureUnclassified, time.Now().UTC())
 }
 
 func pipelineFailureAt(name, reason string, backlog int64, now time.Time) {
+	pipelineFailureAtWithKind(name, reason, backlog, pipelineFailureUnclassified, now)
+}
+
+func pipelineFailureWithKind(name, reason string, backlog int64, kind pipelineFailureKinds) {
+	pipelineFailureAtWithKind(name, reason, backlog, kind, time.Now().UTC())
+}
+
+func pipelineFailureAtWithKind(name, reason string, backlog int64, kind pipelineFailureKinds, now time.Time) {
+	if kind == 0 {
+		kind = pipelineFailureUnclassified
+	}
 	workerPipelines.Lock()
 	state, ok := workerPipelines.states[name]
 	if ok {
 		setPipelineLocalBacklog(name, &state, backlog, now)
 		state.lastFailureAt = now
 		state.consecutiveFailures++
+		state.failureKinds |= kind
+		state.failureVersion = workerPipelineVersion.Add(1)
 		state.state = "failed"
 		state.reasonCode = stablePipelineReason(reason)
 		workerPipelines.states[name] = state
 	}
 	workerPipelines.Unlock()
+}
+
+func markPipelineSuccess(state *workerPipelineState, now time.Time, stateName string) {
+	if state == nil {
+		return
+	}
+	state.lastSuccessAt = now
+	state.lastProgressAt = now
+	state.consecutiveFailures = 0
+	state.failureKinds = 0
+	state.failureVersion = workerPipelineVersion.Add(1)
+	state.state = stateName
+	state.reasonCode = ""
 }
 
 func PipelineBacklog(name string, backlog int64) {

@@ -23,9 +23,14 @@ var (
 	postEmbeddingAPIRequestTexts                 = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_post_embedding_api_request_texts", Help: "Number of texts sent in one Post embedding API request.", Buckets: []float64{1, 2, 3, 5, 8, 16, 32}})
 	postEmbeddingKafkaBatchSize                  = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_post_embedding_kafka_batch_size", Help: "Number of Kafka messages collected for one Post embedding processing batch.", Buckets: []float64{1, 2, 3, 5, 8, 16, 32}})
 	postEmbeddingBatchWait                       = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "go_exchange_post_embedding_batch_wait_seconds", Help: "Time spent collecting a Post embedding batch after its first Kafka message.", Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1}})
-	postEmbeddingBatchSplits                     = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_post_embedding_batch_splits_total", Help: "Post embedding batch splits caused by permanent provider or response contract errors."})
+	postEmbeddingBatchSplits                     = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_post_embedding_batch_splits_total", Help: "Post embedding batch splits caused by provider size or response contract errors."})
 	postEmbeddingBatchFailures                   = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_post_embedding_batch_failures_total", Help: "Post embedding batches that could not reach a safe terminal state or commit."})
 	kafkaConsumerRecovery                        = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_kafka_consumer_recovery_total", Help: "Kafka consumer recovery control-flow events by consumer, outcome, and stable code."}, []string{"consumer", "outcome", "code"})
+	embeddingProviderPauseActive                 = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_embedding_provider_pause_active", Help: "Whether the Post embedding consumer is in a provider-request cooldown."})
+	embeddingProviderPauseReason                 = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "go_exchange_embedding_provider_pause_reason", Help: "One-hot bounded reason for the current Post embedding provider cooldown."}, []string{"reason"})
+	embeddingProviderFailures                    = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_embedding_provider_failures_total", Help: "Post embedding provider failures by bounded reason."}, []string{"reason"})
+	embeddingProviderNextRetry                   = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_embedding_provider_next_retry_timestamp_seconds", Help: "Unix timestamp when the Post embedding consumer may next call its provider."})
+	embeddingProviderRecoveries                  = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_embedding_provider_recoveries_total", Help: "Post embedding provider failures followed by a successful Kafka offset commit."})
 	outboxCDCSlotActive                          = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_cdc_slot_active", Help: "Whether the configured PostgreSQL CDC slot is active."})
 	outboxCDCWALLagBytes                         = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_cdc_wal_lag_bytes", Help: "WAL lag behind the outbox CDC slot in bytes."})
 	outboxCDCSlotConfirmedLSN                    = prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_exchange_outbox_cdc_slot_confirmed_lsn", Help: "Confirmed flush LSN reported by the outbox CDC slot."})
@@ -112,6 +117,7 @@ func init() {
 	registry.MustRegister(
 		databasePoolCollector,
 		httpRequestsTotal, httpRequestDuration, recommendationHTTPDuration, postEmbeddingEvents, postEmbeddingFailures, postEmbeddingPublishFailures, postEmbeddingProcessingDuration, postEmbeddingAPIRequests, postEmbeddingAPIRequestTexts, postEmbeddingKafkaBatchSize, postEmbeddingBatchWait, postEmbeddingBatchSplits, postEmbeddingBatchFailures, kafkaConsumerRecovery,
+		embeddingProviderPauseActive, embeddingProviderPauseReason, embeddingProviderFailures, embeddingProviderNextRetry, embeddingProviderRecoveries,
 		outboxCDCSlotActive, outboxCDCWALLagBytes, outboxCDCSlotConfirmedLSN, outboxRowsTotal, outboxRowsLastSuccess, outboxOldestRowAgeSeconds, notificationConsumerLag, consumerInboxRows, consumerInboxRowsLastSuccess, notificationProjectionFailures, notificationProjectionLatency, likePipelineDepth, likePipelineDepthLastSuccess, likeClaimDuration, likeQueueOperations, likeLifecycleEvents, postLikeInitJobsBacklog, userLikeRelationsRemoved, userLikeCleanupBatchUsers, userLikeCleanupBatchRelations, userLikeCleanupBatchRemoved, userLikeCleanupBatchDuration, userLikeCleanupCycleDuration, userLikeCleanupLastCycle, userLikeTTLEvents, userLikeRestoreResults, userLikeRestoreDuration, userLikeRestoreRelations, userLikeRestoreInflight, userLikeCapEvents, userLikeActiveRelations, userLikeEvictionDuration,
 		recommendationTelemetryEvents, recommendationClickCooldown, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests, recommendationSnapshotOutcomes,
@@ -123,8 +129,12 @@ func init() {
 		runtimeReadiness, runtimeReadinessTransitions, runtimeReadinessLastSuccess, runtimeReadinessLastEvaluation,
 		workerPipelineHealthy, workerPipelineConsecutiveFailures, workerPipelineLastSuccess, workerPipelineBacklog, workerPipelineBacklogStalled,
 	)
-	for _, result := range []string{"generated", "up_to_date", "post_missing", "post_missing_after_embed", "stale_content_discarded", "post_unavailable", "invalid_event", "provider_non_retryable"} {
+	for _, result := range []string{"generated", "up_to_date", "post_missing", "post_missing_after_embed", "stale_content_discarded", "post_unavailable", "invalid_event"} {
 		postEmbeddingEvents.WithLabelValues(result)
+	}
+	for _, reason := range embeddingProviderReasons {
+		embeddingProviderPauseReason.WithLabelValues(reason)
+		embeddingProviderFailures.WithLabelValues(reason)
 	}
 	for _, stage := range []string{"decode", "db_read", "provider", "db_upsert", "kafka_commit"} {
 		postEmbeddingFailures.WithLabelValues(stage)
@@ -300,6 +310,41 @@ func ObservePostEmbeddingBatchWait(duration time.Duration) {
 }
 func RecordPostEmbeddingBatchSplit()   { postEmbeddingBatchSplits.Inc() }
 func RecordPostEmbeddingBatchFailure() { postEmbeddingBatchFailures.Inc() }
+func RecordEmbeddingProviderFailure(reason string) {
+	embeddingProviderFailures.WithLabelValues(normalizeEmbeddingProviderReason(reason)).Inc()
+}
+func RecordEmbeddingProviderRecovery() { embeddingProviderRecoveries.Inc() }
+func SetEmbeddingProviderPause(active bool, reason string, nextRetryUnix int64) {
+	if !active {
+		embeddingProviderPauseActive.Set(0)
+		embeddingProviderNextRetry.Set(0)
+		for _, knownReason := range embeddingProviderReasons {
+			embeddingProviderPauseReason.WithLabelValues(knownReason).Set(0)
+		}
+		return
+	}
+	embeddingProviderPauseActive.Set(1)
+	for _, knownReason := range embeddingProviderReasons {
+		embeddingProviderPauseReason.WithLabelValues(knownReason).Set(0)
+	}
+	embeddingProviderPauseReason.WithLabelValues(normalizeEmbeddingProviderReason(reason)).Set(1)
+	embeddingProviderNextRetry.Set(float64(nextRetryUnix))
+}
+
+var embeddingProviderReasons = []string{
+	"auth", "permission", "config", "quota", "rate_limit", "server", "contract", "transport", "unknown",
+	"retry_after_invalid", "retry_after_long",
+}
+
+func normalizeEmbeddingProviderReason(reason string) string {
+	for _, knownReason := range embeddingProviderReasons {
+		if reason == knownReason {
+			return reason
+		}
+	}
+	return "unknown"
+}
+
 func RecordKafkaConsumerRecovery(consumer, outcome, code string) {
 	switch consumer {
 	case "like_snapshot_projection", "user_behavior_projection", "recommendation_metrics", "post_embedding", "notification_projection":
@@ -312,7 +357,7 @@ func RecordKafkaConsumerRecovery(consumer, outcome, code string) {
 		return
 	}
 	switch code {
-	case "none", "decode_envelope", "unsupported_event_type", "unsupported_schema", "decode_payload", "invalid_payload", "database_unavailable", "database_transaction", "dlq_publish", "kafka_commit", "provider_retryable", "provider_permanent", "provider_contract_invalid", "source_changed", "internal_state":
+	case "none", "decode_envelope", "unsupported_event_type", "unsupported_schema", "decode_payload", "invalid_payload", "database_unavailable", "database_transaction", "dlq_publish", "kafka_commit", "provider_retryable", "source_changed", "internal_state":
 	default:
 		return
 	}

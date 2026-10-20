@@ -11,6 +11,7 @@ import (
 
 	"Go.exchange/config"
 
+	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -150,18 +151,23 @@ func (p *KafkaPublisher) Close() error {
 	return firstErr
 }
 
-func NewKafkaReader(kafkaConfig config.KafkaConfig, topic, groupID string) (*kafka.Reader, error) {
+func NewKafkaReader(kafkaConfig config.KafkaConfig, topic, groupID string) (*kafka.Reader, string, error) {
+	topic = strings.TrimSpace(topic)
+	groupID = strings.TrimSpace(groupID)
 	brokers := normalizedBrokers(kafkaConfig.Brokers)
 	if len(brokers) == 0 {
-		return nil, errors.New("kafka brokers are required")
+		return nil, "", errors.New("kafka brokers are required")
 	}
 	if strings.TrimSpace(topic) == "" || strings.TrimSpace(groupID) == "" {
-		return nil, errors.New("kafka topic and group id are required")
+		return nil, "", errors.New("kafka topic and group id are required")
 	}
-	return kafka.NewReader(kafka.ReaderConfig{
+	clientID := "goexchange-" + uuid.NewString()
+	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers: brokers, Topic: topic, GroupID: groupID,
+		Dialer:   &kafka.Dialer{ClientID: clientID},
 		MinBytes: 1, MaxBytes: 10e6, CommitInterval: 0, StartOffset: kafka.FirstOffset,
-	}), nil
+	})
+	return reader, clientID, nil
 }
 
 func KafkaReachable(ctx context.Context, kafkaConfig config.KafkaConfig) error {

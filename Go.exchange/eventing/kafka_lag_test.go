@@ -16,6 +16,20 @@ type lagSampleClient struct {
 	requested []int
 }
 
+type groupDescriptionClient struct {
+	response *kafka.DescribeGroupsResponse
+	err      error
+	request  *kafka.DescribeGroupsRequest
+}
+
+func (client *groupDescriptionClient) DescribeGroups(ctx context.Context, request *kafka.DescribeGroupsRequest) (*kafka.DescribeGroupsResponse, error) {
+	client.request = request
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return client.response, client.err
+}
+
 func (client *lagSampleClient) Metadata(ctx context.Context, _ *kafka.MetadataRequest) (*kafka.MetadataResponse, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -78,6 +92,71 @@ func TestCommittedLagRejectsMissingErroredAndTruncatedSamples(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := sampleKafkaCommittedLag(ctx, &lagSampleClient{}, "events", "projection"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancel error=%v", err)
+	}
+}
+
+func TestDescribeKafkaConsumerGroupReturnsStateMembersAndSubscriptions(t *testing.T) {
+	client := &groupDescriptionClient{response: &kafka.DescribeGroupsResponse{Groups: []kafka.DescribeGroupsResponseGroup{{
+		GroupID: "projection", GroupState: "Stable", Members: []kafka.DescribeGroupsResponseMember{{
+			ClientID: "local-reader", MemberMetadata: kafka.DescribeGroupsResponseMemberMetadata{Topics: []string{"events", "other"}},
+		}},
+	}}}}
+	description, err := describeKafkaConsumerGroup(context.Background(), client, " projection ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if description.GroupID != "projection" || description.State != "Stable" || len(description.Members) != 1 {
+		t.Fatalf("unexpected group description: %+v", description)
+	}
+	if description.Members[0].ClientID != "local-reader" || len(description.Members[0].Topics) != 2 || description.Members[0].Topics[0] != "events" {
+		t.Fatalf("member subscription missing: %+v", description.Members[0])
+	}
+	if client.request == nil || len(client.request.GroupIDs) != 1 || client.request.GroupIDs[0] != "projection" {
+		t.Fatalf("unexpected DescribeGroups request: %+v", client.request)
+	}
+}
+
+func TestDescribeKafkaConsumerGroupPreservesNonStableAndEmptyGroups(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		state string
+	}{
+		{name: "empty", state: "Empty"},
+		{name: "preparing rebalance", state: "PreparingRebalance"},
+		{name: "completing rebalance", state: "CompletingRebalance"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &groupDescriptionClient{response: &kafka.DescribeGroupsResponse{Groups: []kafka.DescribeGroupsResponseGroup{{GroupID: "projection", GroupState: test.state}}}}
+			description, err := describeKafkaConsumerGroup(context.Background(), client, "projection")
+			if err != nil || description.State != test.state || len(description.Members) != 0 {
+				t.Fatalf("description=%+v err=%v", description, err)
+			}
+		})
+	}
+}
+
+func TestDescribeKafkaConsumerGroupFailsClosedOnMissingGroupOrQueryFailure(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		response *kafka.DescribeGroupsResponse
+		err      error
+	}{
+		{name: "group missing", response: &kafka.DescribeGroupsResponse{}},
+		{name: "group error", response: &kafka.DescribeGroupsResponse{Groups: []kafka.DescribeGroupsResponseGroup{{GroupID: "projection", Error: errors.New("group not found")}}}},
+		{name: "query error", err: errors.New("broker unavailable")},
+		{name: "missing response"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &groupDescriptionClient{response: test.response, err: test.err}
+			if _, err := describeKafkaConsumerGroup(context.Background(), client, "projection"); err == nil {
+				t.Fatal("invalid group query was accepted")
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := describeKafkaConsumerGroup(ctx, &groupDescriptionClient{}, "projection"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel error=%v", err)
 	}
 }

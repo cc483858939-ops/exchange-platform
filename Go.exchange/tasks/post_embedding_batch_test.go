@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -114,11 +113,12 @@ func (s *postEmbeddingBatchTestStore) CommitEmbeddingIfCurrent(_ context.Context
 }
 
 type postEmbeddingBatchTestEmbedder struct {
-	mu                  sync.Mutex
-	calls               [][]string
-	permanentTextMarker string
-	retryableErr        error
-	invalidMultiResult  bool
+	mu                 sync.Mutex
+	calls              [][]string
+	tooLargeAbove      int
+	alwaysTooLarge     bool
+	retryableErr       error
+	invalidMultiResult bool
 }
 
 func (e *postEmbeddingBatchTestEmbedder) Embed(_ context.Context, texts []string) (embeddings.EmbedResult, error) {
@@ -126,10 +126,8 @@ func (e *postEmbeddingBatchTestEmbedder) Embed(_ context.Context, texts []string
 	e.mu.Lock()
 	e.calls = append(e.calls, textCopy)
 	e.mu.Unlock()
-	for _, text := range texts {
-		if e.permanentTextMarker != "" && strings.Contains(text, e.permanentTextMarker) {
-			return embeddings.EmbedResult{}, &embeddings.ProviderHTTPError{StatusCode: 400}
-		}
+	if e.alwaysTooLarge || (e.tooLargeAbove > 0 && len(texts) > e.tooLargeAbove) {
+		return embeddings.EmbedResult{}, &embeddings.ProviderHTTPError{StatusCode: 413}
 	}
 	if e.retryableErr != nil {
 		return embeddings.EmbedResult{}, e.retryableErr
@@ -279,29 +277,35 @@ func TestPostEmbeddingBatchAllMissingPostsSkipProvider(t *testing.T) {
 	}
 }
 
-func TestPostEmbeddingBatchPermanentInputIsolatedBySplitting(t *testing.T) {
+func TestPostEmbeddingBatch413SplitsAndCommitsWithoutDLQ(t *testing.T) {
 	store, messages := newPostEmbeddingBatchFixture(t, 5)
-	badPost := store.posts[102]
-	badPost.Content = "invalid text"
-	store.posts[102] = badPost
 	reader := &postEmbeddingBatchTestReader{messages: messages}
-	embedder := &postEmbeddingBatchTestEmbedder{permanentTextMarker: "invalid text"}
+	embedder := &postEmbeddingBatchTestEmbedder{tooLargeAbove: 2}
 	publisher := &postEmbeddingBatchTestPublisher{}
 	err := consumePostEmbeddingBatchForTest(context.Background(), reader, store, embedder, publisher, 5, 50*time.Millisecond, kafkaRetryPolicy{MaxAttempts: 1})
 	if !errors.Is(err, errPostEmbeddingBatchReaderStopped) {
 		t.Fatalf("consume error=%v", err)
 	}
-	if len(reader.commits) != 1 || len(reader.commits[0]) != 5 || len(store.embeddings) != 4 {
+	if len(reader.commits) != 1 || len(reader.commits[0]) != 5 || len(store.embeddings) != 5 {
 		t.Fatalf("commits=%v embeddings=%d", reader.commits, len(store.embeddings))
 	}
-	if len(publisher.messages) != 1 || len(publisher.topics) != 1 || publisher.topics[0] != postEmbeddingRecoveryConfig().ConsumerDLQTopic {
-		t.Fatalf("DLQ topics=%v messages=%d", publisher.topics, len(publisher.messages))
+	if len(publisher.messages) != 0 || len(publisher.topics) != 0 {
+		t.Fatalf("413 split must not send provider failures to DLQ: topics=%v messages=%d", publisher.topics, len(publisher.messages))
 	}
-	if got := len(embedder.calls); got < 3 {
-		t.Fatalf("provider calls=%d, expected parent and split calls", got)
+	if got := len(embedder.calls); got != 5 {
+		t.Fatalf("provider calls=%d, want 5 bounded parent/sub-batch requests", got)
 	}
-	if _, ok := store.embeddings[102]; ok {
-		t.Fatal("permanently invalid task was written")
+}
+
+func TestPostEmbeddingSingle413PausesWithoutCommitOrDLQ(t *testing.T) {
+	store, messages := newPostEmbeddingBatchFixture(t, 1)
+	reader := &postEmbeddingBatchTestReader{messages: messages}
+	embedder := &postEmbeddingBatchTestEmbedder{alwaysTooLarge: true}
+	publisher := &postEmbeddingBatchTestPublisher{}
+	err := consumePostEmbeddingBatchForTest(context.Background(), reader, store, embedder, publisher, 1, 0, kafkaRetryPolicy{MaxAttempts: 5})
+	decision, ok := providerFailureDecision(err)
+	if !ok || decision.Action != ProviderActionPause || len(embedder.calls) != 1 || len(reader.commits) != 0 || len(publisher.messages) != 0 {
+		t.Fatalf("decision=%+v typed=%t calls=%v commits=%v DLQ=%d err=%v", decision, ok, embedder.calls, reader.commits, len(publisher.messages), err)
 	}
 }
 
@@ -321,6 +325,8 @@ func TestPostEmbeddingBatchContractFailureSplitsAndRecovers(t *testing.T) {
 
 func TestPostEmbeddingBatchRetryableProviderFailureDoesNotCommit(t *testing.T) {
 	store, messages := newPostEmbeddingBatchFixture(t, 2)
+	messages[0].Partition = 0
+	messages[1].Partition = 1
 	reader := &postEmbeddingBatchTestReader{messages: messages}
 	embedder := &postEmbeddingBatchTestEmbedder{retryableErr: &embeddings.ProviderHTTPError{StatusCode: 503}}
 	publisher := &postEmbeddingBatchTestPublisher{}
@@ -411,12 +417,10 @@ func TestPostEmbeddingBatchStaleContentAndDLQFailureDoNotCommit(t *testing.T) {
 
 	t.Run("DLQ publish failure", func(t *testing.T) {
 		store, messages := newPostEmbeddingBatchFixture(t, 2)
-		badPost := store.posts[100]
-		badPost.Content = "invalid text"
-		store.posts[100] = badPost
+		messages[0].Value = []byte("{")
 		reader := &postEmbeddingBatchTestReader{messages: messages}
 		publisher := &postEmbeddingBatchTestPublisher{err: errors.New("DLQ unavailable")}
-		embedder := &postEmbeddingBatchTestEmbedder{permanentTextMarker: "invalid text"}
+		embedder := &postEmbeddingBatchTestEmbedder{}
 		err := consumePostEmbeddingBatchForTest(context.Background(), reader, store, embedder, publisher, 2, 50*time.Millisecond, kafkaRetryPolicy{MaxAttempts: 1})
 		if err == nil || len(reader.commits) != 0 {
 			t.Fatalf("err=%v commits=%v", err, reader.commits)

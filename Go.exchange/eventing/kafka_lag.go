@@ -18,15 +18,85 @@ type kafkaLagClient interface {
 	ListOffsets(context.Context, *kafka.ListOffsetsRequest) (*kafka.ListOffsetsResponse, error)
 }
 
+type kafkaDescribeGroupsClient interface {
+	DescribeGroups(context.Context, *kafka.DescribeGroupsRequest) (*kafka.DescribeGroupsResponse, error)
+}
+
+type KafkaGroupMember struct {
+	ClientID string
+	Topics   []string
+}
+
+type KafkaGroupDescription struct {
+	GroupID string
+	State   string
+	Members []KafkaGroupMember
+}
+
 // KafkaCommittedLag includes every partition and messages already prefetched by
 // readers but not committed. It performs no work on the consumer commit path.
 func KafkaCommittedLag(ctx context.Context, cfg config.KafkaConfig, topic, group string) (int64, error) {
+	topic = strings.TrimSpace(topic)
+	group = strings.TrimSpace(group)
 	brokers := normalizedBrokers(cfg.Brokers)
 	if len(brokers) == 0 || strings.TrimSpace(topic) == "" || strings.TrimSpace(group) == "" {
 		return 0, errors.New("Kafka lag configuration is incomplete")
 	}
 	client := &kafka.Client{Addr: kafka.TCP(brokers...), Timeout: 5 * time.Second}
 	return sampleKafkaCommittedLag(ctx, client, topic, group)
+}
+
+// KafkaConsumerGroup returns the coordinator's current consumer-group state
+// and each member's client ID and subscribed topics. It does not change group
+// offsets or consume messages.
+func KafkaConsumerGroup(ctx context.Context, cfg config.KafkaConfig, group string) (KafkaGroupDescription, error) {
+	group = strings.TrimSpace(group)
+	brokers := normalizedBrokers(cfg.Brokers)
+	if len(brokers) == 0 || strings.TrimSpace(group) == "" {
+		return KafkaGroupDescription{}, errors.New("Kafka consumer group configuration is incomplete")
+	}
+	client := &kafka.Client{Addr: kafka.TCP(brokers...), Timeout: 5 * time.Second}
+	return describeKafkaConsumerGroup(ctx, client, group)
+}
+
+func describeKafkaConsumerGroup(ctx context.Context, client kafkaDescribeGroupsClient, group string) (KafkaGroupDescription, error) {
+	group = strings.TrimSpace(group)
+	if ctx == nil {
+		return KafkaGroupDescription{}, errors.New("Kafka consumer group context is nil")
+	}
+	if client == nil {
+		return KafkaGroupDescription{}, errors.New("Kafka consumer group client is nil")
+	}
+	if group == "" {
+		return KafkaGroupDescription{}, errors.New("Kafka consumer group id is required")
+	}
+	response, err := client.DescribeGroups(ctx, &kafka.DescribeGroupsRequest{GroupIDs: []string{group}})
+	if err != nil {
+		return KafkaGroupDescription{}, err
+	}
+	if response == nil {
+		return KafkaGroupDescription{}, errors.New("Kafka consumer group response is missing")
+	}
+	for _, described := range response.Groups {
+		if described.GroupID != group {
+			continue
+		}
+		if described.Error != nil {
+			return KafkaGroupDescription{}, described.Error
+		}
+		result := KafkaGroupDescription{GroupID: described.GroupID, State: described.GroupState}
+		for _, member := range described.Members {
+			result.Members = append(result.Members, KafkaGroupMember{
+				ClientID: member.ClientID,
+				Topics:   append([]string(nil), member.MemberMetadata.Topics...),
+			})
+		}
+		return result, nil
+	}
+	if len(response.Groups) == 1 && response.Groups[0].Error != nil {
+		return KafkaGroupDescription{}, response.Groups[0].Error
+	}
+	return KafkaGroupDescription{}, fmt.Errorf("Kafka consumer group %q was not returned", group)
 }
 
 func sampleKafkaCommittedLag(ctx context.Context, client kafkaLagClient, topic, group string) (int64, error) {

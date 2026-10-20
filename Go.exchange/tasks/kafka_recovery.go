@@ -23,21 +23,19 @@ const (
 )
 
 const (
-	kafkaFailureCodeDecodeEnvelope          = "decode_envelope"
-	kafkaFailureCodeUnsupportedEvent        = "unsupported_event_type"
-	kafkaFailureCodeUnsupportedSchema       = "unsupported_schema"
-	kafkaFailureCodeDecodePayload           = "decode_payload"
-	kafkaFailureCodeInvalidPayload          = "invalid_payload"
-	kafkaFailureCodeDatabaseUnavailable     = "database_unavailable"
-	kafkaFailureCodeDatabaseTransaction     = "database_transaction"
-	kafkaFailureCodeDLQPublish              = "dlq_publish"
-	kafkaFailureCodeKafkaCommit             = "kafka_commit"
-	kafkaFailureCodeProviderRetryable       = "provider_retryable"
-	kafkaFailureCodeProviderPermanent       = "provider_permanent"
-	kafkaFailureCodeProviderContractInvalid = "provider_contract_invalid"
-	kafkaFailureCodeSourceChanged           = "source_changed"
-	kafkaFailureCodeInternalState           = "internal_state"
-	kafkaRecoveryCodeNone                   = "none"
+	kafkaFailureCodeDecodeEnvelope      = "decode_envelope"
+	kafkaFailureCodeUnsupportedEvent    = "unsupported_event_type"
+	kafkaFailureCodeUnsupportedSchema   = "unsupported_schema"
+	kafkaFailureCodeDecodePayload       = "decode_payload"
+	kafkaFailureCodeInvalidPayload      = "invalid_payload"
+	kafkaFailureCodeDatabaseUnavailable = "database_unavailable"
+	kafkaFailureCodeDatabaseTransaction = "database_transaction"
+	kafkaFailureCodeDLQPublish          = "dlq_publish"
+	kafkaFailureCodeKafkaCommit         = "kafka_commit"
+	kafkaFailureCodeProviderRetryable   = "provider_retryable"
+	kafkaFailureCodeSourceChanged       = "source_changed"
+	kafkaFailureCodeInternalState       = "internal_state"
+	kafkaRecoveryCodeNone               = "none"
 )
 
 const (

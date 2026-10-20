@@ -171,71 +171,109 @@ func startPostEmbeddingConsumer(ctx context.Context, wg *sync.WaitGroup) {
 		defer wg.Done()
 		PipelineStarted(PipelinePostEmbedding)
 		defer PipelineStopped(PipelinePostEmbedding)
+		recovery := newPostEmbeddingRecoveryCoordinator(providerRetryRuntime{})
 		for {
-			runPostEmbeddingConsumer(ctx)
-			select {
-			case <-ctx.Done():
+			err := runPostEmbeddingConsumer(ctx, recovery)
+			if ctx.Err() != nil {
+				metrics.SetEmbeddingProviderPause(false, "", 0)
 				return
-			case <-time.After(postEmbeddingConsumerRestartDelay):
+			}
+			delay, decision, isProviderFailure := recovery.cooldownFor(err)
+			if err != nil && !isProviderFailure {
+				delay = postEmbeddingConsumerRestartDelay
+			}
+			if err == nil {
+				delay = postEmbeddingConsumerRestartDelay
+			}
+			if isProviderFailure {
+				log.Printf("[PostEmbedding] consumer cooldown action=%s reason=%s http_status=%d duration=%s", decision.Action, decision.Reason, decision.HTTPStatus, delay)
+			}
+			if waitErr := recovery.runtime.Sleep(ctx, delay); waitErr != nil {
+				metrics.SetEmbeddingProviderPause(false, "", 0)
+				return
+			}
+			if isProviderFailure {
+				metrics.SetEmbeddingProviderPause(false, "", 0)
 			}
 		}
 	}()
 }
 
-func runPostEmbeddingConsumer(ctx context.Context) {
+type postEmbeddingConsumerHooks struct {
+	retryRuntime      providerRetryRuntime
+	onProviderFailure func()
+	onOffsetCommit    func()
+}
+
+func runPostEmbeddingConsumer(ctx context.Context, recovery *postEmbeddingRecoveryCoordinator) error {
 	appConfig := config.AppConfig
 	if appConfig == nil {
-		return
+		decision := ProviderDecision{Action: ProviderActionPause, Reason: providerReasonConfig}
+		pipelineFailureWithKind(PipelinePostEmbedding, "embedding_config_invalid", 0, pipelineFailureConfiguration)
+		metrics.RecordEmbeddingProviderFailure(providerReasonConfig)
+		return &postEmbeddingProviderFailure{decision: decision, cause: errors.New("application config is not initialized")}
 	}
 	kafkaConfig := appConfig.Kafka
 	embeddingConfig := appConfig.Embedding.Normalized()
 	if err := embeddingConfig.ValidateBatchSettings(); err != nil {
-		PipelineFailure(PipelinePostEmbedding, "embedding_config_invalid", 0)
-		log.Printf("[PostEmbedding] consumer disabled: %v", err)
-		return
+		pipelineFailureWithKind(PipelinePostEmbedding, "embedding_config_invalid", 0, pipelineFailureConfiguration)
+		metrics.RecordEmbeddingProviderFailure(providerReasonConfig)
+		return &postEmbeddingProviderFailure{decision: ProviderDecision{Action: ProviderActionPause, Reason: providerReasonConfig}, cause: err}
 	}
 	db := global.WorkerDb
 	if db == nil {
-		PipelineFailure(PipelinePostEmbedding, "database_unavailable", 0)
-		log.Printf("[PostEmbedding] consumer disabled: database is not initialized")
-		return
+		pipelineFailureWithKind(PipelinePostEmbedding, "database_unavailable", 0, pipelineFailureProcessing)
+		return errors.New("database is not initialized")
 	}
 	buildVersion := strings.TrimSpace(config.BuildEmbeddingVersion())
 	if buildVersion == "" {
-		PipelineFailure(PipelinePostEmbedding, "embedding_config_invalid", 0)
-		log.Printf("[PostEmbedding] consumer disabled: build embedding version is empty")
-		return
+		pipelineFailureWithKind(PipelinePostEmbedding, "embedding_config_invalid", 0, pipelineFailureConfiguration)
+		metrics.RecordEmbeddingProviderFailure(providerReasonConfig)
+		return &postEmbeddingProviderFailure{decision: ProviderDecision{Action: ProviderActionPause, Reason: providerReasonConfig}, cause: errors.New("build embedding version is empty")}
+	}
+	if strings.TrimSpace(kafkaConfig.ConsumerDLQTopic) == "" {
+		pipelineFailureWithKind(PipelinePostEmbedding, "embedding_config_invalid", 0, pipelineFailureConfiguration)
+		return errors.New("consumer DLQ topic is required")
 	}
 	embedder, err := embeddings.NewOpenAICompatibleEmbedder(embeddingConfig)
 	if err != nil {
-		PipelineFailure(PipelinePostEmbedding, "embedding_provider_unavailable", 0)
-		log.Printf("[PostEmbedding] create embedder: %v", err)
-		return
+		pipelineFailureWithKind(PipelinePostEmbedding, "embedding_provider_unavailable", 0, pipelineFailureConfiguration)
+		metrics.RecordEmbeddingProviderFailure(providerReasonConfig)
+		return &postEmbeddingProviderFailure{decision: ProviderDecision{Action: ProviderActionPause, Reason: providerReasonConfig}, cause: err}
 	}
-	reader, err := eventing.NewKafkaReader(kafkaConfig, kafkaConfig.PostEmbeddingTopic, kafkaConfig.PostEmbeddingGroupID)
+	reader, clientID, err := eventing.NewKafkaReader(kafkaConfig, kafkaConfig.PostEmbeddingTopic, kafkaConfig.PostEmbeddingGroupID)
 	if err != nil {
-		PipelineFailure(PipelinePostEmbedding, "kafka_reader_unavailable", 0)
-		log.Printf("[PostEmbedding] create Kafka reader: %v", err)
-		return
+		pipelineFailureWithKind(PipelinePostEmbedding, "kafka_reader_unavailable", 0, pipelineFailureConfiguration)
+		return err
 	}
+	trackedReader := trackKafkaConsumerReader(PipelinePostEmbedding, kafkaConfig.PostEmbeddingTopic, kafkaConfig.PostEmbeddingGroupID, clientID, reader)
 	defer func() {
-		if closeErr := reader.Close(); closeErr != nil {
+		if closeErr := trackedReader.Close(); closeErr != nil {
 			log.Printf("[PostEmbedding] close Kafka reader: %v", closeErr)
 		}
 	}()
 	publisher := eventingRawKafkaMessagePublisher{kafkaConfig: kafkaConfig}
 	store := gormPostEmbeddingStore{db: db}
-	if err := consumePostEmbeddingMessagesWithBatchPolicy(
-		ctx, reader, publisher, embedder, store, buildVersion, kafkaConfig,
-		embeddingConfig.BatchSize, time.Duration(embeddingConfig.BatchMaxWaitMs)*time.Millisecond, defaultKafkaRetryPolicy,
-	); err != nil && ctx.Err() == nil {
+	hooks := postEmbeddingConsumerHooks{
+		retryRuntime:      normalizedProviderRetryRuntime(recovery.runtime),
+		onProviderFailure: recovery.noteProviderFailure,
+		onOffsetCommit:    recovery.offsetCommitted,
+	}
+	if err := consumePostEmbeddingMessagesWithBatchPolicyAndHooks(
+		ctx, trackedReader, publisher, embedder, store, buildVersion, kafkaConfig,
+		embeddingConfig.BatchSize, time.Duration(embeddingConfig.BatchMaxWaitMs)*time.Millisecond, defaultKafkaRetryPolicy, hooks,
+	); err != nil {
 		if errors.Is(err, errPostEmbeddingSourceChanged) {
 			log.Printf("[PostEmbedding] source changed during embedding; leaving Kafka message uncommitted for redelivery")
-			return
+			return err
 		}
-		PipelineFailure(PipelinePostEmbedding, "projection_failed", 0)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		log.Printf("[PostEmbedding] consume: %v", err)
+		return err
 	}
+	return ctx.Err()
 }
 
 func consumePostEmbeddingMessages(
@@ -275,6 +313,22 @@ func consumePostEmbeddingMessagesWithBatchPolicy(
 	maxWait time.Duration,
 	policy kafkaRetryPolicy,
 ) error {
+	return consumePostEmbeddingMessagesWithBatchPolicyAndHooks(ctx, reader, publisher, embedder, store, buildVersion, kafkaConfig, batchSize, maxWait, policy, postEmbeddingConsumerHooks{})
+}
+
+func consumePostEmbeddingMessagesWithBatchPolicyAndHooks(
+	ctx context.Context,
+	reader postEmbeddingMessageReader,
+	publisher rawKafkaMessagePublisher,
+	embedder embeddings.Embedder,
+	store postEmbeddingStore,
+	buildVersion string,
+	kafkaConfig config.KafkaConfig,
+	batchSize int,
+	maxWait time.Duration,
+	policy kafkaRetryPolicy,
+	hooks postEmbeddingConsumerHooks,
+) error {
 	if ctx == nil {
 		return errors.New("post embedding consumer context is nil")
 	}
@@ -309,13 +363,17 @@ func consumePostEmbeddingMessagesWithBatchPolicy(
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			pipelineFailureWithKind(PipelinePostEmbedding, "kafka_fetch_failed", 0, kafkaFetchFailureKind(err))
 			return err
 		}
 		metrics.ObservePostEmbeddingKafkaBatchSize(len(batch))
-		processErr := processPostEmbeddingBatch(ctx, batch, publisher, embedder, store, buildVersion, kafkaConfig, policy)
+		processErr := processPostEmbeddingBatchWithHooks(ctx, batch, publisher, embedder, store, buildVersion, kafkaConfig, policy, hooks)
 		if processErr != nil {
 			metrics.RecordPostEmbeddingBatchFailure()
 			metrics.ObservePostEmbeddingProcessingDuration(time.Since(started))
+			if ctx.Err() == nil && !errors.Is(processErr, errPostEmbeddingSourceChanged) {
+				pipelineFailureWithKind(PipelinePostEmbedding, "projection_failed", 0, pipelineFailureProcessing)
+			}
 			return processErr
 		}
 		if err := ctx.Err(); err != nil {
@@ -328,6 +386,7 @@ func consumePostEmbeddingMessagesWithBatchPolicy(
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			pipelineFailureWithKind(PipelinePostEmbedding, "kafka_commit_failed", 0, pipelineFailureCommit)
 			metrics.RecordPostEmbeddingFailure("kafka_commit")
 			commitErr := retryableKafkaError(kafkaFailureCodeKafkaCommit, err)
 			metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(commitErr))
@@ -336,6 +395,9 @@ func consumePostEmbeddingMessagesWithBatchPolicy(
 		metrics.ObservePostEmbeddingProcessingDuration(time.Since(started))
 		metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeBatchApplied, kafkaRecoveryCodeNone)
 		PipelineCommit(PipelinePostEmbedding, time.Now().UTC(), 0)
+		if hooks.onOffsetCommit != nil {
+			hooks.onOffsetCommit()
+		}
 	}
 }
 
@@ -423,6 +485,20 @@ func processPostEmbeddingBatch(
 	kafkaConfig config.KafkaConfig,
 	policy kafkaRetryPolicy,
 ) error {
+	return processPostEmbeddingBatchWithHooks(ctx, messages, publisher, embedder, store, buildVersion, kafkaConfig, policy, postEmbeddingConsumerHooks{})
+}
+
+func processPostEmbeddingBatchWithHooks(
+	ctx context.Context,
+	messages []kafka.Message,
+	publisher rawKafkaMessagePublisher,
+	embedder embeddings.Embedder,
+	store postEmbeddingStore,
+	buildVersion string,
+	kafkaConfig config.KafkaConfig,
+	policy kafkaRetryPolicy,
+	hooks postEmbeddingConsumerHooks,
+) error {
 	if ctx == nil {
 		return errors.New("post embedding processing context is nil")
 	}
@@ -470,7 +546,7 @@ func processPostEmbeddingBatch(
 	if len(workItems) == 0 {
 		return nil
 	}
-	return processPostEmbeddingWorkItems(ctx, workItems, publisher, embedder, store, buildVersion, kafkaConfig, policy)
+	return processPostEmbeddingWorkItemsWithHooks(ctx, workItems, publisher, embedder, store, buildVersion, kafkaConfig, policy, hooks)
 }
 
 func processPostEmbeddingWorkItems(
@@ -483,26 +559,44 @@ func processPostEmbeddingWorkItems(
 	kafkaConfig config.KafkaConfig,
 	policy kafkaRetryPolicy,
 ) error {
+	return processPostEmbeddingWorkItemsWithHooks(ctx, workItems, publisher, embedder, store, buildVersion, kafkaConfig, policy, postEmbeddingConsumerHooks{})
+}
+
+func processPostEmbeddingWorkItemsWithHooks(
+	ctx context.Context,
+	workItems []postEmbeddingWorkItem,
+	publisher rawKafkaMessagePublisher,
+	embedder embeddings.Embedder,
+	store postEmbeddingStore,
+	buildVersion string,
+	kafkaConfig config.KafkaConfig,
+	policy kafkaRetryPolicy,
+	hooks postEmbeddingConsumerHooks,
+) error {
 	texts := make([]string, len(workItems))
 	for index, item := range workItems {
 		texts[index] = item.Text
 	}
-	result, err := generatePostEmbeddingTexts(ctx, embedder, texts, policy)
+	result, err := generatePostEmbeddingTextsWithRuntime(ctx, embedder, texts, policy, hooks.retryRuntime, hooks.onProviderFailure)
 	if err != nil {
-		if kafkaFailureClassOf(err) != kafkaFailurePermanent {
+		decision, providerFailure := providerFailureDecision(err)
+		if !providerFailure {
 			return err
 		}
-		if len(workItems) == 1 {
+		if decision.Action == ProviderActionDeadLetter && len(workItems) == 1 {
 			message := workItems[0].Message
-			log.Printf("[PostEmbedding] permanent provider failure topic=%s partition=%d offset=%d code=%s", message.Topic, message.Partition, message.Offset, kafkaFailureCode(err))
+			log.Printf("[PostEmbedding] confirmed message-level provider failure topic=%s partition=%d offset=%d reason=%s", message.Topic, message.Partition, message.Offset, decision.Reason)
 			return publishPostEmbeddingDLQ(ctx, publisher, kafkaConfig, message, err)
+		}
+		if decision.Action != ProviderActionSplitBatch || len(workItems) < 2 {
+			return err
 		}
 		metrics.RecordPostEmbeddingBatchSplit()
 		middle := len(workItems) / 2
-		if err := processPostEmbeddingWorkItems(ctx, workItems[:middle], publisher, embedder, store, buildVersion, kafkaConfig, policy); err != nil {
+		if err := processPostEmbeddingWorkItemsWithHooks(ctx, workItems[:middle], publisher, embedder, store, buildVersion, kafkaConfig, policy, hooks); err != nil {
 			return err
 		}
-		return processPostEmbeddingWorkItems(ctx, workItems[middle:], publisher, embedder, store, buildVersion, kafkaConfig, policy)
+		return processPostEmbeddingWorkItemsWithHooks(ctx, workItems[middle:], publisher, embedder, store, buildVersion, kafkaConfig, policy, hooks)
 	}
 
 	modelName := strings.TrimSpace(result.Model)
@@ -601,41 +695,128 @@ func loadPostEmbeddingSource(
 }
 
 func generatePostEmbeddingTexts(ctx context.Context, embedder embeddings.Embedder, texts []string, policy kafkaRetryPolicy) (embeddings.EmbedResult, error) {
-	var result embeddings.EmbedResult
-	err := retryPostEmbeddingStage(ctx, policy, func() error {
-		generated, err := embedder.Embed(ctx, texts)
-		if err != nil {
-			metrics.RecordPostEmbeddingAPIRequest("error", len(texts))
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			metrics.RecordPostEmbeddingFailure("provider")
-			if embeddings.IsProviderContractError(err) {
-				return permanentKafkaError(kafkaFailureCodeProviderContractInvalid, err)
-			}
-			if embeddings.IsRetryableProviderError(err) {
-				return retryableKafkaError(kafkaFailureCodeProviderRetryable, err)
-			}
-			return permanentKafkaError(kafkaFailureCodeProviderPermanent, err)
-		}
-		if contractErr := validatePostEmbeddingBatchResult(generated, len(texts)); contractErr != nil {
-			metrics.RecordPostEmbeddingAPIRequest("error", len(texts))
-			metrics.RecordPostEmbeddingFailure("provider")
-			return permanentKafkaError(kafkaFailureCodeProviderContractInvalid, contractErr)
-		}
-		metrics.RecordPostEmbeddingAPIRequest("success", len(texts))
-		result = generated
-		result.Model = strings.TrimSpace(result.Model)
-		return nil
-	})
-	if err != nil {
-		if kafkaFailureClassOf(err) == kafkaFailurePermanent {
-			log.Printf("[PostEmbedding] permanent provider result: %v", err)
-			metrics.RecordPostEmbeddingEvent("provider_non_retryable")
-		}
-		return embeddings.EmbedResult{}, err
+	return generatePostEmbeddingTextsWithRuntime(ctx, embedder, texts, policy, providerRetryRuntime{}, nil)
+}
+
+func generatePostEmbeddingTextsWithRuntime(
+	ctx context.Context,
+	embedder embeddings.Embedder,
+	texts []string,
+	policy kafkaRetryPolicy,
+	runtime providerRetryRuntime,
+	onProviderFailure func(),
+) (embeddings.EmbedResult, error) {
+	if ctx == nil {
+		return embeddings.EmbedResult{}, errors.New("post embedding provider context is nil")
 	}
-	return result, nil
+	runtime = normalizedProviderRetryRuntime(runtime)
+	policy = normalizedKafkaRetryPolicy(policy)
+	var lastFailure *postEmbeddingProviderFailure
+	for attempt := 1; attempt <= policy.MaxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return embeddings.EmbedResult{}, err
+		}
+		generated, err := embedder.Embed(ctx, texts)
+		if err == nil {
+			if contractErr := validatePostEmbeddingBatchResult(generated, len(texts)); contractErr != nil {
+				err = contractErr
+				metrics.RecordEmbeddingProviderFailure(providerReasonContract)
+				decision := ProviderDecision{Reason: providerReasonContract}
+				if len(texts) > 1 {
+					decision.Action = ProviderActionSplitBatch
+				} else {
+					decision.Action = ProviderActionPause
+				}
+				lastFailure = &postEmbeddingProviderFailure{decision: decision, cause: err}
+			} else {
+				metrics.RecordPostEmbeddingAPIRequest("success", len(texts))
+				generated.Model = strings.TrimSpace(generated.Model)
+				return generated, nil
+			}
+		} else {
+			if errors.Is(err, context.Canceled) {
+				return embeddings.EmbedResult{}, err
+			}
+			if ctx.Err() != nil {
+				return embeddings.EmbedResult{}, ctx.Err()
+			}
+			decision := classifyPostEmbeddingProviderError(err, len(texts))
+			lastFailure = &postEmbeddingProviderFailure{decision: decision, cause: err}
+			metrics.RecordEmbeddingProviderFailure(decision.Reason)
+			if decision.RetryAfterProvided && !decision.RetryAfterValid {
+				metrics.RecordEmbeddingProviderFailure(providerReasonRetryAfterInvalid)
+				logInvalidRetryAfter(decision.HTTPStatus)
+			}
+			if decision.RetryAfterValid && decision.RetryAfter > postEmbeddingLongRetryAfterAlert {
+				metrics.RecordEmbeddingProviderFailure(providerReasonRetryAfterLong)
+				log.Printf("[PostEmbedding] provider Retry-After is unusually long; honoring the supplied delay status=%d", decision.HTTPStatus)
+			}
+		}
+		metrics.RecordPostEmbeddingAPIRequest("error", len(texts))
+		metrics.RecordPostEmbeddingFailure("provider")
+		if onProviderFailure != nil {
+			onProviderFailure()
+		}
+		if lastFailure.decision.Action != ProviderActionRetry {
+			return embeddings.EmbedResult{}, lastFailure
+		}
+		if lastFailure.decision.RetryAfterValid && lastFailure.decision.RetryAfter > policy.MaxBackoff {
+			return embeddings.EmbedResult{}, lastFailure
+		}
+		if attempt == policy.MaxAttempts {
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeRetryExhausted, kafkaFailureCodeProviderRetryable)
+			return embeddings.EmbedResult{}, retryableKafkaError(kafkaFailureCodeProviderRetryable, lastFailure)
+		}
+		metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCodeProviderRetryable)
+		backoff := providerRetryBackoff(policy, attempt, runtime.Jitter)
+		if lastFailure.decision.RetryAfterValid && lastFailure.decision.RetryAfter > backoff {
+			backoff = lastFailure.decision.RetryAfter
+		}
+		if err := runtime.Sleep(ctx, backoff); err != nil {
+			return embeddings.EmbedResult{}, err
+		}
+	}
+	return embeddings.EmbedResult{}, retryableKafkaError(kafkaFailureCodeProviderRetryable, lastFailure)
+}
+
+func providerRetryBackoff(policy kafkaRetryPolicy, attempt int, jitter func(time.Duration) time.Duration) time.Duration {
+	delay := policy.InitialBackoff
+	if delay <= 0 {
+		delay = defaultKafkaRetryPolicy.InitialBackoff
+	}
+	for step := 1; step < attempt && delay < policy.MaxBackoff; step++ {
+		if delay > policy.MaxBackoff/2 {
+			delay = policy.MaxBackoff
+			break
+		}
+		delay *= 2
+	}
+	if policy.MaxBackoff > 0 && delay > policy.MaxBackoff {
+		delay = policy.MaxBackoff
+	}
+	if jitter != nil {
+		delay = jitter(delay)
+	}
+	if policy.MaxBackoff > 0 && delay > policy.MaxBackoff {
+		delay = policy.MaxBackoff
+	}
+	return delay
+}
+
+func normalizedKafkaRetryPolicy(policy kafkaRetryPolicy) kafkaRetryPolicy {
+	if policy.MaxAttempts < 1 {
+		policy.MaxAttempts = defaultKafkaRetryPolicy.MaxAttempts
+	}
+	if policy.InitialBackoff <= 0 {
+		policy.InitialBackoff = defaultKafkaRetryPolicy.InitialBackoff
+	}
+	if policy.MaxBackoff <= 0 {
+		policy.MaxBackoff = defaultKafkaRetryPolicy.MaxBackoff
+	}
+	if policy.MaxBackoff < policy.InitialBackoff {
+		policy.MaxBackoff = policy.InitialBackoff
+	}
+	return policy
 }
 
 func validatePostEmbeddingBatchResult(result embeddings.EmbedResult, expectedVectors int) error {

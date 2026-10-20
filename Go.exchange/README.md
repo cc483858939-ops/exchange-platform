@@ -48,8 +48,13 @@ Runtime readiness is evaluated from an immutable two-second snapshot. `/healthz`
 is liveness-only; `/readyz` gates API startup on PostgreSQL, the published
 `runtime_schema_state` compatibility interval and the Redis ping. Kafka is
 reported as degraded for API readiness and does not make the API endpoint
-return 503. Worker readiness additionally reports each required pipeline's
-active workers, last commit, failures and backlog. Readiness snapshots are
+return 503. Worker `/readyz` also checks its required dependencies and reports
+each required pipeline's active workers, last commit, failures and backlog.
+Kafka commits clear pipeline failures after a real commit. A Kafka pipeline
+with no new messages can recover a transport-only failure after a fresh
+committed-lag sample reports zero and every local Reader is present in a
+`Stable` consumer group subscribed to the configured topic. Lag alone cannot
+clear processing, commit or configuration failures. Readiness snapshots are
 fail-closed when their provider is unavailable or stale; the evaluator's
 timestamp and pipeline backlog-stall gauges are exported for alerting.
 

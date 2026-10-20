@@ -198,11 +198,18 @@ func resetPipelineStates(t *testing.T) {
 	t.Helper()
 	workerPipelines.Lock()
 	previous := workerPipelines.states
+	previousSessions := workerKafkaSessions
 	workerPipelines.states = make(map[string]workerPipelineState)
+	workerKafkaSessions = make(map[string]map[string]kafkaConsumerSession)
+	previousShutdown := workerShuttingDown.Swap(false)
+	previousVersion := workerPipelineVersion.Swap(0)
 	workerPipelines.Unlock()
 	t.Cleanup(func() {
 		workerPipelines.Lock()
 		workerPipelines.states = previous
+		workerKafkaSessions = previousSessions
+		workerShuttingDown.Store(previousShutdown)
+		workerPipelineVersion.Store(previousVersion)
 		workerPipelines.Unlock()
 	})
 }

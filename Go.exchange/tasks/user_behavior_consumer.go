@@ -92,22 +92,22 @@ func startUserBehaviorProjectionConsumer(ctx context.Context, wg *sync.WaitGroup
 
 func runUserBehaviorProjectionConsumer(ctx context.Context) {
 	kafkaConfig := config.AppConfig.Kafka
-	reader, err := eventing.NewKafkaReader(
+	reader, clientID, err := eventing.NewKafkaReader(
 		kafkaConfig,
 		kafkaConfig.UserBehaviorTopic,
 		kafkaConfig.UserBehaviorGroupID,
 	)
 	if err != nil {
-		PipelineFailure(PipelineUserBehaviorProjection, "kafka_reader_unavailable", 0)
+		pipelineFailureWithKind(PipelineUserBehaviorProjection, "kafka_reader_unavailable", 0, pipelineFailureConfiguration)
 		log.Printf("[BehaviorProjection] create Kafka reader: %v", err)
 		return
 	}
+	trackedReader := trackKafkaConsumerReader(PipelineUserBehaviorProjection, kafkaConfig.UserBehaviorTopic, kafkaConfig.UserBehaviorGroupID, clientID, reader)
 	userBehaviorConsumers.Add(1)
 	defer userBehaviorConsumers.Add(-1)
-	defer reader.Close()
+	defer trackedReader.Close()
 	publisher := eventingRawKafkaMessagePublisher{kafkaConfig: kafkaConfig}
-	if err := consumeUserBehaviorMessages(ctx, reader, publisher, global.WorkerDb, kafkaConfig); err != nil && ctx.Err() == nil {
-		PipelineFailure(PipelineUserBehaviorProjection, "projection_failed", 0)
+	if err := consumeUserBehaviorMessages(ctx, trackedReader, publisher, global.WorkerDb, kafkaConfig); err != nil && ctx.Err() == nil {
 		log.Printf("[BehaviorProjection] consumer stopped: %v", err)
 	}
 }
@@ -157,6 +157,7 @@ func consumeUserBehaviorMessagesWithForeignKeyLookup(
 		first, err := reader.FetchMessage(ctx)
 		if err != nil {
 			if ctx.Err() == nil {
+				pipelineFailureWithKind(PipelineUserBehaviorProjection, "kafka_fetch_failed", 0, kafkaFetchFailureKind(err))
 				log.Printf("[BehaviorProjection] fetch Kafka message: %v", err)
 			}
 			return err
@@ -164,6 +165,9 @@ func consumeUserBehaviorMessagesWithForeignKeyLookup(
 		batch := collectUserBehaviorBatch(ctx, reader, first)
 		records, err := classifyUserBehaviorBatch(ctx, publisher, kafkaConfig, batch)
 		if err != nil {
+			if ctx.Err() == nil {
+				pipelineFailureWithKind(PipelineUserBehaviorProjection, "projection_failed", 0, pipelineFailureProcessing)
+			}
 			return fmt.Errorf("classify user behavior batch of %d messages: %w", len(batch), err)
 		}
 		if len(records) > 0 {
@@ -221,6 +225,7 @@ func consumeUserBehaviorMessagesWithForeignKeyLookup(
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
+				pipelineFailureWithKind(PipelineUserBehaviorProjection, "projection_failed", 0, pipelineFailureProcessing)
 				if kafkaFailureClassOf(err) == kafkaFailureRetryable && attempts >= policy.MaxAttempts {
 					metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeRetryExhausted, kafkaFailureCode(err))
 				}
@@ -233,6 +238,7 @@ func consumeUserBehaviorMessagesWithForeignKeyLookup(
 		}
 		if err := reader.CommitMessages(ctx, batch...); err != nil {
 			if ctx.Err() == nil {
+				pipelineFailureWithKind(PipelineUserBehaviorProjection, "kafka_commit_failed", 0, pipelineFailureCommit)
 				log.Printf("[BehaviorProjection] commit Kafka batch: %v", err)
 			}
 			if ctx.Err() != nil {
@@ -259,6 +265,7 @@ func collectUserBehaviorBatch(ctx context.Context, reader userBehaviorMessageRea
 			if collectCtx.Err() != nil || ctx.Err() != nil {
 				break
 			}
+			pipelineFailureWithKind(PipelineUserBehaviorProjection, "kafka_fetch_failed", 0, kafkaFetchFailureKind(err))
 			log.Printf("[BehaviorProjection] collect Kafka message: %v", err)
 			break
 		}

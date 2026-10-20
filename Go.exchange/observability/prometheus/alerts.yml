@@ -60,6 +60,32 @@ groups:
           summary: Kafka consumer retries exhausted
           description: A Kafka consumer exhausted bounded in-process retries during the last fifteen minutes.
 
+      - alert: GoExchangeEmbeddingProviderPaused
+        expr: go_exchange_embedding_provider_pause_active{job="go-exchange-worker"} == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Post embedding provider is paused
+          description: The Post embedding consumer has paused provider requests for more than one minute; inspect the bounded pause reason and provider configuration.
+
+      - alert: GoExchangeEmbeddingProviderRetryExhaustedRepeated
+        expr: increase(go_exchange_kafka_consumer_recovery_total{job="go-exchange-worker",consumer="post_embedding",outcome="retry_exhausted"}[15m]) >= 3
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Post embedding provider retries repeatedly exhausted
+          description: The Post embedding consumer exhausted short provider retries at least three times in fifteen minutes.
+
+      - alert: GoExchangeEmbeddingProviderRetryAfterInvalid
+        expr: increase(go_exchange_embedding_provider_failures_total{job="go-exchange-worker",reason=~"retry_after_invalid|retry_after_long"}[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Post embedding provider Retry-After needs review
+          description: The provider returned an invalid, unrepresentable, or unusually long Retry-After value; invalid values use local backoff and valid long delays are honored.
+
   - name: go-exchange-runtime-readiness
     rules:
       - alert: GoExchangeRuntimeDependencyNotReady

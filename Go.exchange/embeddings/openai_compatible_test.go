@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -87,12 +87,11 @@ func TestOpenAICompatibleEmbedderRejectsProviderFailuresWithoutLeakingKey(t *tes
 
 func TestOpenAICompatibleEmbedderHTTPStatusFailuresStayProviderErrors(t *testing.T) {
 	tests := []struct {
-		name      string
-		status    int
-		retryable bool
+		name   string
+		status int
 	}{
-		{name: "503", status: http.StatusServiceUnavailable, retryable: true},
-		{name: "422", status: http.StatusUnprocessableEntity, retryable: false},
+		{name: "503", status: http.StatusServiceUnavailable},
+		{name: "422", status: http.StatusUnprocessableEntity},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -104,43 +103,8 @@ func TestOpenAICompatibleEmbedderHTTPStatusFailuresStayProviderErrors(t *testing
 			if !errors.As(err, &providerErr) || providerErr.StatusCode != test.status {
 				t.Fatalf("error=%T %v want ProviderHTTPError status %d", err, err, test.status)
 			}
-			if IsProviderContractError(err) || IsRetryableProviderError(err) != test.retryable {
-				t.Fatalf("contract=%t retryable=%t want retryable=%t", IsProviderContractError(err), IsRetryableProviderError(err), test.retryable)
-			}
-		})
-	}
-}
-
-func TestIsRetryableProviderError(t *testing.T) {
-	tests := []struct {
-		name      string
-		err       error
-		retryable bool
-	}{
-		{name: "nil", err: nil, retryable: false},
-		{name: "canceled", err: context.Canceled, retryable: false},
-		{name: "deadline", err: context.DeadlineExceeded, retryable: true},
-		{name: "network timeout", err: &net.DNSError{IsTimeout: true}, retryable: true},
-		{name: "400", err: &ProviderHTTPError{StatusCode: http.StatusBadRequest}, retryable: false},
-		{name: "413", err: &ProviderHTTPError{StatusCode: http.StatusRequestEntityTooLarge}, retryable: false},
-		{name: "422", err: &ProviderHTTPError{StatusCode: http.StatusUnprocessableEntity}, retryable: false},
-		{name: "401", err: &ProviderHTTPError{StatusCode: http.StatusUnauthorized}, retryable: true},
-		{name: "403", err: &ProviderHTTPError{StatusCode: http.StatusForbidden}, retryable: true},
-		{name: "404", err: &ProviderHTTPError{StatusCode: http.StatusNotFound}, retryable: true},
-		{name: "408", err: &ProviderHTTPError{StatusCode: http.StatusRequestTimeout}, retryable: true},
-		{name: "409", err: &ProviderHTTPError{StatusCode: http.StatusConflict}, retryable: true},
-		{name: "425", err: &ProviderHTTPError{StatusCode: http.StatusTooEarly}, retryable: true},
-		{name: "429", err: &ProviderHTTPError{StatusCode: http.StatusTooManyRequests}, retryable: true},
-		{name: "500", err: &ProviderHTTPError{StatusCode: http.StatusInternalServerError}, retryable: true},
-		{name: "503", err: &ProviderHTTPError{StatusCode: http.StatusServiceUnavailable}, retryable: true},
-		{name: "provider contract", err: newProviderContractError(errors.New("response is invalid")), retryable: false},
-		{name: "wrapped provider contract", err: errors.Join(errors.New("provider call failed"), newProviderContractError(errors.New("response is invalid"))), retryable: false},
-		{name: "unknown", err: errors.New("provider response was malformed"), retryable: true},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := IsRetryableProviderError(test.err); got != test.retryable {
-				t.Fatalf("retryable=%t want=%t", got, test.retryable)
+			if IsProviderContractError(err) {
+				t.Fatalf("HTTP status error was classified as a response contract error: %v", err)
 			}
 		})
 	}
@@ -151,9 +115,6 @@ func TestProviderContractErrorClassification(t *testing.T) {
 	contractErr := newProviderContractError(cause)
 	if !IsProviderContractError(contractErr) {
 		t.Fatal("typed provider contract error was not recognized")
-	}
-	if IsRetryableProviderError(contractErr) {
-		t.Fatal("provider contract error must not be retryable")
 	}
 	if !errors.Is(contractErr, cause) {
 		t.Fatal("provider contract error does not unwrap to its cause")
@@ -189,9 +150,6 @@ func TestOpenAICompatibleEmbedderRejectsMalformedResponses(t *testing.T) {
 			if err == nil || !IsProviderContractError(err) {
 				t.Fatalf("expected typed provider contract error, got %v", err)
 			}
-			if IsRetryableProviderError(err) {
-				t.Fatalf("provider contract error must not be retryable: %v", err)
-			}
 		})
 	}
 }
@@ -205,8 +163,8 @@ func TestOpenAICompatibleEmbedderClassifiesNonFiniteContractResponse(t *testing.
 		t.Fatal("expected non-finite vector validation error")
 	}
 	contractErr := newProviderContractError(validationErr)
-	if !IsProviderContractError(contractErr) || IsRetryableProviderError(contractErr) || !errors.Is(contractErr, validationErr) {
-		t.Fatalf("non-finite validation error classification: contract=%t retryable=%t err=%v", IsProviderContractError(contractErr), IsRetryableProviderError(contractErr), contractErr)
+	if !IsProviderContractError(contractErr) || !errors.Is(contractErr, validationErr) {
+		t.Fatalf("non-finite validation error classification: contract=%t err=%v", IsProviderContractError(contractErr), contractErr)
 	}
 }
 
@@ -216,13 +174,105 @@ func TestOpenAICompatibleEmbedderRejectsEmptyProviderModel(t *testing.T) {
 		_, _ = w.Write([]byte(`{"model":"   ","data":[{"index":0,"embedding":[1,2]}]}`))
 	})
 	result, err := embedder.Embed(context.Background(), []string{"text"})
-	if err == nil || !IsProviderContractError(err) || IsRetryableProviderError(err) {
-		t.Fatalf("empty provider model error=%v contract=%t retryable=%t", err, IsProviderContractError(err), IsRetryableProviderError(err))
+	if err == nil || !IsProviderContractError(err) {
+		t.Fatalf("empty provider model error=%v contract=%t", err, IsProviderContractError(err))
 	}
 	if result.Model == "test-model" {
 		t.Fatalf("empty provider model fell back to configured model: %#v", result)
 	}
 }
+
+func TestProviderHTTPErrorExtractsBoundedMetadata(t *testing.T) {
+	now := time.Date(2026, time.October, 20, 1, 2, 3, 0, time.UTC)
+	response := &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header: http.Header{
+			"Retry-After":  []string{"12"},
+			"X-Request-Id": []string{"req-123\nignored"},
+		},
+		Body: io.NopCloser(strings.NewReader(`{"error":{"code":"rate_limit_exceeded","type":"rate_limit_error","message":"secret message"}}`)),
+	}
+	providerErr := parseProviderHTTPError(response, now)
+	if providerErr.StatusCode != http.StatusTooManyRequests || providerErr.ProviderCode != "rate_limit_exceeded" || providerErr.ProviderType != "rate_limit_error" || providerErr.RequestID != "req-123ignored" {
+		t.Fatalf("provider error metadata=%+v", providerErr)
+	}
+	if !providerErr.RetryAfterProvided || !providerErr.RetryAfterValid || providerErr.RetryAfter != 12*time.Second {
+		t.Fatalf("Retry-After metadata=%+v", providerErr)
+	}
+	if strings.Contains(providerErr.Error(), "secret message") {
+		t.Fatalf("provider error leaked raw response text: %v", providerErr)
+	}
+}
+
+func TestProviderHTTPErrorMetadataFieldsAreLengthLimited(t *testing.T) {
+	longField := strings.Repeat("a", 256)
+	response := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"X-Request-Id": []string{longField}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"code":"` + longField + `","type":"` + longField + `"}}`)),
+	}
+	providerErr := parseProviderHTTPError(response, time.Now().UTC())
+	if len(providerErr.ProviderCode) > 128 || len(providerErr.ProviderType) > 128 || len(providerErr.RequestID) > 128 {
+		t.Fatalf("provider metadata exceeded bounds: code=%d type=%d request_id=%d", len(providerErr.ProviderCode), len(providerErr.ProviderType), len(providerErr.RequestID))
+	}
+}
+
+func TestProviderRetryAfterParsing(t *testing.T) {
+	now := time.Date(2026, time.October, 20, 1, 2, 3, 0, time.UTC)
+	wantDate := now.Add(45 * time.Second)
+	tests := []struct {
+		name  string
+		value string
+		want  time.Duration
+		valid bool
+	}{
+		{name: "integer seconds", value: "9", want: 9 * time.Second, valid: true},
+		{name: "http date", value: wantDate.Format(http.TimeFormat), want: 45 * time.Second, valid: true},
+		{name: "past date", value: now.Add(-time.Minute).Format(http.TimeFormat), valid: true},
+		{name: "missing", value: "", valid: false},
+		{name: "negative", value: "-1", valid: false},
+		{name: "overflow seconds", value: "18446744073709551615", valid: false},
+		{name: "unrepresentable duration", value: "9223372037", valid: false},
+		{name: "invalid text", value: "later", valid: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, valid := parseProviderRetryAfter(test.value, now)
+			if valid != test.valid || got != test.want {
+				t.Fatalf("parsed=%s valid=%t want=%s valid=%t", got, valid, test.want, test.valid)
+			}
+		})
+	}
+	longDelay, valid := parseProviderRetryAfter("2592000", now)
+	if !valid || longDelay != 30*24*time.Hour {
+		t.Fatalf("long Retry-After=%s valid=%t, want 30 days and preserved", longDelay, valid)
+	}
+}
+
+func TestProviderHTTPErrorBodyReadIsBounded(t *testing.T) {
+	body := `{"error":{"code":"bounded"},"padding":"` + strings.Repeat("x", providerErrorBodyLimit*2) + `"}`
+	read := &countingProviderErrorBody{reader: strings.NewReader(body)}
+	providerErr := parseProviderHTTPError(&http.Response{StatusCode: 429, Body: read}, time.Now())
+	if read.bytesRead != providerErrorBodyLimit {
+		t.Fatalf("error response read %d bytes, want at most %d", read.bytesRead, providerErrorBodyLimit)
+	}
+	if providerErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status was lost after bounded body read: %+v", providerErr)
+	}
+}
+
+type countingProviderErrorBody struct {
+	reader    *strings.Reader
+	bytesRead int
+}
+
+func (b *countingProviderErrorBody) Read(p []byte) (int, error) {
+	n, err := b.reader.Read(p)
+	b.bytesRead += n
+	return n, err
+}
+
+func (*countingProviderErrorBody) Close() error { return nil }
 
 func TestOpenAICompatibleEmbedderRejectsNonFiniteVector(t *testing.T) {
 	_, err := validateEmbeddingData([]struct {

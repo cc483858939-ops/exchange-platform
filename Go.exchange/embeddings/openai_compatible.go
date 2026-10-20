@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,7 +26,13 @@ type OpenAICompatibleEmbedder struct {
 }
 
 type ProviderHTTPError struct {
-	StatusCode int
+	StatusCode         int
+	ProviderCode       string
+	ProviderType       string
+	RetryAfter         time.Duration
+	RetryAfterProvided bool
+	RetryAfterValid    bool
+	RequestID          string
 }
 
 func (e *ProviderHTTPError) Error() string {
@@ -38,10 +44,7 @@ type ProviderContractError struct {
 }
 
 func (e *ProviderContractError) Error() string {
-	if e == nil || e.cause == nil {
-		return "embedding provider returned an invalid response"
-	}
-	return "embedding provider returned an invalid response: " + e.cause.Error()
+	return "embedding provider returned an invalid response"
 }
 
 func (e *ProviderContractError) Unwrap() error {
@@ -63,33 +66,83 @@ func IsProviderContractError(err error) bool {
 	return errors.As(err, &contractErr)
 }
 
-func IsRetryableProviderError(err error) bool {
-	if err == nil {
+const providerErrorBodyLimit = 16 << 10
+
+func parseProviderHTTPError(response *http.Response, now time.Time) *ProviderHTTPError {
+	providerErr := &ProviderHTTPError{
+		StatusCode: response.StatusCode,
+		RequestID:  safeProviderMetadataField(response.Header.Get("x-request-id"), 128),
+	}
+	if response.Body != nil {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, providerErrorBodyLimit))
+		var envelope struct {
+			Error struct {
+				Code string `json:"code"`
+				Type string `json:"type"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(body, &envelope) == nil {
+			providerErr.ProviderCode = safeProviderMetadataField(envelope.Error.Code, 128)
+			providerErr.ProviderType = safeProviderMetadataField(envelope.Error.Type, 128)
+		}
+	}
+	if retryAfter := strings.TrimSpace(response.Header.Get("Retry-After")); retryAfter != "" {
+		providerErr.RetryAfterProvided = true
+		providerErr.RetryAfter, providerErr.RetryAfterValid = parseProviderRetryAfter(retryAfter, now)
+	}
+	return providerErr
+}
+
+func parseProviderRetryAfter(value string, now time.Time) (time.Duration, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	if isASCIIDigits(value) {
+		seconds, err := strconv.ParseUint(value, 10, 64)
+		if err != nil || seconds > uint64(math.MaxInt64/int64(time.Second)) {
+			return 0, false
+		}
+		return time.Duration(seconds) * time.Second, true
+	}
+	retryAt, err := http.ParseTime(value)
+	if err != nil {
+		return 0, false
+	}
+	if !retryAt.After(now) {
+		return 0, true
+	}
+	maxWait := time.Duration(math.MaxInt64)
+	if retryAt.After(now.Add(maxWait)) {
+		return 0, false
+	}
+	return retryAt.Sub(now), true
+}
+
+func isASCIIDigits(value string) bool {
+	if value == "" {
 		return false
 	}
-	if errors.Is(err, context.Canceled) {
-		return false
-	}
-	if IsProviderContractError(err) {
-		return false
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return true
-	}
-	var httpErr *ProviderHTTPError
-	if errors.As(err, &httpErr) {
-		switch httpErr.StatusCode {
-		case http.StatusBadRequest, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
+	for _, char := range value {
+		if char < '0' || char > '9' {
 			return false
 		}
-		return true
 	}
-	var networkErr net.Error
-	if errors.As(err, &networkErr) {
-		return true
-	}
-	// Unclassified provider failures remain retryable to avoid losing transient errors.
 	return true
+}
+
+func safeProviderMetadataField(value string, maxBytes int) string {
+	var safe strings.Builder
+	for _, char := range value {
+		if char < 0x20 || char > 0x7e {
+			continue
+		}
+		if safe.Len()+1 > maxBytes {
+			break
+		}
+		safe.WriteByte(byte(char))
+	}
+	return strings.TrimSpace(safe.String())
 }
 
 type embeddingRequest struct {
@@ -141,6 +194,9 @@ func resolveEmbeddingEndpoint(baseURL string) (string, error) {
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return "", errors.New("embedding base_url is invalid")
 	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", errors.New("embedding base_url must use http or https")
+	}
 	switch {
 	case strings.HasSuffix(parsed.Path, "/v1/embeddings"):
 		return parsed.String(), nil
@@ -174,7 +230,7 @@ func (e *OpenAICompatibleEmbedder) Embed(ctx context.Context, texts []string) (E
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return EmbedResult{}, &ProviderHTTPError{StatusCode: response.StatusCode}
+		return EmbedResult{}, parseProviderHTTPError(response, time.Now().UTC())
 	}
 	if response.ContentLength > e.maxResponseBytes {
 		return EmbedResult{}, newProviderContractError(errors.New("embedding response exceeds byte budget"))

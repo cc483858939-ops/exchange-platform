@@ -106,18 +106,19 @@ func startNotificationProjectionConsumer(ctx context.Context, wg *sync.WaitGroup
 }
 
 func runNotificationProjectionConsumer(ctx context.Context) {
-	reader, err := eventing.NewKafkaReader(config.AppConfig.Kafka, config.AppConfig.Kafka.ActivityEventsTopic, config.AppConfig.Kafka.NotificationGroupID)
+	kafkaConfig := config.AppConfig.Kafka
+	reader, clientID, err := eventing.NewKafkaReader(kafkaConfig, kafkaConfig.ActivityEventsTopic, kafkaConfig.NotificationGroupID)
 	if err != nil {
-		PipelineFailure(PipelineNotificationProjection, "kafka_reader_unavailable", 0)
+		pipelineFailureWithKind(PipelineNotificationProjection, "kafka_reader_unavailable", 0, pipelineFailureConfiguration)
 		log.Printf("[NotificationProjection] create Kafka reader: %v", err)
 		return
 	}
-	publisher := rawNotificationPublisher{config: config.AppConfig.Kafka}
+	trackedReader := trackKafkaConsumerReader(PipelineNotificationProjection, kafkaConfig.ActivityEventsTopic, kafkaConfig.NotificationGroupID, clientID, reader)
+	publisher := rawNotificationPublisher{config: kafkaConfig}
 	notificationConsumers.Add(1)
 	defer notificationConsumers.Add(-1)
-	defer reader.Close()
-	if err := consumeNotificationMessages(ctx, reader, publisher); err != nil && ctx.Err() == nil {
-		PipelineFailure(PipelineNotificationProjection, "projection_failed", 0)
+	defer trackedReader.Close()
+	if err := consumeNotificationMessages(ctx, trackedReader, publisher); err != nil && ctx.Err() == nil {
 		log.Printf("[NotificationProjection] consumer stopped: %v", err)
 	}
 }
@@ -128,17 +129,23 @@ func consumeNotificationMessages(ctx context.Context, reader notificationMessage
 	for {
 		first, err := reader.FetchMessage(ctx)
 		if err != nil {
+			if ctx.Err() == nil {
+				pipelineFailureWithKind(PipelineNotificationProjection, "kafka_fetch_failed", 0, kafkaFetchFailureKind(err))
+			}
 			return err
 		}
 		batch := collectNotificationBatch(ctx, reader, first)
 		if err := processNotificationBatch(ctx, batch, publisher); err != nil {
+			if ctx.Err() == nil {
+				pipelineFailureWithKind(PipelineNotificationProjection, "projection_failed", 0, pipelineFailureProcessing)
+			}
 			return err
 		}
 		if err := reader.CommitMessages(ctx, batch...); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			PipelineFailure(PipelineNotificationProjection, "kafka_commit_failed", 0)
+			pipelineFailureWithKind(PipelineNotificationProjection, "kafka_commit_failed", 0, pipelineFailureCommit)
 			commitErr := retryableKafkaError(kafkaFailureCodeKafkaCommit, err)
 			metrics.RecordKafkaConsumerRecovery(kafkaConsumerNotificationProjection, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(commitErr))
 			return commitErr
@@ -157,6 +164,10 @@ func collectNotificationBatch(ctx context.Context, reader notificationMessageRea
 	for len(batch) < notificationBatchSize {
 		message, err := reader.FetchMessage(collectCtx)
 		if err != nil {
+			if collectCtx.Err() == nil && ctx.Err() == nil {
+				pipelineFailureWithKind(PipelineNotificationProjection, "kafka_fetch_failed", 0, kafkaFetchFailureKind(err))
+				log.Printf("[NotificationProjection] collect Kafka message: %v", err)
+			}
 			break
 		}
 		batch = append(batch, message)

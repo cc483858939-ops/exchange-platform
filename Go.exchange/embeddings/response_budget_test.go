@@ -26,7 +26,7 @@ type embeddingBudgetTransport func(*http.Request) (*http.Response, error)
 
 func (f embeddingBudgetTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestEmbeddingResponseBudgetBoundsUnknownLengthAndClassifiesPermanent(t *testing.T) {
+func TestEmbeddingResponseBudgetBoundsUnknownLengthAndClassifiesContractError(t *testing.T) {
 	normal := `{"model":"test-model","data":[{"index":0,"embedding":[0.1,0.2]}]}`
 	for _, tc := range []struct {
 		name, body string
@@ -51,8 +51,8 @@ func TestEmbeddingResponseBudgetBoundsUnknownLengthAndClassifiesPermanent(t *tes
 			if (err == nil) != tc.valid || body.read > 129 || !body.closed {
 				t.Fatalf("valid=%t err=%v bytes=%d closed=%t", tc.valid, err, body.read, body.closed)
 			}
-			if !tc.valid && (!IsProviderContractError(err) || IsRetryableProviderError(err)) {
-				t.Fatalf("deterministic response failure was retryable: %v", err)
+			if !tc.valid && !IsProviderContractError(err) {
+				t.Fatalf("response budget failure was not classified as contract error: %v", err)
 			}
 		})
 	}

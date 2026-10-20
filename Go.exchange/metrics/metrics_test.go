@@ -145,7 +145,7 @@ func TestHandlerExposesPipelineMetrics(t *testing.T) {
 func TestHandlerExposesKafkaConsumerRecoveryMetrics(t *testing.T) {
 	consumers := []string{"like_snapshot_projection", "user_behavior_projection", "recommendation_metrics", "post_embedding", "notification_projection"}
 	outcomes := []string{"message_applied", "batch_applied", "message_noop", "retry_attempt", "retry_exhausted", "message_dlq", "dlq_publish_failed", "redelivery_required"}
-	codes := []string{"none", "decode_envelope", "unsupported_event_type", "unsupported_schema", "decode_payload", "invalid_payload", "database_unavailable", "database_transaction", "dlq_publish", "kafka_commit", "provider_retryable", "provider_permanent", "provider_contract_invalid", "source_changed", "internal_state"}
+	codes := []string{"none", "decode_envelope", "unsupported_event_type", "unsupported_schema", "decode_payload", "invalid_payload", "database_unavailable", "database_transaction", "dlq_publish", "kafka_commit", "provider_retryable", "source_changed", "internal_state"}
 	for _, consumer := range consumers {
 		RecordKafkaConsumerRecovery(consumer, "message_dlq", "decode_envelope")
 	}
@@ -192,6 +192,40 @@ func TestHandlerExposesKafkaConsumerRecoveryMetrics(t *testing.T) {
 	}
 	if strings.Contains(body, "unbounded-error-code") || strings.Contains(body, "unbounded-outcome") || strings.Contains(body, "unbounded-topic") {
 		t.Fatal("unbounded Kafka recovery labels were exported")
+	}
+}
+
+func TestHandlerExposesBoundedEmbeddingProviderRecoveryMetrics(t *testing.T) {
+	SetEmbeddingProviderPause(true, "quota", 1_900_000_000)
+	RecordEmbeddingProviderFailure("quota")
+	RecordEmbeddingProviderFailure("raw-provider-message-must-not-be-a-label")
+	RecordEmbeddingProviderRecovery()
+	t.Cleanup(func() { SetEmbeddingProviderPause(false, "", 0) })
+
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := response.Body.String()
+	for _, sample := range []string{
+		"go_exchange_embedding_provider_pause_active 1",
+		`go_exchange_embedding_provider_pause_reason{reason="quota"} 1`,
+		`go_exchange_embedding_provider_failures_total{reason="quota"} `,
+		`go_exchange_embedding_provider_failures_total{reason="unknown"} `,
+		"go_exchange_embedding_provider_next_retry_timestamp_seconds 1.9e+09",
+		"go_exchange_embedding_provider_recoveries_total ",
+	} {
+		if !strings.Contains(body, sample) {
+			t.Errorf("embedding provider metric missing %q", sample)
+		}
+	}
+	if strings.Contains(body, "raw-provider-message-must-not-be-a-label") {
+		t.Fatal("raw provider error text was exposed as a metric label")
+	}
+	SetEmbeddingProviderPause(false, "", 0)
+	response = httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body = response.Body.String()
+	if !strings.Contains(body, "go_exchange_embedding_provider_pause_active 0") || !strings.Contains(body, "go_exchange_embedding_provider_next_retry_timestamp_seconds 0") {
+		t.Fatal("provider cooldown metrics did not clear after recovery")
 	}
 }
 
