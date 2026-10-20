@@ -1045,11 +1045,27 @@ func TestMultiConsumerAllSlotsRecovered(t *testing.T) {
 
 func TestKafkaConsumerMissingSessionAfterStartupGrace(t *testing.T) {
 	resetPipelineStates(t)
-	base := time.Now().UTC()
 	const name = PipelineNotificationProjection
 	setupKafkaPipeline(t, name, 2, []string{"reader-a"})
-	pipelineKafkaBacklogSample(name, 0, base, true)
-	reasons := evaluatePipelineHealth(base.Add(workerActiveGrace + time.Nanosecond))
+
+	workerPipelines.RLock()
+	state, ok := workerPipelines.states[name]
+	registeredAt := state.registeredAt
+	workerPipelines.RUnlock()
+	if !ok {
+		t.Fatal("Kafka pipeline was not registered")
+	}
+	if registeredAt.IsZero() {
+		t.Fatal("Kafka pipeline registration time was not recorded")
+	}
+
+	pipelineKafkaBacklogSample(name, 0, registeredAt, true)
+	reasons := evaluatePipelineHealth(registeredAt.Add(workerActiveGrace))
+	if !containsWorkerReason(reasons, "worker_pipeline_starting") {
+		t.Fatalf("missing slot session should remain in startup grace at the boundary: %v", reasons)
+	}
+
+	reasons = evaluatePipelineHealth(registeredAt.Add(workerActiveGrace + time.Nanosecond))
 	if !containsWorkerReason(reasons, "worker_kafka_consumer_session_unavailable") {
 		t.Fatalf("missing slot session was not fail-closed after startup grace: %v", reasons)
 	}
