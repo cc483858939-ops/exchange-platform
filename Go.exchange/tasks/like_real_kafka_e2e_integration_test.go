@@ -152,8 +152,8 @@ func TestLikeRedisKafkaPostgresE2EIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
 	var consumers sync.WaitGroup
 	consumers.Add(2)
-	go func() { defer consumers.Done(); runLikeSnapshotProjectionConsumer(ctx) }()
-	go func() { defer consumers.Done(); runUserBehaviorProjectionConsumer(ctx) }()
+	go func() { defer consumers.Done(); runLikeSnapshotProjectionConsumer(ctx, 0) }()
+	go func() { defer consumers.Done(); runUserBehaviorProjectionConsumer(ctx, 0) }()
 	defer func() {
 		cancel()
 		consumers.Wait()

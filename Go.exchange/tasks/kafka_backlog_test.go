@@ -12,28 +12,46 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
+func setupKafkaPipeline(t *testing.T, name string, expected int, clients []string) []func() {
+	t.Helper()
+	now := time.Now().UTC()
+	registerPipelineAt(name, expected, now)
+	unregister := make([]func(), 0, len(clients))
+	for slotID := 0; slotID < expected; slotID++ {
+		KafkaConsumerSlotStarted(name, slotID)
+		if slotID < len(clients) {
+			unregister = append(unregister, registerKafkaConsumerSession(name, slotID, "events", "projection", clients[slotID]))
+		}
+	}
+	t.Cleanup(func() {
+		for _, closeSession := range unregister {
+			closeSession()
+		}
+	})
+	return unregister
+}
+
 func TestKafkaBacklogRequiresFreshGroupSamplesAndIgnoresReaderUpdates(t *testing.T) {
 	resetPipelineStates(t)
 	base := time.Now().UTC()
 	name := PipelineNotificationProjection
-	registerPipelineAt(name, 2, base)
-	pipelineStartedAt(name, base)
-	pipelineStartedAt(name, base)
+	setupKafkaPipeline(t, name, 2, []string{"reader-a", "reader-b"})
+	KafkaConsumerSlotCommitted(name, 0, base)
+	KafkaConsumerSlotCommitted(name, 1, base)
 	if reasons := evaluatePipelineHealth(base); !containsWorkerReason(reasons, "worker_pipeline_backlog_unknown") {
 		t.Fatalf("unmeasured backlog considered healthy: %v", reasons)
 	}
 	pipelineKafkaBacklogSample(name, 500, base, true)
-	pipelineCommitAt(name, base, 0, base)
-	pipelineFailureAt(name, "temporary", 0, base)
-	pipelineIdleAt(name, 0, base.Add(time.Second))
+	KafkaConsumerSlotFailed(name, 0, "temporary", pipelineFailureTransport)
+	PipelineIdle(name, 0)
 	state := pipelineSnapshots()[name]
-	if state.Backlog != 500 || !state.LastProgressAt.Equal(base) {
-		t.Fatalf("consumer updates changed sampled backlog/progress: %+v", state)
+	if state.Backlog != 500 || !state.LastProgressAt.Equal(base) || state.ConsecutiveFailures != 1 {
+		t.Fatalf("consumer updates changed sampled backlog, progress, or failure: %+v", state)
 	}
 	pipelineKafkaBacklogSample(name, 0, base.Add(time.Second), false)
 	state = pipelineSnapshots()[name]
 	if state.Backlog != 500 || state.BacklogSampleValid || !state.BacklogSampleAt.Equal(base) {
-		t.Fatalf("failure erased sample: %+v", state)
+		t.Fatalf("failed sample replaced the last known lag: %+v", state)
 	}
 	if reasons := evaluatePipelineHealth(base.Add(time.Second)); !containsWorkerReason(reasons, "worker_pipeline_backlog_unknown") {
 		t.Fatal(reasons)
@@ -51,10 +69,9 @@ func TestKafkaPipelineIdleCannotClearFailureWithoutDedicatedRecovery(t *testing.
 	resetPipelineStates(t)
 	base := time.Now().UTC()
 	name := PipelineNotificationProjection
-	registerPipelineAt(name, 1, base)
-	pipelineStartedAt(name, base)
+	setupKafkaPipeline(t, name, 1, []string{"reader-a"})
 	for i := 0; i < 3; i++ {
-		pipelineFailureAtWithKind(name, "kafka_fetch_failed", 0, pipelineFailureTransport, base.Add(time.Duration(i+1)*time.Second))
+		KafkaConsumerSlotFailed(name, 0, "kafka_fetch_failed", pipelineFailureTransport)
 	}
 	pipelineIdleAt(name, 0, base.Add(4*time.Second))
 	state := pipelineSnapshots()[name]
@@ -67,9 +84,10 @@ func TestKafkaTransportIdleRecoveryRequiresAllEvidence(t *testing.T) {
 	for _, test := range []struct {
 		name          string
 		failureKinds  []pipelineFailureKinds
-		sessions      []string
+		clients       []string
 		lag           int64
 		lagErr        error
+		groupErr      error
 		groupState    string
 		memberMode    string
 		shuttingDown  bool
@@ -77,38 +95,33 @@ func TestKafkaTransportIdleRecoveryRequiresAllEvidence(t *testing.T) {
 		wantGroupCall bool
 		queryMutation string
 	}{
-		{name: "stable local members", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, sessions: []string{"reader-1", "reader-2"}, groupState: "Stable", memberMode: "local", wantRecovered: true, wantGroupCall: true},
-		{name: "no local readers", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, groupState: "Stable", memberMode: "other", wantGroupCall: false},
-		{name: "empty group", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, sessions: []string{"reader-1", "reader-2"}, groupState: "Empty", memberMode: "local", wantGroupCall: true},
-		{name: "preparing rebalance", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, sessions: []string{"reader-1", "reader-2"}, groupState: "PreparingRebalance", memberMode: "local", wantGroupCall: true},
-		{name: "completing rebalance", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, sessions: []string{"reader-1", "reader-2"}, groupState: "CompletingRebalance", memberMode: "local", wantGroupCall: true},
-		{name: "client id mismatch", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, sessions: []string{"reader-1", "reader-2"}, groupState: "Stable", memberMode: "other", wantGroupCall: true},
-		{name: "member does not subscribe to target topic", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, sessions: []string{"reader-1", "reader-2"}, groupState: "Stable", memberMode: "wrong topic", wantGroupCall: true},
-		{name: "partial local recovery", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, sessions: []string{"reader-1"}, groupState: "Stable", memberMode: "local", wantGroupCall: false},
-		{name: "other workers only", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, sessions: []string{"reader-1", "reader-2"}, groupState: "Stable", memberMode: "other", wantGroupCall: true},
-		{name: "positive lag", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, sessions: []string{"reader-1", "reader-2"}, lag: 2, groupState: "Stable", memberMode: "local", wantGroupCall: false},
-		{name: "lag sample error", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, sessions: []string{"reader-1", "reader-2"}, lagErr: errors.New("broker unavailable"), groupState: "Stable", memberMode: "local", wantGroupCall: false},
-		{name: "processing failure", failureKinds: []pipelineFailureKinds{pipelineFailureProcessing, pipelineFailureProcessing, pipelineFailureProcessing}, sessions: []string{"reader-1", "reader-2"}, groupState: "Stable", memberMode: "local", wantGroupCall: false},
-		{name: "commit failure", failureKinds: []pipelineFailureKinds{pipelineFailureCommit, pipelineFailureCommit, pipelineFailureCommit}, sessions: []string{"reader-1", "reader-2"}, groupState: "Stable", memberMode: "local", wantGroupCall: false},
-		{name: "configuration failure", failureKinds: []pipelineFailureKinds{pipelineFailureConfiguration, pipelineFailureConfiguration, pipelineFailureConfiguration}, sessions: []string{"reader-1", "reader-2"}, groupState: "Stable", memberMode: "local", wantGroupCall: false},
-		{name: "mixed failure history", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureProcessing, pipelineFailureTransport}, sessions: []string{"reader-1", "reader-2"}, groupState: "Stable", memberMode: "local", wantGroupCall: false},
-		{name: "shutdown", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, sessions: []string{"reader-1", "reader-2"}, groupState: "Stable", memberMode: "local", shuttingDown: true, wantGroupCall: false},
-		{name: "new failure during group query", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, sessions: []string{"reader-1", "reader-2"}, groupState: "Stable", memberMode: "local", wantGroupCall: true, queryMutation: "failure"},
+		{name: "stable local members", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, clients: []string{"reader-a", "reader-b"}, groupState: "Stable", memberMode: "local", wantRecovered: true, wantGroupCall: true},
+		{name: "no local readers", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, groupState: "Stable", memberMode: "other"},
+		{name: "empty group", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, clients: []string{"reader-a", "reader-b"}, groupState: "Empty", memberMode: "local", wantGroupCall: true},
+		{name: "preparing rebalance", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, clients: []string{"reader-a", "reader-b"}, groupState: "PreparingRebalance", memberMode: "local", wantGroupCall: true},
+		{name: "completing rebalance", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, clients: []string{"reader-a", "reader-b"}, groupState: "CompletingRebalance", memberMode: "local", wantGroupCall: true},
+		{name: "client id mismatch", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, clients: []string{"reader-a", "reader-b"}, groupState: "Stable", memberMode: "other", wantGroupCall: true},
+		{name: "member does not subscribe to target topic", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, clients: []string{"reader-a", "reader-b"}, groupState: "Stable", memberMode: "wrong topic", wantGroupCall: true},
+		{name: "partial local recovery", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, clients: []string{"reader-a"}, groupState: "Stable", memberMode: "local"},
+		{name: "other workers only", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, clients: []string{"reader-a", "reader-b"}, groupState: "Stable", memberMode: "other", wantGroupCall: true},
+		{name: "positive lag", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, clients: []string{"reader-a", "reader-b"}, lag: 2, groupState: "Stable", memberMode: "local"},
+		{name: "lag sample error", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, clients: []string{"reader-a", "reader-b"}, lagErr: errors.New("broker unavailable"), groupState: "Stable", memberMode: "local"},
+		{name: "group query error preserves lag", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, clients: []string{"reader-a", "reader-b"}, groupErr: errors.New("group unavailable"), groupState: "Stable", memberMode: "local", wantGroupCall: true},
+		{name: "processing failure", failureKinds: []pipelineFailureKinds{pipelineFailureProcessing, pipelineFailureProcessing, pipelineFailureProcessing}, clients: []string{"reader-a", "reader-b"}, groupState: "Stable", memberMode: "local"},
+		{name: "commit failure", failureKinds: []pipelineFailureKinds{pipelineFailureCommit, pipelineFailureCommit, pipelineFailureCommit}, clients: []string{"reader-a", "reader-b"}, groupState: "Stable", memberMode: "local"},
+		{name: "configuration failure", failureKinds: []pipelineFailureKinds{pipelineFailureConfiguration, pipelineFailureConfiguration, pipelineFailureConfiguration}, clients: []string{"reader-a", "reader-b"}, groupState: "Stable", memberMode: "local"},
+		{name: "mixed failure history", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureProcessing, pipelineFailureTransport}, clients: []string{"reader-a", "reader-b"}, groupState: "Stable", memberMode: "local"},
+		{name: "shutdown", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, clients: []string{"reader-a", "reader-b"}, groupState: "Stable", memberMode: "local", shuttingDown: true},
+		{name: "new failure during group query", failureKinds: []pipelineFailureKinds{pipelineFailureTransport, pipelineFailureTransport, pipelineFailureTransport}, clients: []string{"reader-a", "reader-b"}, groupState: "Stable", memberMode: "local", wantGroupCall: true, queryMutation: "failure"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			resetPipelineStates(t)
 			base := time.Now().UTC()
 			const name = PipelineNotificationProjection
-			registerPipelineAt(name, 2, base)
-			pipelineStartedAt(name, base)
-			pipelineStartedAt(name, base)
-			pipelineCommitAt(name, base, 0, base)
-			for index, kind := range test.failureKinds {
-				pipelineFailureAtWithKind(name, "test_failure", 0, kind, base.Add(time.Duration(index+1)*time.Second))
-			}
-			unregister := make([]func(), 0, len(test.sessions))
-			for _, clientID := range test.sessions {
-				unregister = append(unregister, registerKafkaConsumerSession(name, "events", "projection", clientID))
+			setupKafkaPipeline(t, name, 2, test.clients)
+			KafkaConsumerSlotCommitted(name, 0, base)
+			for _, kind := range test.failureKinds {
+				KafkaConsumerSlotFailed(name, 0, "test_failure", kind)
 			}
 			if test.shuttingDown {
 				workerPipelines.Lock()
@@ -116,51 +129,52 @@ func TestKafkaTransportIdleRecoveryRequiresAllEvidence(t *testing.T) {
 				workerPipelines.Unlock()
 			}
 			members := []eventing.KafkaGroupMember{}
-			if test.memberMode == "local" {
-				for _, clientID := range test.sessions {
+			switch test.memberMode {
+			case "local":
+				for _, clientID := range test.clients {
 					members = append(members, eventing.KafkaGroupMember{ClientID: clientID, Topics: []string{"events"}})
 				}
-			} else if test.memberMode == "wrong topic" {
-				for _, clientID := range test.sessions {
+			case "wrong topic":
+				for _, clientID := range test.clients {
 					members = append(members, eventing.KafkaGroupMember{ClientID: clientID, Topics: []string{"other"}})
 				}
-			} else if test.memberMode == "other" {
-				members = []eventing.KafkaGroupMember{{ClientID: "remote-1", Topics: []string{"events"}}, {ClientID: "remote-2", Topics: []string{"events"}}}
+			case "other":
+				members = []eventing.KafkaGroupMember{{ClientID: "remote-a", Topics: []string{"events"}}, {ClientID: "remote-b", Topics: []string{"events"}}}
 			}
 			groupCalls := 0
-			_, _, valid, err := sampleKafkaPipelineBacklog(
+			_, _, valid, accepted, err := sampleKafkaPipelineBacklog(
 				context.Background(), name, "events", "projection",
 				func(context.Context, string, string) (int64, error) { return test.lag, test.lagErr },
 				func(context.Context, string) (eventing.KafkaGroupDescription, error) {
 					groupCalls++
 					if test.queryMutation == "failure" {
-						pipelineFailureAtWithKind(name, "newer_failure", 0, pipelineFailureTransport, base.Add(10*time.Second))
+						KafkaConsumerSlotFailed(name, 0, "newer_failure", pipelineFailureTransport)
 					}
-					return eventing.KafkaGroupDescription{GroupID: "projection", State: test.groupState, Members: members}, nil
+					return eventing.KafkaGroupDescription{GroupID: "projection", State: test.groupState, Members: members}, test.groupErr
 				},
 			)
-			if valid != (test.lagErr == nil) || (err != nil) != (test.lagErr != nil) {
-				t.Fatalf("valid=%v err=%v, lagErr=%v", valid, err, test.lagErr)
+			if valid != (test.lagErr == nil) || !accepted || (err != nil) != (test.lagErr != nil) {
+				t.Fatalf("valid=%v accepted=%v err=%v, lagErr=%v", valid, accepted, err, test.lagErr)
 			}
 			if (groupCalls > 0) != test.wantGroupCall {
 				t.Fatalf("group query calls=%d, wantCalled=%v", groupCalls, test.wantGroupCall)
 			}
-			state := workerPipelines.states[name]
+			state := pipelineSnapshots()[name]
 			if test.wantRecovered {
-				if state.consecutiveFailures != 0 || state.state != "idle" || state.reasonCode != "" {
+				if state.ConsecutiveFailures != 0 || state.State != "idle" || state.ReasonCode != "" {
 					t.Fatalf("valid idle recovery did not clear the failure: %+v", state)
 				}
-				if !state.lastCommittedOffsetAt.Equal(base) {
-					t.Fatalf("idle recovery changed real commit time: %v", state.lastCommittedOffsetAt)
+				if !state.LastCommittedOffsetAt.Equal(base) {
+					t.Fatalf("idle recovery changed real commit time: %v", state.LastCommittedOffsetAt)
 				}
-				if reasons := evaluatePipelineHealth(time.Now().UTC()); containsWorkerReason(reasons, "worker_pipeline_consecutive_failures") || len(reasons) != 0 {
+				if reasons := evaluatePipelineHealth(time.Now().UTC()); len(reasons) != 0 {
 					t.Fatalf("recovered Kafka pipeline remains unhealthy: %v", reasons)
 				}
-			} else if state.consecutiveFailures == 0 {
+			} else if len(test.failureKinds) > 0 && state.ConsecutiveFailures == 0 && test.queryMutation != "failure" {
 				t.Fatalf("invalid recovery cleared failure state: %+v", state)
 			}
-			for _, closeSession := range unregister {
-				closeSession()
+			if test.groupErr != nil && (!state.BacklogSampleValid || state.Backlog != 0) {
+				t.Fatalf("group query error invalidated successful lag sample: %+v", state)
 			}
 		})
 	}
@@ -168,26 +182,24 @@ func TestKafkaTransportIdleRecoveryRequiresAllEvidence(t *testing.T) {
 
 func TestKafkaIdleRecoveryRejectsSessionExitDuringGroupQuery(t *testing.T) {
 	resetPipelineStates(t)
-	base := time.Now().UTC()
 	const name = PipelineNotificationProjection
-	registerPipelineAt(name, 1, base)
-	pipelineStartedAt(name, base)
+	setupKafkaPipeline(t, name, 1, nil)
 	for i := 0; i < 3; i++ {
-		pipelineFailureAtWithKind(name, "kafka_fetch_failed", 0, pipelineFailureTransport, base.Add(time.Duration(i+1)*time.Second))
+		KafkaConsumerSlotFailed(name, 0, "kafka_fetch_failed", pipelineFailureTransport)
 	}
-	unregister := registerKafkaConsumerSession(name, "events", "projection", "reader-1")
+	closeSession := registerKafkaConsumerSession(name, 0, "events", "projection", "reader-a")
 	groupStarted := make(chan struct{})
 	releaseGroup := make(chan struct{})
 	var calls sync.WaitGroup
 	calls.Add(1)
 	go func() {
 		defer calls.Done()
-		sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
+		_, _, _, _, _ = sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
 			func(context.Context, string, string) (int64, error) { return 0, nil },
 			func(context.Context, string) (eventing.KafkaGroupDescription, error) {
 				close(groupStarted)
 				<-releaseGroup
-				return eventing.KafkaGroupDescription{GroupID: "projection", State: "Stable", Members: []eventing.KafkaGroupMember{{ClientID: "reader-1", Topics: []string{"events"}}}}, nil
+				return eventing.KafkaGroupDescription{GroupID: "projection", State: "Stable", Members: []eventing.KafkaGroupMember{{ClientID: "reader-a", Topics: []string{"events"}}}}, nil
 			})
 	}()
 	select {
@@ -195,7 +207,7 @@ func TestKafkaIdleRecoveryRejectsSessionExitDuringGroupQuery(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("group query did not start")
 	}
-	unregister()
+	closeSession()
 	close(releaseGroup)
 	calls.Wait()
 	if state := pipelineSnapshots()[name]; state.ConsecutiveFailures != 3 || state.State != "failed" {
@@ -205,26 +217,23 @@ func TestKafkaIdleRecoveryRejectsSessionExitDuringGroupQuery(t *testing.T) {
 
 func TestKafkaIdleRecoveryRejectsNewFailureDuringGroupQuery(t *testing.T) {
 	resetPipelineStates(t)
-	base := time.Now().UTC()
 	const name = PipelineNotificationProjection
-	registerPipelineAt(name, 1, base)
-	pipelineStartedAt(name, base)
+	setupKafkaPipeline(t, name, 1, []string{"reader-a"})
 	for i := 0; i < 3; i++ {
-		pipelineFailureAtWithKind(name, "kafka_fetch_failed", 0, pipelineFailureTransport, base.Add(time.Duration(i+1)*time.Second))
+		KafkaConsumerSlotFailed(name, 0, "kafka_fetch_failed", pipelineFailureTransport)
 	}
-	closeSession := registerKafkaConsumerSession(name, "events", "projection", "reader-1")
 	groupStarted := make(chan struct{})
 	releaseGroup := make(chan struct{})
 	var calls sync.WaitGroup
 	calls.Add(1)
 	go func() {
 		defer calls.Done()
-		sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
+		_, _, _, _, _ = sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
 			func(context.Context, string, string) (int64, error) { return 0, nil },
 			func(context.Context, string) (eventing.KafkaGroupDescription, error) {
 				close(groupStarted)
 				<-releaseGroup
-				return eventing.KafkaGroupDescription{GroupID: "projection", State: "Stable", Members: []eventing.KafkaGroupMember{{ClientID: "reader-1", Topics: []string{"events"}}}}, nil
+				return eventing.KafkaGroupDescription{GroupID: "projection", State: "Stable", Members: []eventing.KafkaGroupMember{{ClientID: "reader-a", Topics: []string{"events"}}}}, nil
 			})
 	}()
 	select {
@@ -232,10 +241,9 @@ func TestKafkaIdleRecoveryRejectsNewFailureDuringGroupQuery(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("group query did not start")
 	}
-	pipelineFailureWithKind(name, "newer_transport_failure", 0, pipelineFailureTransport)
+	KafkaConsumerSlotFailed(name, 0, "newer_transport_failure", pipelineFailureTransport)
 	close(releaseGroup)
 	calls.Wait()
-	closeSession()
 	if state := pipelineSnapshots()[name]; state.ConsecutiveFailures != 4 || state.State != "failed" {
 		t.Fatalf("old recovery sample cleared a newer failure: %+v", state)
 	}
@@ -247,7 +255,7 @@ func TestKafkaIdleRecoveryCannotOverwriteCommitOrShutdown(t *testing.T) {
 		mutate    func(string)
 		wantState string
 	}{
-		{name: "commit", mutate: func(name string) { pipelineCommitAt(name, time.Now().UTC(), 0, time.Now().UTC()) }, wantState: "running"},
+		{name: "commit", mutate: func(name string) { KafkaConsumerSlotCommitted(name, 0, time.Now().UTC()) }, wantState: "running"},
 		{name: "shutdown", mutate: func(string) {
 			workerPipelines.Lock()
 			workerShuttingDown.Store(true)
@@ -256,26 +264,23 @@ func TestKafkaIdleRecoveryCannotOverwriteCommitOrShutdown(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			resetPipelineStates(t)
-			base := time.Now().UTC()
 			const name = PipelineNotificationProjection
-			registerPipelineAt(name, 1, base)
-			pipelineStartedAt(name, base)
+			setupKafkaPipeline(t, name, 1, []string{"reader-a"})
 			for i := 0; i < 3; i++ {
-				pipelineFailureAtWithKind(name, "kafka_fetch_failed", 0, pipelineFailureTransport, base.Add(time.Duration(i+1)*time.Second))
+				KafkaConsumerSlotFailed(name, 0, "kafka_fetch_failed", pipelineFailureTransport)
 			}
-			closeSession := registerKafkaConsumerSession(name, "events", "projection", "reader-1")
 			groupStarted := make(chan struct{})
 			releaseGroup := make(chan struct{})
 			var calls sync.WaitGroup
 			calls.Add(1)
 			go func() {
 				defer calls.Done()
-				sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
+				_, _, _, _, _ = sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
 					func(context.Context, string, string) (int64, error) { return 0, nil },
 					func(context.Context, string) (eventing.KafkaGroupDescription, error) {
 						close(groupStarted)
 						<-releaseGroup
-						return eventing.KafkaGroupDescription{GroupID: "projection", State: "Stable", Members: []eventing.KafkaGroupMember{{ClientID: "reader-1", Topics: []string{"events"}}}}, nil
+						return eventing.KafkaGroupDescription{GroupID: "projection", State: "Stable", Members: []eventing.KafkaGroupMember{{ClientID: "reader-a", Topics: []string{"events"}}}}, nil
 					})
 			}()
 			select {
@@ -286,9 +291,8 @@ func TestKafkaIdleRecoveryCannotOverwriteCommitOrShutdown(t *testing.T) {
 			test.mutate(name)
 			close(releaseGroup)
 			calls.Wait()
-			closeSession()
-			if state := workerPipelines.states[name]; state.state != test.wantState {
-				t.Fatalf("state=%q want=%q details=%+v", state.state, test.wantState, state)
+			if state := pipelineSnapshots()[name]; state.State != test.wantState {
+				t.Fatalf("state=%q want=%q details=%+v", state.State, test.wantState, state)
 			}
 		})
 	}
@@ -322,5 +326,539 @@ func TestKafkaFetchFailureClassificationUsesProtocolErrorCodes(t *testing.T) {
 	}
 	if got := kafkaFetchFailureKind(errors.New("connection reset")); got != pipelineFailureTransport {
 		t.Fatalf("network failure kind=%v, want transport", got)
+	}
+}
+
+func TestMultiConsumerCommitDoesNotClearOtherConsumerFailure(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 2, []string{"reader-a", "reader-b"})
+	pipelineKafkaBacklogSample(name, 0, time.Now().UTC(), true)
+	for i := 0; i < 3; i++ {
+		KafkaConsumerSlotFailed(name, 0, "kafka_fetch_failed", pipelineFailureTransport)
+	}
+	KafkaConsumerSlotCommitted(name, 1, time.Now().UTC())
+	state := pipelineSnapshots()[name]
+	if state.ConsecutiveFailures != 3 {
+		t.Fatalf("slot B commit cleared slot A failures: %+v", state)
+	}
+	if reasons := evaluatePipelineHealth(time.Now().UTC()); !containsWorkerReason(reasons, "worker_pipeline_consecutive_failures") {
+		t.Fatalf("pipeline became ready while slot A remains failed: %v", reasons)
+	}
+}
+
+func TestMultiConsumerPartialRecoveryRemainsUnhealthy(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 2, []string{"reader-a", "reader-b"})
+	pipelineKafkaBacklogSample(name, 0, time.Now().UTC(), true)
+	for i := 0; i < 3; i++ {
+		KafkaConsumerSlotFailed(name, 0, "kafka_fetch_failed", pipelineFailureTransport)
+	}
+	KafkaConsumerSlotCommitted(name, 1, time.Now().UTC())
+	if reasons := evaluatePipelineHealth(time.Now().UTC()); !containsWorkerReason(reasons, "worker_pipeline_consecutive_failures") {
+		t.Fatalf("partial slot recovery became ready: %v", reasons)
+	}
+}
+
+func TestMultiConsumerAllSlotsRecovered(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 2, []string{"reader-a", "reader-b"})
+	KafkaConsumerSlotCommitted(name, 1, time.Now().UTC())
+	for i := 0; i < 3; i++ {
+		KafkaConsumerSlotFailed(name, 0, "kafka_fetch_failed", pipelineFailureTransport)
+	}
+	_, _, _, _, err := sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
+		func(context.Context, string, string) (int64, error) { return 0, nil },
+		func(context.Context, string) (eventing.KafkaGroupDescription, error) {
+			return eventing.KafkaGroupDescription{GroupID: "projection", State: "Stable", Members: []eventing.KafkaGroupMember{
+				{ClientID: "reader-a", Topics: []string{"events"}},
+				{ClientID: "reader-b", Topics: []string{"events"}},
+			}}, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := pipelineSnapshots()[name]
+	if state.ConsecutiveFailures != 0 || state.State != "idle" {
+		t.Fatalf("all-slot recovery did not clear aggregate state: %+v", state)
+	}
+	if reasons := evaluatePipelineHealth(time.Now().UTC()); len(reasons) != 0 {
+		t.Fatalf("pipeline remained unhealthy after all slots recovered: %v", reasons)
+	}
+}
+
+func TestKafkaConsumerMissingSessionAfterStartupGrace(t *testing.T) {
+	resetPipelineStates(t)
+	base := time.Now().UTC()
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 2, []string{"reader-a"})
+	pipelineKafkaBacklogSample(name, 0, base, true)
+	reasons := evaluatePipelineHealth(base.Add(workerActiveGrace + time.Nanosecond))
+	if !containsWorkerReason(reasons, "worker_kafka_consumer_session_unavailable") {
+		t.Fatalf("missing slot session was not fail-closed after startup grace: %v", reasons)
+	}
+}
+
+func TestSingleConsumerSlotCommitRecoversFailure(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineLikeSnapshotProjection
+	setupKafkaPipeline(t, name, 1, []string{"reader-only"})
+	pipelineKafkaBacklogSample(name, 0, time.Now().UTC(), true)
+	for i := 0; i < 3; i++ {
+		KafkaConsumerSlotFailed(name, 0, "kafka_fetch_failed", pipelineFailureTransport)
+	}
+	KafkaConsumerSlotCommitted(name, 0, time.Now().UTC())
+	if state := pipelineSnapshots()[name]; state.ConsecutiveFailures != 0 {
+		t.Fatalf("single consumer commit did not recover its slot: %+v", state)
+	}
+	if reasons := evaluatePipelineHealth(time.Now().UTC()); len(reasons) != 0 {
+		t.Fatalf("single consumer pipeline remained unhealthy: %v", reasons)
+	}
+}
+
+type kafkaFetchStep struct {
+	message kafka.Message
+	err     error
+	wait    bool
+}
+
+type scriptedKafkaReader struct {
+	mu         sync.Mutex
+	steps      []kafkaFetchStep
+	commitErr  error
+	fetches    int
+	commits    int
+	closeCalls int
+	committed  []kafka.Message
+}
+
+func (r *scriptedKafkaReader) FetchMessage(ctx context.Context) (kafka.Message, error) {
+	r.mu.Lock()
+	r.fetches++
+	if len(r.steps) == 0 {
+		r.mu.Unlock()
+		return kafka.Message{}, errors.New("unexpected fetch")
+	}
+	step := r.steps[0]
+	r.steps = r.steps[1:]
+	r.mu.Unlock()
+	if step.wait {
+		<-ctx.Done()
+		return kafka.Message{}, ctx.Err()
+	}
+	return step.message, step.err
+}
+
+func (r *scriptedKafkaReader) CommitMessages(_ context.Context, messages ...kafka.Message) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.commits++
+	if r.commitErr == nil {
+		r.committed = append(r.committed, messages...)
+	}
+	return r.commitErr
+}
+
+func (r *scriptedKafkaReader) Close() error {
+	r.mu.Lock()
+	r.closeCalls++
+	r.mu.Unlock()
+	return nil
+}
+
+func TestBatchFetchErrorClosesReaderAfterSafeCommit(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineUserBehaviorProjection
+	setupKafkaPipeline(t, name, 1, nil)
+	terminalErr := errors.New("broker connection lost")
+	inner := &scriptedKafkaReader{steps: []kafkaFetchStep{{message: kafka.Message{Offset: 7}}, {err: terminalErr}}}
+	reader := trackKafkaConsumerReader(name, 0, "events", "projection", "reader-old", inner)
+	result := fetchKafkaBatch(context.Background(), reader, 10, time.Second)
+	if len(result.Messages) != 1 || !errors.Is(result.TerminalFetchErr, terminalErr) || result.ContextErr != nil {
+		t.Fatalf("batch result did not retain fetched message and terminal error: %+v", result)
+	}
+	committed, err := finishKafkaBatch(context.Background(), name, reader, result, nil, reader.CommitMessages, nil)
+	if !committed || !errors.Is(err, terminalErr) {
+		t.Fatalf("committed=%v err=%v, want committed batch followed by terminal fetch error", committed, err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	inner.mu.Lock()
+	fetches, commits, closeCalls, committedMessages := inner.fetches, inner.commits, inner.closeCalls, len(inner.committed)
+	inner.mu.Unlock()
+	if fetches != 2 || commits != 1 || closeCalls != 1 || committedMessages != 1 {
+		t.Fatalf("reader reused or close/commit count wrong: fetches=%d commits=%d closes=%d committed=%d", fetches, commits, closeCalls, committedMessages)
+	}
+	state := pipelineSnapshots()[name]
+	if state.ConsecutiveFailures != 1 || state.LastCommittedOffsetAt.IsZero() {
+		t.Fatalf("safe commit was not followed by preserved fetch failure: %+v", state)
+	}
+	workerPipelines.RLock()
+	slot := workerPipelines.states[name].kafkaSlots[0]
+	workerPipelines.RUnlock()
+	if slot.sessionActive || slot.sessionRecoveryEligible || slot.failureKinds != pipelineFailureTransport {
+		t.Fatalf("closed reader session/failure state inconsistent: %+v", slot)
+	}
+}
+
+func TestBatchCollectionDeadlineDoesNotUnregisterReader(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineUserBehaviorProjection
+	setupKafkaPipeline(t, name, 1, nil)
+	inner := &scriptedKafkaReader{steps: []kafkaFetchStep{{message: kafka.Message{Offset: 1}}, {wait: true}}}
+	reader := trackKafkaConsumerReader(name, 0, "events", "projection", "reader-window", inner)
+	result := fetchKafkaBatch(context.Background(), reader, 10, 15*time.Millisecond)
+	if result.ContextErr != nil || result.TerminalFetchErr != nil || len(result.Messages) != 1 {
+		t.Fatalf("batch deadline was not treated as a normal window end: %+v", result)
+	}
+	workerPipelines.RLock()
+	slot := workerPipelines.states[name].kafkaSlots[0]
+	workerPipelines.RUnlock()
+	if !slot.sessionActive || !slot.sessionRecoveryEligible || slot.consecutiveFailures != 0 {
+		t.Fatalf("normal batch deadline changed Reader recovery state: %+v", slot)
+	}
+	_ = reader.Close()
+}
+
+func TestKafkaReaderRestartRegistersNewSession(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineUserBehaviorProjection
+	setupKafkaPipeline(t, name, 1, nil)
+	oldReader := trackKafkaConsumerReader(name, 0, "events", "projection", "client-old", &scriptedKafkaReader{})
+	oldReader.Close()
+	newReader := trackKafkaConsumerReader(name, 0, "events", "projection", "client-new", &scriptedKafkaReader{})
+	oldReader.Close()
+	workerPipelines.RLock()
+	slot := workerPipelines.states[name].kafkaSlots[0]
+	workerPipelines.RUnlock()
+	if !slot.sessionActive || !slot.sessionRecoveryEligible || slot.session.clientID != "client-new" || slot.sessionVersion != 3 {
+		t.Fatalf("Reader restart did not register a fresh session version: %+v", slot)
+	}
+	_ = newReader.Close()
+}
+
+func TestKafkaReaderCloseIsIdempotent(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineLikeSnapshotProjection
+	setupKafkaPipeline(t, name, 1, nil)
+	inner := &scriptedKafkaReader{}
+	reader := trackKafkaConsumerReader(name, 0, "events", "projection", "client", inner)
+	_ = reader.Close()
+	_ = reader.Close()
+	inner.mu.Lock()
+	closeCalls := inner.closeCalls
+	inner.mu.Unlock()
+	if closeCalls != 1 {
+		t.Fatalf("reader Close called %d times", closeCalls)
+	}
+	workerPipelines.RLock()
+	slot := workerPipelines.states[name].kafkaSlots[0]
+	workerPipelines.RUnlock()
+	if slot.sessionActive || slot.sessionVersion != 2 {
+		t.Fatalf("session was not removed exactly once: %+v", slot)
+	}
+}
+
+func TestKafkaReaderCancellationDoesNotCreateFailure(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelinePostEmbedding
+	setupKafkaPipeline(t, name, 1, nil)
+	reader := trackKafkaConsumerReader(name, 0, "events", "projection", "client", &scriptedKafkaReader{steps: []kafkaFetchStep{{wait: true}}})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result := fetchKafkaBatch(ctx, reader, 1, 0)
+	if !errors.Is(result.ContextErr, context.Canceled) || result.TerminalFetchErr != nil {
+		t.Fatalf("cancellation reported as a fetch failure: %+v", result)
+	}
+	_, err := finishKafkaBatch(ctx, name, reader, result, nil, reader.CommitMessages, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("finish error=%v, want context canceled", err)
+	}
+	if state := pipelineSnapshots()[name]; state.ConsecutiveFailures != 0 {
+		t.Fatalf("shutdown cancellation created a pipeline failure: %+v", state)
+	}
+	_ = reader.Close()
+}
+
+func TestBatchCommitFailurePreservesUncommittedMessages(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineRecommendationMetrics
+	setupKafkaPipeline(t, name, 1, nil)
+	commitErr := errors.New("commit failed")
+	inner := &scriptedKafkaReader{steps: []kafkaFetchStep{{message: kafka.Message{Offset: 9}}}, commitErr: commitErr}
+	reader := trackKafkaConsumerReader(name, 0, "events", "projection", "reader", inner)
+	batch := fetchKafkaBatch(context.Background(), reader, 1, 0)
+	committed, err := finishKafkaBatch(context.Background(), name, reader, batch, nil, reader.CommitMessages, nil)
+	if committed || !errors.Is(err, commitErr) || len(batch.Messages) != 1 {
+		t.Fatalf("commit result committed=%v err=%v messages=%d", committed, err, len(batch.Messages))
+	}
+	inner.mu.Lock()
+	committedCount := len(inner.committed)
+	inner.mu.Unlock()
+	if committedCount != 0 {
+		t.Fatalf("failed commit was recorded as committed: %d", committedCount)
+	}
+	workerPipelines.RLock()
+	slot := workerPipelines.states[name].kafkaSlots[0]
+	workerPipelines.RUnlock()
+	if slot.consecutiveFailures != 1 || slot.failureKinds != pipelineFailureCommit || !slot.lastCommittedOffsetAt.IsZero() {
+		t.Fatalf("commit failure state incorrect: %+v", slot)
+	}
+	_ = reader.Close()
+}
+
+func TestKafkaGroupTimeoutDoesNotBlockOtherGroups(t *testing.T) {
+	resetPipelineStates(t)
+	const (
+		blockedPipeline = PipelineNotificationProjection
+		healthyPipeline = PipelineLikeSnapshotProjection
+	)
+	setupKafkaPipeline(t, blockedPipeline, 1, nil)
+	setupKafkaPipeline(t, healthyPipeline, 1, nil)
+	closeBlockedSession := registerKafkaConsumerSession(blockedPipeline, 0, "topic-a", "group-a", "reader-a")
+	defer closeBlockedSession()
+	closeHealthySession := registerKafkaConsumerSession(healthyPipeline, 0, "topic-b", "group-b", "reader-b")
+	defer closeHealthySession()
+	for i := 0; i < 3; i++ {
+		KafkaConsumerSlotFailed(blockedPipeline, 0, "kafka_fetch_failed", pipelineFailureTransport)
+	}
+	blockedGroupContext := make(chan context.Context, 1)
+	blockedGroupFinished := make(chan time.Time, 1)
+	healthySampledWhileBlocked := make(chan struct{}, 1)
+	sampleKafkaBacklogGroups(context.Background(), []kafkaBacklogTarget{
+		{pipeline: blockedPipeline, topic: "topic-a", group: "group-a"},
+		{pipeline: healthyPipeline, topic: "topic-b", group: "group-b"},
+	}, 2*time.Second, time.Second, 2,
+		func(_ context.Context, topic, _ string) (int64, error) {
+			if topic == "topic-b" {
+				blockedCtx := <-blockedGroupContext
+				if blockedCtx.Err() != nil {
+					return 0, errors.New("group-a timed out before group-b Lag sampling")
+				}
+				healthySampledWhileBlocked <- struct{}{}
+			}
+			return 0, nil
+		},
+		func(ctx context.Context, group string) (eventing.KafkaGroupDescription, error) {
+			if group != "group-a" {
+				return eventing.KafkaGroupDescription{}, errors.New("unexpected group query")
+			}
+			blockedGroupContext <- ctx
+			<-ctx.Done()
+			blockedGroupFinished <- time.Now().UTC()
+			return eventing.KafkaGroupDescription{}, ctx.Err()
+		},
+	)
+	select {
+	case <-healthySampledWhileBlocked:
+	default:
+		t.Fatal("group-b Lag was not sampled while group-a metadata query was still blocked")
+	}
+	blockedAt := <-blockedGroupFinished
+	workerPipelines.RLock()
+	blockedState := workerPipelines.states[blockedPipeline]
+	healthyState := workerPipelines.states[healthyPipeline]
+	workerPipelines.RUnlock()
+	if !blockedState.backlogSampleValid || blockedState.consecutiveFailures != 3 {
+		t.Fatalf("group timeout discarded valid lag or recovered the failed slot: %+v", blockedState)
+	}
+	if !healthyState.backlogSampleValid || healthyState.backlogSampleAt.IsZero() || !healthyState.backlogSampleAt.Before(blockedAt) {
+		t.Fatalf("unrelated group did not receive a fresh lag sample: %+v", healthyState)
+	}
+	if blocked, reason := pipelineBacklogBlocked(healthyPipeline, blockedAt, healthyState); blocked {
+		t.Fatalf("group-a timeout blocked healthy pipeline with %s", reason)
+	}
+}
+
+func TestKafkaSamplingOverallDeadline(t *testing.T) {
+	resetPipelineStates(t)
+	pipelines := []string{PipelineNotificationProjection, PipelineLikeSnapshotProjection, PipelineRecommendationMetrics}
+	suffixes := []string{"a", "b", "c"}
+	groups := make([]kafkaBacklogTarget, 0, len(pipelines))
+	for index, pipeline := range pipelines {
+		setupKafkaPipeline(t, pipeline, 1, nil)
+		topic := "topic-" + suffixes[index]
+		group := "group-" + suffixes[index]
+		client := "reader-" + suffixes[index]
+		unregister := registerKafkaConsumerSession(pipeline, 0, topic, group, client)
+		t.Cleanup(unregister)
+		for i := 0; i < 3; i++ {
+			KafkaConsumerSlotFailed(pipeline, 0, "kafka_fetch_failed", pipelineFailureTransport)
+		}
+		groups = append(groups, kafkaBacklogTarget{pipeline: pipeline, topic: topic, group: group})
+	}
+	started := make(chan struct{}, len(groups))
+	returned := make(chan struct{}, len(groups))
+	done := make(chan struct{})
+	startedAt := time.Now()
+	go func() {
+		sampleKafkaBacklogGroups(context.Background(), groups, time.Second, 2*time.Second, len(groups),
+			func(context.Context, string, string) (int64, error) { return 0, nil },
+			func(ctx context.Context, _ string) (eventing.KafkaGroupDescription, error) {
+				started <- struct{}{}
+				<-ctx.Done()
+				returned <- struct{}{}
+				return eventing.KafkaGroupDescription{}, ctx.Err()
+			},
+		)
+		close(done)
+	}()
+	for range groups {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("not all group queries started")
+		}
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("sampling did not stop at its overall deadline")
+	}
+	if elapsed := time.Since(startedAt); elapsed > 1500*time.Millisecond {
+		t.Fatalf("sampling exceeded its one-second overall budget: %s", elapsed)
+	}
+	for range groups {
+		select {
+		case <-returned:
+		case <-time.After(time.Second):
+			t.Fatal("context-aware group query did not return after cancellation")
+		}
+	}
+}
+
+func TestKafkaGroupQueryFailurePreservesValidLagSample(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	setupKafkaPipeline(t, name, 1, []string{"reader-a"})
+	for i := 0; i < 3; i++ {
+		KafkaConsumerSlotFailed(name, 0, "kafka_fetch_failed", pipelineFailureTransport)
+	}
+	_, _, valid, accepted, err := sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
+		func(context.Context, string, string) (int64, error) { return 0, nil },
+		func(context.Context, string) (eventing.KafkaGroupDescription, error) {
+			return eventing.KafkaGroupDescription{}, errors.New("group metadata unavailable")
+		},
+	)
+	if err != nil || !valid || !accepted {
+		t.Fatalf("successful lag sample was rejected after group query failure: valid=%v accepted=%v err=%v", valid, accepted, err)
+	}
+	state := pipelineSnapshots()[name]
+	if !state.BacklogSampleValid || state.Backlog != 0 || state.ConsecutiveFailures != 3 {
+		t.Fatalf("group query failure changed valid Lag or cleared failure state: %+v", state)
+	}
+}
+
+func TestKafkaLagTimeoutMarksOnlyThatGroupSampleInvalid(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	registerPipelineAt(name, 1, time.Now().UTC())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	_, _, valid, accepted, err := sampleKafkaPipelineBacklog(ctx, name, "events", "projection",
+		func(ctx context.Context, _, _ string) (int64, error) {
+			<-ctx.Done()
+			return 0, nil
+		},
+		func(context.Context, string) (eventing.KafkaGroupDescription, error) {
+			return eventing.KafkaGroupDescription{}, nil
+		},
+	)
+	if err == nil || valid || !accepted {
+		t.Fatalf("timed-out lag query was published as valid: valid=%v accepted=%v err=%v", valid, accepted, err)
+	}
+	if state := pipelineSnapshots()[name]; state.BacklogSampleValid {
+		t.Fatalf("lag timeout left the group sample valid: %+v", state)
+	}
+}
+
+func TestOlderConcurrentSampleCannotOverwriteNewerSample(t *testing.T) {
+	resetPipelineStates(t)
+	const name = PipelineNotificationProjection
+	registerPipelineAt(name, 1, time.Now().UTC())
+	oldStarted := make(chan struct{})
+	releaseOld := make(chan struct{})
+	type sampleResult struct {
+		lag      int64
+		valid    bool
+		accepted bool
+		err      error
+	}
+	oldResult := make(chan sampleResult, 1)
+	go func() {
+		lag, _, valid, accepted, err := sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
+			func(context.Context, string, string) (int64, error) {
+				close(oldStarted)
+				<-releaseOld
+				return 99, nil
+			},
+			func(context.Context, string) (eventing.KafkaGroupDescription, error) {
+				return eventing.KafkaGroupDescription{}, nil
+			},
+		)
+		oldResult <- sampleResult{lag: lag, valid: valid, accepted: accepted, err: err}
+	}()
+	select {
+	case <-oldStarted:
+	case <-time.After(time.Second):
+		t.Fatal("older lag query did not start")
+	}
+	newLag, _, newValid, newAccepted, newErr := sampleKafkaPipelineBacklog(context.Background(), name, "events", "projection",
+		func(context.Context, string, string) (int64, error) { return 7, nil },
+		func(context.Context, string) (eventing.KafkaGroupDescription, error) {
+			return eventing.KafkaGroupDescription{}, nil
+		},
+	)
+	if newErr != nil || !newValid || !newAccepted || newLag != 7 {
+		t.Fatalf("newer sample failed: lag=%d valid=%v accepted=%v err=%v", newLag, newValid, newAccepted, newErr)
+	}
+	close(releaseOld)
+	old := <-oldResult
+	if old.err != nil || !old.valid || old.accepted || old.lag != 99 {
+		t.Fatalf("older sample result mismatch: %+v", old)
+	}
+	state := pipelineSnapshots()[name]
+	if state.Backlog != 7 {
+		t.Fatalf("late old sample overwrote newer lag: %+v", state)
+	}
+}
+
+func TestOneGroupFailureDoesNotInvalidateOtherPipelineReadiness(t *testing.T) {
+	resetPipelineStates(t)
+	const (
+		failedPipeline  = PipelineNotificationProjection
+		healthyPipeline = PipelineLikeSnapshotProjection
+	)
+	setupKafkaPipeline(t, failedPipeline, 1, nil)
+	setupKafkaPipeline(t, healthyPipeline, 1, nil)
+	sampleKafkaBacklogGroups(context.Background(), []kafkaBacklogTarget{
+		{pipeline: failedPipeline, topic: "topic-a", group: "group-a"},
+		{pipeline: healthyPipeline, topic: "topic-b", group: "group-b"},
+	}, time.Second, 100*time.Millisecond, 2,
+		func(_ context.Context, topic, _ string) (int64, error) {
+			if topic == "topic-a" {
+				return 0, errors.New("group-a broker unavailable")
+			}
+			return 0, nil
+		},
+		func(context.Context, string) (eventing.KafkaGroupDescription, error) {
+			return eventing.KafkaGroupDescription{}, nil
+		},
+	)
+	workerPipelines.RLock()
+	failedState := workerPipelines.states[failedPipeline]
+	healthyState := workerPipelines.states[healthyPipeline]
+	workerPipelines.RUnlock()
+	if failedState.backlogSampleValid {
+		t.Fatalf("failed group's lag sample was marked valid: %+v", failedState)
+	}
+	if blocked, reason := pipelineBacklogBlocked(healthyPipeline, time.Now().UTC(), healthyState); blocked {
+		t.Fatalf("failed group invalidated healthy pipeline readiness: %s", reason)
 	}
 }

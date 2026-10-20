@@ -53,26 +53,28 @@ const (
 )
 
 type workerPipelineState struct {
-	registered            bool
-	expectedWorkers       int
-	activeWorkers         int
-	failureKinds          pipelineFailureKinds
-	failureVersion        uint64
-	sessionVersion        uint64
-	registeredAt          time.Time
-	startedAt             time.Time
-	lastSuccessAt         time.Time
-	lastFailureAt         time.Time
-	consecutiveFailures   int
-	lastCommittedOffsetAt time.Time
-	backlogSince          time.Time
-	lastProgressAt        time.Time
-	backlog               int64
-	backlogSampleAt       time.Time
-	backlogSampleValid    bool
-	backlogSampleVersion  uint64
-	state                 string
-	reasonCode            string
+	registered               bool
+	expectedWorkers          int
+	activeWorkers            int
+	failureKinds             pipelineFailureKinds
+	unattributedFailureKinds pipelineFailureKinds
+	unattributedFailures     int
+	unattributedReasonCode   string
+	kafkaSlots               map[int]kafkaConsumerSlotState
+	registeredAt             time.Time
+	startedAt                time.Time
+	lastSuccessAt            time.Time
+	lastFailureAt            time.Time
+	consecutiveFailures      int
+	lastCommittedOffsetAt    time.Time
+	backlogSince             time.Time
+	lastProgressAt           time.Time
+	backlog                  int64
+	backlogSampleAt          time.Time
+	backlogSampleValid       bool
+	backlogSampleVersion     uint64
+	state                    string
+	reasonCode               string
 }
 
 type pipelineFailureKinds uint8
@@ -91,8 +93,6 @@ var workerPipelines = struct {
 	sync.RWMutex
 	states map[string]workerPipelineState
 }{states: make(map[string]workerPipelineState)}
-
-var workerPipelineVersion atomic.Uint64
 
 var workerSnapshot atomic.Value
 var workerShuttingDown atomic.Bool
@@ -231,6 +231,22 @@ func registerPipelineAt(name string, expectedWorkers int, now time.Time) {
 	state := workerPipelines.states[name]
 	state.registered = true
 	state.expectedWorkers = expectedWorkers
+	if isKafkaPipeline(name) {
+		if state.kafkaSlots == nil {
+			state.kafkaSlots = make(map[int]kafkaConsumerSlotState, expectedWorkers)
+		}
+		for slotID := 0; slotID < expectedWorkers; slotID++ {
+			if _, found := state.kafkaSlots[slotID]; !found {
+				state.kafkaSlots[slotID] = kafkaConsumerSlotState{state: "starting"}
+			}
+		}
+		for slotID, slot := range state.kafkaSlots {
+			if slotID >= expectedWorkers && !slot.workerStarted && !slot.sessionActive {
+				delete(state.kafkaSlots, slotID)
+			}
+		}
+		recomputeKafkaPipelineAggregate(&state, "")
+	}
 	if state.registeredAt.IsZero() {
 		state.registeredAt = now
 		if isKafkaPipeline(name) {
@@ -247,7 +263,6 @@ func registerPipelineAt(name string, expectedWorkers int, now time.Time) {
 func UnregisterPipeline(name string) {
 	workerPipelines.Lock()
 	delete(workerPipelines.states, name)
-	delete(workerKafkaSessions, name)
 	workerPipelines.Unlock()
 }
 
@@ -256,6 +271,9 @@ func PipelineStarted(name string) {
 }
 
 func pipelineStartedAt(name string, now time.Time) {
+	if isKafkaPipeline(name) {
+		return
+	}
 	workerPipelines.Lock()
 	state, ok := workerPipelines.states[name]
 	if ok {
@@ -273,6 +291,9 @@ func pipelineStartedAt(name string, now time.Time) {
 }
 
 func PipelineStopped(name string) {
+	if isKafkaPipeline(name) {
+		return
+	}
 	workerPipelines.Lock()
 	state, ok := workerPipelines.states[name]
 	if ok {
@@ -288,33 +309,20 @@ func PipelineStopped(name string) {
 }
 
 func PipelineSuccess(name string, backlog int64) {
+	if isKafkaPipeline(name) {
+		return
+	}
 	pipelineSuccessAt(name, backlog, time.Now().UTC())
 }
 
 func pipelineSuccessAt(name string, backlog int64, now time.Time) {
-	workerPipelines.Lock()
-	state, ok := workerPipelines.states[name]
-	if ok {
-		setPipelineLocalBacklog(name, &state, backlog, now)
-		markPipelineSuccess(&state, now, "running")
-		workerPipelines.states[name] = state
+	if isKafkaPipeline(name) {
+		return
 	}
-	workerPipelines.Unlock()
-}
-
-func PipelineCommit(name string, offset time.Time, backlog int64) {
-	pipelineCommitAt(name, offset, backlog, time.Now().UTC())
-}
-
-func pipelineCommitAt(name string, offset time.Time, backlog int64, now time.Time) {
 	workerPipelines.Lock()
 	state, ok := workerPipelines.states[name]
 	if ok {
-		if offset.IsZero() {
-			offset = now
-		}
 		setPipelineLocalBacklog(name, &state, backlog, now)
-		state.lastCommittedOffsetAt = offset
 		markPipelineSuccess(&state, now, "running")
 		workerPipelines.states[name] = state
 	}
@@ -368,11 +376,21 @@ func pipelineFailureAtWithKind(name, reason string, backlog int64, kind pipeline
 	workerPipelines.Lock()
 	state, ok := workerPipelines.states[name]
 	if ok {
+		if isKafkaPipeline(name) {
+			setPipelineLocalBacklog(name, &state, backlog, now)
+			state.lastFailureAt = now
+			state.unattributedFailures++
+			state.unattributedFailureKinds |= kind
+			state.unattributedReasonCode = stablePipelineReason(reason)
+			recomputeKafkaPipelineAggregate(&state, "")
+			workerPipelines.states[name] = state
+			workerPipelines.Unlock()
+			return
+		}
 		setPipelineLocalBacklog(name, &state, backlog, now)
 		state.lastFailureAt = now
 		state.consecutiveFailures++
 		state.failureKinds |= kind
-		state.failureVersion = workerPipelineVersion.Add(1)
 		state.state = "failed"
 		state.reasonCode = stablePipelineReason(reason)
 		workerPipelines.states[name] = state
@@ -388,7 +406,6 @@ func markPipelineSuccess(state *workerPipelineState, now time.Time, stateName st
 	state.lastProgressAt = now
 	state.consecutiveFailures = 0
 	state.failureKinds = 0
-	state.failureVersion = workerPipelineVersion.Add(1)
 	state.state = stateName
 	state.reasonCode = ""
 }
@@ -562,10 +579,16 @@ func evaluatePipelineHealth(now time.Time) []string {
 		blocked, backlogReason := pipelineBacklogBlocked(name, now, state)
 		reason := ""
 		switch {
+		case workerShuttingDown.Load():
+			reason = "shutting_down"
 		case !state.registered:
 			reason = "worker_supervisor_not_registered"
 		case state.consecutiveFailures >= 3:
 			reason = "worker_pipeline_consecutive_failures"
+		case isKafkaPipeline(name) && !kafkaConsumerSlotsReady(state) && !state.registeredAt.IsZero() && now.Sub(state.registeredAt) <= workerActiveGrace:
+			reason = "worker_pipeline_starting"
+		case isKafkaPipeline(name) && !kafkaConsumerSlotsReady(state):
+			reason = "worker_kafka_consumer_session_unavailable"
 		case state.activeWorkers < state.expectedWorkers && !state.registeredAt.IsZero() && now.Sub(state.registeredAt) <= workerActiveGrace:
 			reason = "worker_pipeline_starting"
 		case state.activeWorkers < state.expectedWorkers:

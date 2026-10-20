@@ -99,7 +99,8 @@ func TestCollectUserBehaviorBatchStopsAt500(t *testing.T) {
 		messages[index] = kafka.Message{Offset: int64(index)}
 	}
 	reader := &fakeUserBehaviorReader{messages: messages}
-	batch := collectUserBehaviorBatch(context.Background(), reader, kafka.Message{Offset: -1})
+	result := collectKafkaBatch(context.Background(), reader, kafka.Message{Offset: -1}, userBehaviorBatchSize, time.Second)
+	batch := result.Messages
 	if len(batch) != userBehaviorBatchSize {
 		t.Fatalf("batch=%d want=%d", len(batch), userBehaviorBatchSize)
 	}

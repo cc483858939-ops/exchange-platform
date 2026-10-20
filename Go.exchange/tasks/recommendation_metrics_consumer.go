@@ -82,10 +82,10 @@ func startRecommendationMetricsConsumer(ctx context.Context, wg *sync.WaitGroup)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		PipelineStarted(PipelineRecommendationMetrics)
-		defer PipelineStopped(PipelineRecommendationMetrics)
+		KafkaConsumerSlotStarted(PipelineRecommendationMetrics, 0)
+		defer KafkaConsumerSlotStopped(PipelineRecommendationMetrics, 0)
 		for {
-			runRecommendationMetricsConsumer(ctx)
+			runRecommendationMetricsConsumer(ctx, 0)
 			if ctx.Err() != nil {
 				return
 			}
@@ -99,7 +99,7 @@ func startRecommendationMetricsConsumer(ctx context.Context, wg *sync.WaitGroup)
 	}()
 }
 
-func runRecommendationMetricsConsumer(ctx context.Context) {
+func runRecommendationMetricsConsumer(ctx context.Context, slotID int) {
 	kafkaConfig := config.AppConfig.Kafka
 	reader, clientID, err := eventing.NewKafkaReader(
 		kafkaConfig,
@@ -107,11 +107,11 @@ func runRecommendationMetricsConsumer(ctx context.Context) {
 		kafkaConfig.RecommendationMetricsGroupID,
 	)
 	if err != nil {
-		pipelineFailureWithKind(PipelineRecommendationMetrics, "kafka_reader_unavailable", 0, pipelineFailureConfiguration)
+		KafkaConsumerSlotFailed(PipelineRecommendationMetrics, slotID, "kafka_reader_unavailable", pipelineFailureConfiguration)
 		log.Printf("[RecommendationMetrics] create Kafka reader: %v", err)
 		return
 	}
-	trackedReader := trackKafkaConsumerReader(PipelineRecommendationMetrics, kafkaConfig.RecommendationEventsTopic, kafkaConfig.RecommendationMetricsGroupID, clientID, reader)
+	trackedReader := trackKafkaConsumerReader(PipelineRecommendationMetrics, slotID, kafkaConfig.RecommendationEventsTopic, kafkaConfig.RecommendationMetricsGroupID, clientID, reader)
 	recommendationMetricsConsumers.Add(1)
 	defer recommendationMetricsConsumers.Add(-1)
 	defer trackedReader.Close()
@@ -163,19 +163,23 @@ func consumeRecommendationMetricsMessagesWithForeignKeyLookup(
 		return errors.New("recommendation metrics apply function is nil")
 	}
 	for {
-		first, err := reader.FetchMessage(ctx)
-		if err != nil {
-			if ctx.Err() == nil {
-				pipelineFailureWithKind(PipelineRecommendationMetrics, "kafka_fetch_failed", 0, kafkaFetchFailureKind(err))
-				log.Printf("[RecommendationMetrics] fetch Kafka message: %v", err)
-			}
-			return err
+		fetchResult := fetchKafkaBatch(ctx, reader, recommendationMetricsBatchSize, recommendationMetricsBatchWindow)
+		if fetchResult.ContextErr != nil {
+			return fetchResult.ContextErr
 		}
-		batch := collectRecommendationMetricsBatch(ctx, reader, first)
+		batch := fetchResult.Messages
+		if len(batch) == 0 && fetchResult.TerminalFetchErr != nil {
+			failKafkaConsumerForReader(reader, PipelineRecommendationMetrics, "kafka_fetch_failed", kafkaFetchFailureKind(fetchResult.TerminalFetchErr))
+			return fetchResult.TerminalFetchErr
+		}
 		records, err := classifyRecommendationMetricsBatch(ctx, publisher, kafkaConfig, batch)
 		if err != nil {
 			if ctx.Err() == nil {
-				pipelineFailureWithKind(PipelineRecommendationMetrics, "projection_failed", 0, pipelineFailureProcessing)
+				kind := pipelineFailureProcessing
+				if fetchResult.TerminalFetchErr != nil {
+					kind |= kafkaFetchFailureKind(fetchResult.TerminalFetchErr)
+				}
+				failKafkaConsumerForReader(reader, PipelineRecommendationMetrics, "projection_failed", kind)
 			}
 			return fmt.Errorf("classify recommendation metrics batch of %d messages: %w", len(batch), err)
 		}
@@ -230,7 +234,11 @@ func consumeRecommendationMetricsMessagesWithForeignKeyLookup(
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
-				pipelineFailureWithKind(PipelineRecommendationMetrics, "projection_failed", 0, pipelineFailureProcessing)
+				kind := pipelineFailureProcessing
+				if fetchResult.TerminalFetchErr != nil {
+					kind |= kafkaFetchFailureKind(fetchResult.TerminalFetchErr)
+				}
+				failKafkaConsumerForReader(reader, PipelineRecommendationMetrics, "projection_failed", kind)
 				if kafkaFailureClassOf(err) == kafkaFailureRetryable && attempts >= policy.MaxAttempts {
 					metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeRetryExhausted, kafkaFailureCode(err))
 				}
@@ -244,7 +252,11 @@ func consumeRecommendationMetricsMessagesWithForeignKeyLookup(
 		}
 		if err := reader.CommitMessages(ctx, batch...); err != nil {
 			if ctx.Err() == nil {
-				pipelineFailureWithKind(PipelineRecommendationMetrics, "kafka_commit_failed", 0, pipelineFailureCommit)
+				kind := pipelineFailureCommit
+				if fetchResult.TerminalFetchErr != nil {
+					kind |= kafkaFetchFailureKind(fetchResult.TerminalFetchErr)
+				}
+				failKafkaConsumerForReader(reader, PipelineRecommendationMetrics, "kafka_commit_failed", kind)
 				log.Printf("[RecommendationMetrics] commit Kafka batch: %v", err)
 			}
 			if ctx.Err() != nil {
@@ -254,30 +266,12 @@ func consumeRecommendationMetricsMessagesWithForeignKeyLookup(
 			metrics.RecordKafkaConsumerRecovery(kafkaConsumerRecommendationMetrics, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(commitErr))
 			return commitErr
 		}
-		PipelineCommit(PipelineRecommendationMetrics, time.Now().UTC(), 0)
-	}
-}
-
-func collectRecommendationMetricsBatch(ctx context.Context, reader recommendationMetricsMessageReader, first kafka.Message) []kafka.Message {
-	batch := []kafka.Message{first}
-	if len(batch) >= recommendationMetricsBatchSize {
-		return batch
-	}
-	collectCtx, cancel := context.WithTimeout(ctx, recommendationMetricsBatchWindow)
-	defer cancel()
-	for len(batch) < recommendationMetricsBatchSize {
-		message, err := reader.FetchMessage(collectCtx)
-		if err != nil {
-			if collectCtx.Err() != nil || ctx.Err() != nil {
-				break
-			}
-			pipelineFailureWithKind(PipelineRecommendationMetrics, "kafka_fetch_failed", 0, kafkaFetchFailureKind(err))
-			log.Printf("[RecommendationMetrics] collect Kafka message: %v", err)
-			break
+		commitKafkaConsumerForReader(reader, PipelineRecommendationMetrics, time.Now().UTC())
+		if fetchResult.TerminalFetchErr != nil {
+			failKafkaConsumerForReader(reader, PipelineRecommendationMetrics, "kafka_fetch_failed", kafkaFetchFailureKind(fetchResult.TerminalFetchErr))
+			return fetchResult.TerminalFetchErr
 		}
-		batch = append(batch, message)
 	}
-	return batch
 }
 
 func decodeRecommendationMetricEvent(message kafka.Message) (recommendationMetricEvent, error) {

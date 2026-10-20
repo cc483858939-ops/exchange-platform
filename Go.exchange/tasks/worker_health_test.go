@@ -25,10 +25,10 @@ func TestPipelineFailureThresholdAndRecovery(t *testing.T) {
 		t.Fatalf("expected third failure to block pipeline, got %#v", reasons)
 	}
 
-	pipelineCommitAt("threshold_pipeline", base.Add(7*time.Second), 0, base.Add(7*time.Second))
+	pipelineSuccessAt("threshold_pipeline", 0, base.Add(7*time.Second))
 	state := pipelineSnapshots()["threshold_pipeline"]
-	if state.ConsecutiveFailures != 0 || state.LastCommittedOffsetAt.IsZero() || !state.LastProgressAt.Equal(base.Add(7*time.Second)) {
-		t.Fatalf("successful commit did not reset pipeline state: %#v", state)
+	if state.ConsecutiveFailures != 0 || state.LastSuccessAt.IsZero() || !state.LastProgressAt.Equal(base.Add(7*time.Second)) {
+		t.Fatalf("successful pipeline operation did not reset pipeline state: %#v", state)
 	}
 	if reasons := evaluatePipelineHealth(base.Add(8 * time.Second)); len(reasons) != 0 {
 		t.Fatalf("successful commit did not recover pipeline: %#v", reasons)
@@ -198,18 +198,13 @@ func resetPipelineStates(t *testing.T) {
 	t.Helper()
 	workerPipelines.Lock()
 	previous := workerPipelines.states
-	previousSessions := workerKafkaSessions
 	workerPipelines.states = make(map[string]workerPipelineState)
-	workerKafkaSessions = make(map[string]map[string]kafkaConsumerSession)
 	previousShutdown := workerShuttingDown.Swap(false)
-	previousVersion := workerPipelineVersion.Swap(0)
 	workerPipelines.Unlock()
 	t.Cleanup(func() {
 		workerPipelines.Lock()
 		workerPipelines.states = previous
-		workerKafkaSessions = previousSessions
 		workerShuttingDown.Store(previousShutdown)
-		workerPipelineVersion.Store(previousVersion)
 		workerPipelines.Unlock()
 	})
 }

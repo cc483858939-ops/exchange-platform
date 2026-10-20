@@ -169,11 +169,11 @@ func startPostEmbeddingConsumer(ctx context.Context, wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		PipelineStarted(PipelinePostEmbedding)
-		defer PipelineStopped(PipelinePostEmbedding)
+		KafkaConsumerSlotStarted(PipelinePostEmbedding, 0)
+		defer KafkaConsumerSlotStopped(PipelinePostEmbedding, 0)
 		recovery := newPostEmbeddingRecoveryCoordinator(providerRetryRuntime{})
 		for {
-			err := runPostEmbeddingConsumer(ctx, recovery)
+			err := runPostEmbeddingConsumer(ctx, 0, recovery)
 			if ctx.Err() != nil {
 				metrics.SetEmbeddingProviderPause(false, "", 0)
 				return
@@ -205,48 +205,48 @@ type postEmbeddingConsumerHooks struct {
 	onOffsetCommit    func()
 }
 
-func runPostEmbeddingConsumer(ctx context.Context, recovery *postEmbeddingRecoveryCoordinator) error {
+func runPostEmbeddingConsumer(ctx context.Context, slotID int, recovery *postEmbeddingRecoveryCoordinator) error {
 	appConfig := config.AppConfig
 	if appConfig == nil {
 		decision := ProviderDecision{Action: ProviderActionPause, Reason: providerReasonConfig}
-		pipelineFailureWithKind(PipelinePostEmbedding, "embedding_config_invalid", 0, pipelineFailureConfiguration)
+		KafkaConsumerSlotFailed(PipelinePostEmbedding, slotID, "embedding_config_invalid", pipelineFailureConfiguration)
 		metrics.RecordEmbeddingProviderFailure(providerReasonConfig)
 		return &postEmbeddingProviderFailure{decision: decision, cause: errors.New("application config is not initialized")}
 	}
 	kafkaConfig := appConfig.Kafka
 	embeddingConfig := appConfig.Embedding.Normalized()
 	if err := embeddingConfig.ValidateBatchSettings(); err != nil {
-		pipelineFailureWithKind(PipelinePostEmbedding, "embedding_config_invalid", 0, pipelineFailureConfiguration)
+		KafkaConsumerSlotFailed(PipelinePostEmbedding, slotID, "embedding_config_invalid", pipelineFailureConfiguration)
 		metrics.RecordEmbeddingProviderFailure(providerReasonConfig)
 		return &postEmbeddingProviderFailure{decision: ProviderDecision{Action: ProviderActionPause, Reason: providerReasonConfig}, cause: err}
 	}
 	db := global.WorkerDb
 	if db == nil {
-		pipelineFailureWithKind(PipelinePostEmbedding, "database_unavailable", 0, pipelineFailureProcessing)
+		KafkaConsumerSlotFailed(PipelinePostEmbedding, slotID, "database_unavailable", pipelineFailureProcessing)
 		return errors.New("database is not initialized")
 	}
 	buildVersion := strings.TrimSpace(config.BuildEmbeddingVersion())
 	if buildVersion == "" {
-		pipelineFailureWithKind(PipelinePostEmbedding, "embedding_config_invalid", 0, pipelineFailureConfiguration)
+		KafkaConsumerSlotFailed(PipelinePostEmbedding, slotID, "embedding_config_invalid", pipelineFailureConfiguration)
 		metrics.RecordEmbeddingProviderFailure(providerReasonConfig)
 		return &postEmbeddingProviderFailure{decision: ProviderDecision{Action: ProviderActionPause, Reason: providerReasonConfig}, cause: errors.New("build embedding version is empty")}
 	}
 	if strings.TrimSpace(kafkaConfig.ConsumerDLQTopic) == "" {
-		pipelineFailureWithKind(PipelinePostEmbedding, "embedding_config_invalid", 0, pipelineFailureConfiguration)
+		KafkaConsumerSlotFailed(PipelinePostEmbedding, slotID, "embedding_config_invalid", pipelineFailureConfiguration)
 		return errors.New("consumer DLQ topic is required")
 	}
 	embedder, err := embeddings.NewOpenAICompatibleEmbedder(embeddingConfig)
 	if err != nil {
-		pipelineFailureWithKind(PipelinePostEmbedding, "embedding_provider_unavailable", 0, pipelineFailureConfiguration)
+		KafkaConsumerSlotFailed(PipelinePostEmbedding, slotID, "embedding_provider_unavailable", pipelineFailureConfiguration)
 		metrics.RecordEmbeddingProviderFailure(providerReasonConfig)
 		return &postEmbeddingProviderFailure{decision: ProviderDecision{Action: ProviderActionPause, Reason: providerReasonConfig}, cause: err}
 	}
 	reader, clientID, err := eventing.NewKafkaReader(kafkaConfig, kafkaConfig.PostEmbeddingTopic, kafkaConfig.PostEmbeddingGroupID)
 	if err != nil {
-		pipelineFailureWithKind(PipelinePostEmbedding, "kafka_reader_unavailable", 0, pipelineFailureConfiguration)
+		KafkaConsumerSlotFailed(PipelinePostEmbedding, slotID, "kafka_reader_unavailable", pipelineFailureConfiguration)
 		return err
 	}
-	trackedReader := trackKafkaConsumerReader(PipelinePostEmbedding, kafkaConfig.PostEmbeddingTopic, kafkaConfig.PostEmbeddingGroupID, clientID, reader)
+	trackedReader := trackKafkaConsumerReader(PipelinePostEmbedding, slotID, kafkaConfig.PostEmbeddingTopic, kafkaConfig.PostEmbeddingGroupID, clientID, reader)
 	defer func() {
 		if closeErr := trackedReader.Close(); closeErr != nil {
 			log.Printf("[PostEmbedding] close Kafka reader: %v", closeErr)
@@ -357,46 +357,45 @@ func consumePostEmbeddingMessagesWithBatchPolicyAndHooks(
 	}
 	for {
 		started := time.Now()
-		batch, err := fetchPostEmbeddingBatch(ctx, reader, batchSize, maxWait)
-		if err != nil {
+		batch := fetchPostEmbeddingBatch(ctx, reader, batchSize, maxWait)
+		if batch.ContextErr != nil {
 			metrics.RecordPostEmbeddingBatchFailure()
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			pipelineFailureWithKind(PipelinePostEmbedding, "kafka_fetch_failed", 0, kafkaFetchFailureKind(err))
-			return err
+			return batch.ContextErr
 		}
-		metrics.ObservePostEmbeddingKafkaBatchSize(len(batch))
-		processErr := processPostEmbeddingBatchWithHooks(ctx, batch, publisher, embedder, store, buildVersion, kafkaConfig, policy, hooks)
-		if processErr != nil {
-			metrics.RecordPostEmbeddingBatchFailure()
-			metrics.ObservePostEmbeddingProcessingDuration(time.Since(started))
-			if ctx.Err() == nil && !errors.Is(processErr, errPostEmbeddingSourceChanged) {
-				pipelineFailureWithKind(PipelinePostEmbedding, "projection_failed", 0, pipelineFailureProcessing)
-			}
-			return processErr
-		}
-		if err := ctx.Err(); err != nil {
-			metrics.ObservePostEmbeddingProcessingDuration(time.Since(started))
-			return err
-		}
-		if err := reader.CommitMessages(ctx, batch...); err != nil {
-			metrics.ObservePostEmbeddingProcessingDuration(time.Since(started))
-			metrics.RecordPostEmbeddingBatchFailure()
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			pipelineFailureWithKind(PipelinePostEmbedding, "kafka_commit_failed", 0, pipelineFailureCommit)
-			metrics.RecordPostEmbeddingFailure("kafka_commit")
-			commitErr := retryableKafkaError(kafkaFailureCodeKafkaCommit, err)
-			metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(commitErr))
-			return commitErr
-		}
+		metrics.ObservePostEmbeddingKafkaBatchSize(len(batch.Messages))
+		committed, batchErr := finishKafkaBatch(ctx, PipelinePostEmbedding, reader, batch,
+			func(batchCtx context.Context, messages []kafka.Message) error {
+				return processPostEmbeddingBatchWithHooks(batchCtx, messages, publisher, embedder, store, buildVersion, kafkaConfig, policy, hooks)
+			},
+			func(commitCtx context.Context, messages ...kafka.Message) error {
+				if err := reader.CommitMessages(commitCtx, messages...); err != nil {
+					if commitCtx.Err() != nil {
+						return commitCtx.Err()
+					}
+					metrics.RecordPostEmbeddingFailure("kafka_commit")
+					commitErr := retryableKafkaError(kafkaFailureCodeKafkaCommit, err)
+					metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(commitErr))
+					return commitErr
+				}
+				return nil
+			},
+			func(err error) (string, pipelineFailureKinds, bool) {
+				if errors.Is(err, errPostEmbeddingSourceChanged) {
+					return "", 0, false
+				}
+				return "projection_failed", pipelineFailureProcessing, true
+			},
+		)
 		metrics.ObservePostEmbeddingProcessingDuration(time.Since(started))
-		metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeBatchApplied, kafkaRecoveryCodeNone)
-		PipelineCommit(PipelinePostEmbedding, time.Now().UTC(), 0)
-		if hooks.onOffsetCommit != nil {
-			hooks.onOffsetCommit()
+		if committed {
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeBatchApplied, kafkaRecoveryCodeNone)
+			if hooks.onOffsetCommit != nil {
+				hooks.onOffsetCommit()
+			}
+		}
+		if batchErr != nil {
+			metrics.RecordPostEmbeddingBatchFailure()
+			return batchErr
 		}
 	}
 }
@@ -406,60 +405,24 @@ func fetchPostEmbeddingBatch(
 	reader postEmbeddingMessageReader,
 	batchSize int,
 	maxWait time.Duration,
-) ([]kafka.Message, error) {
+) kafkaBatchFetchResult {
 	if ctx == nil {
-		return nil, errors.New("post embedding batch context is nil")
+		return kafkaBatchFetchResult{ContextErr: errors.New("post embedding batch context is nil")}
 	}
 	if reader == nil {
-		return nil, errors.New("post embedding message reader is nil")
+		return kafkaBatchFetchResult{ContextErr: errors.New("post embedding message reader is nil")}
 	}
 	if batchSize < 1 || batchSize > config.MaxEmbeddingBatchSize {
-		return nil, fmt.Errorf("post embedding batch size must be between 1 and %d", config.MaxEmbeddingBatchSize)
+		return kafkaBatchFetchResult{ContextErr: fmt.Errorf("post embedding batch size must be between 1 and %d", config.MaxEmbeddingBatchSize)}
 	}
 	if batchSize > 1 && (maxWait <= 0 || maxWait > time.Duration(config.MaxEmbeddingBatchMaxWaitMs)*time.Millisecond) {
-		return nil, fmt.Errorf("post embedding batch max wait must be between 1ms and %dms", config.MaxEmbeddingBatchMaxWaitMs)
+		return kafkaBatchFetchResult{ContextErr: fmt.Errorf("post embedding batch max wait must be between 1ms and %dms", config.MaxEmbeddingBatchMaxWaitMs)}
 	}
-	first, err := reader.FetchMessage(ctx)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, err
+	if batchSize > 1 {
+		collectStarted := time.Now()
+		defer func() { metrics.ObservePostEmbeddingBatchWait(time.Since(collectStarted)) }()
 	}
-	batch := []kafka.Message{first}
-	if batchSize == 1 {
-		return batch, nil
-	}
-	collectStarted := time.Now()
-	defer func() { metrics.ObservePostEmbeddingBatchWait(time.Since(collectStarted)) }()
-	deadline := collectStarted.Add(maxWait)
-	for len(batch) < batchSize {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if !time.Now().Before(deadline) {
-			return batch, nil
-		}
-		fetchCtx, cancel := context.WithDeadline(ctx, deadline)
-		message, fetchErr := reader.FetchMessage(fetchCtx)
-		fetchDeadlineExceeded := errors.Is(fetchCtx.Err(), context.DeadlineExceeded)
-		cancel()
-		if fetchErr == nil {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			batch = append(batch, message)
-			continue
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if fetchDeadlineExceeded && errors.Is(fetchErr, context.DeadlineExceeded) {
-			return batch, nil
-		}
-		return nil, fetchErr
-	}
-	return batch, nil
+	return fetchKafkaBatch(ctx, reader, batchSize, maxWait)
 }
 
 func processPostEmbeddingMessage(

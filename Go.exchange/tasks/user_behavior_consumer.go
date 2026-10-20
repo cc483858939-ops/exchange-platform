@@ -72,10 +72,11 @@ func startUserBehaviorProjectionConsumer(ctx context.Context, wg *sync.WaitGroup
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			PipelineStarted(PipelineUserBehaviorProjection)
-			defer PipelineStopped(PipelineUserBehaviorProjection)
+			slotID := id - 1
+			KafkaConsumerSlotStarted(PipelineUserBehaviorProjection, slotID)
+			defer KafkaConsumerSlotStopped(PipelineUserBehaviorProjection, slotID)
 			for {
-				runUserBehaviorProjectionConsumer(ctx)
+				runUserBehaviorProjectionConsumer(ctx, slotID)
 				if ctx.Err() != nil {
 					return
 				}
@@ -90,7 +91,7 @@ func startUserBehaviorProjectionConsumer(ctx context.Context, wg *sync.WaitGroup
 	}
 }
 
-func runUserBehaviorProjectionConsumer(ctx context.Context) {
+func runUserBehaviorProjectionConsumer(ctx context.Context, slotID int) {
 	kafkaConfig := config.AppConfig.Kafka
 	reader, clientID, err := eventing.NewKafkaReader(
 		kafkaConfig,
@@ -98,11 +99,11 @@ func runUserBehaviorProjectionConsumer(ctx context.Context) {
 		kafkaConfig.UserBehaviorGroupID,
 	)
 	if err != nil {
-		pipelineFailureWithKind(PipelineUserBehaviorProjection, "kafka_reader_unavailable", 0, pipelineFailureConfiguration)
+		KafkaConsumerSlotFailed(PipelineUserBehaviorProjection, slotID, "kafka_reader_unavailable", pipelineFailureConfiguration)
 		log.Printf("[BehaviorProjection] create Kafka reader: %v", err)
 		return
 	}
-	trackedReader := trackKafkaConsumerReader(PipelineUserBehaviorProjection, kafkaConfig.UserBehaviorTopic, kafkaConfig.UserBehaviorGroupID, clientID, reader)
+	trackedReader := trackKafkaConsumerReader(PipelineUserBehaviorProjection, slotID, kafkaConfig.UserBehaviorTopic, kafkaConfig.UserBehaviorGroupID, clientID, reader)
 	userBehaviorConsumers.Add(1)
 	defer userBehaviorConsumers.Add(-1)
 	defer trackedReader.Close()
@@ -154,124 +155,109 @@ func consumeUserBehaviorMessagesWithForeignKeyLookup(
 		return errors.New("user behavior apply function is nil")
 	}
 	for {
-		first, err := reader.FetchMessage(ctx)
-		if err != nil {
-			if ctx.Err() == nil {
-				pipelineFailureWithKind(PipelineUserBehaviorProjection, "kafka_fetch_failed", 0, kafkaFetchFailureKind(err))
-				log.Printf("[BehaviorProjection] fetch Kafka message: %v", err)
-			}
-			return err
+		batch := fetchKafkaBatch(ctx, reader, userBehaviorBatchSize, userBehaviorBatchWindow)
+		if batch.ContextErr != nil {
+			return batch.ContextErr
 		}
-		batch := collectUserBehaviorBatch(ctx, reader, first)
-		records, err := classifyUserBehaviorBatch(ctx, publisher, kafkaConfig, batch)
-		if err != nil {
-			if ctx.Err() == nil {
-				pipelineFailureWithKind(PipelineUserBehaviorProjection, "projection_failed", 0, pipelineFailureProcessing)
-			}
-			return fmt.Errorf("classify user behavior batch of %d messages: %w", len(batch), err)
-		}
-		if len(records) > 0 {
-			attempts := 0
-			var terminalDLQ map[kafkaMessageIdentity]struct{}
-			err = retryKafkaOperation(ctx, policy, func(attempt int, retryErr error) {
-				metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCode(retryErr))
-				log.Printf("[BehaviorProjection] retry attempt=%d max_attempts=%d code=%s", attempt, policy.MaxAttempts, kafkaFailureCode(retryErr))
-			}, func() error {
-				attempts++
-				pending := records
-				if len(terminalDLQ) > 0 {
-					pending = make([]userBehaviorEventRecord, 0, len(records))
-					for _, record := range records {
-						if _, terminal := terminalDLQ[kafkaMessageIdentityOf(record.Message)]; !terminal {
-							pending = append(pending, record)
-						}
+		_, err := finishKafkaBatch(ctx, PipelineUserBehaviorProjection, reader, batch,
+			func(batchCtx context.Context, messages []kafka.Message) error {
+				return processUserBehaviorBatch(batchCtx, publisher, db, kafkaConfig, policy, apply, lookup, messages)
+			},
+			func(commitCtx context.Context, messages ...kafka.Message) error {
+				if err := reader.CommitMessages(commitCtx, messages...); err != nil {
+					if commitCtx.Err() == nil {
+						log.Printf("[BehaviorProjection] commit Kafka batch: %v", err)
 					}
+					if commitCtx.Err() != nil {
+						return commitCtx.Err()
+					}
+					commitErr := retryableKafkaError(kafkaFailureCodeKafkaCommit, err)
+					metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(commitErr))
+					return commitErr
 				}
-				return applyKafkaBatchWithForeignKeyIsolation(ctx, pending,
-					func(applyCtx context.Context, subset []userBehaviorEventRecord) error {
-						return apply(applyCtx, db, strings.TrimSpace(kafkaConfig.UserBehaviorGroupID), kafkaConfig, subset)
-					},
-					func(err error) bool {
-						return kafkaPostgresForeignKeyIsAllowed(err,
-							"fk_post_behaviors_user", "fk_post_behaviors_post",
-							"fk_post_reaction_user", "fk_post_reaction_post",
-							"fk_user_reco_profile_dirty_user")
-					},
-					func(handleCtx context.Context, record userBehaviorEventRecord, fkErr error) error {
-						constraint, _ := kafkaPostgresForeignKeyConstraint(fkErr)
-						if !userBehaviorForeignKeyIsPermanentForRecord(record, constraint) {
-							return retryableKafkaError(kafkaFailureCodeDatabaseTransaction, fkErr)
-						}
-						dlqErr := publishConfirmedMissingParentKafkaForeignKeyDLQ(
-							handleCtx, db, lookup, publisher, kafkaConfig.ConsumerDLQTopic,
-							kafkaConsumerUserBehaviorProjection, record.Message, fkErr,
-							record.Payload.UserID, record.Payload.PostID,
-						)
-						if dlqErr != nil {
-							metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeDLQPublishFailed, kafkaFailureCode(dlqErr))
-							return dlqErr
-						}
-						log.Printf("[BehaviorProjection] route permanent foreign-key message to DLQ topic=%s partition=%d offset=%d constraint=%s", record.Message.Topic, record.Message.Partition, record.Message.Offset, constraint)
-						metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeMessageDLQ, kafkaFailureCodeDatabaseForeignKey)
-						if terminalDLQ == nil {
-							terminalDLQ = make(map[kafkaMessageIdentity]struct{})
-						}
-						terminalDLQ[kafkaMessageIdentityOf(record.Message)] = struct{}{}
-						return nil
-					},
-				)
-			})
-			if err != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				pipelineFailureWithKind(PipelineUserBehaviorProjection, "projection_failed", 0, pipelineFailureProcessing)
-				if kafkaFailureClassOf(err) == kafkaFailureRetryable && attempts >= policy.MaxAttempts {
-					metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeRetryExhausted, kafkaFailureCode(err))
-				}
-				return fmt.Errorf("apply user behavior batch of %d messages: %w", len(batch), err)
+				return nil
+			}, nil,
+		)
+		if err != nil {
+			if batch.TerminalFetchErr != nil {
+				log.Printf("[BehaviorProjection] terminal Kafka fetch error after batch: %v", batch.TerminalFetchErr)
+			} else if !errors.Is(err, context.Canceled) {
+				log.Printf("[BehaviorProjection] consume batch: %v", err)
 			}
-			metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeBatchApplied, kafkaRecoveryCodeNone)
-		}
-		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := reader.CommitMessages(ctx, batch...); err != nil {
-			if ctx.Err() == nil {
-				pipelineFailureWithKind(PipelineUserBehaviorProjection, "kafka_commit_failed", 0, pipelineFailureCommit)
-				log.Printf("[BehaviorProjection] commit Kafka batch: %v", err)
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			commitErr := retryableKafkaError(kafkaFailureCodeKafkaCommit, err)
-			metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeRedeliveryRequired, kafkaFailureCode(commitErr))
-			return commitErr
-		}
-		PipelineCommit(PipelineUserBehaviorProjection, time.Now().UTC(), 0)
 	}
 }
 
-func collectUserBehaviorBatch(ctx context.Context, reader userBehaviorMessageReader, first kafka.Message) []kafka.Message {
-	batch := []kafka.Message{first}
-	if len(batch) >= userBehaviorBatchSize {
-		return batch
+func processUserBehaviorBatch(ctx context.Context, publisher rawKafkaMessagePublisher, db *gorm.DB, kafkaConfig config.KafkaConfig, policy kafkaRetryPolicy, apply userBehaviorRecordsApplyFunc, lookup kafkaForeignKeyParentLookup, batch []kafka.Message) error {
+	records, err := classifyUserBehaviorBatch(ctx, publisher, kafkaConfig, batch)
+	if err != nil {
+		return fmt.Errorf("classify user behavior batch of %d messages: %w", len(batch), err)
 	}
-	collectCtx, cancel := context.WithTimeout(ctx, userBehaviorBatchWindow)
-	defer cancel()
-	for len(batch) < userBehaviorBatchSize {
-		message, err := reader.FetchMessage(collectCtx)
-		if err != nil {
-			if collectCtx.Err() != nil || ctx.Err() != nil {
-				break
+	if len(records) == 0 {
+		return nil
+	}
+	attempts := 0
+	var terminalDLQ map[kafkaMessageIdentity]struct{}
+	err = retryKafkaOperation(ctx, policy, func(attempt int, retryErr error) {
+		metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeRetryAttempt, kafkaFailureCode(retryErr))
+		log.Printf("[BehaviorProjection] retry attempt=%d max_attempts=%d code=%s", attempt, policy.MaxAttempts, kafkaFailureCode(retryErr))
+	}, func() error {
+		attempts++
+		pending := records
+		if len(terminalDLQ) > 0 {
+			pending = make([]userBehaviorEventRecord, 0, len(records))
+			for _, record := range records {
+				if _, terminal := terminalDLQ[kafkaMessageIdentityOf(record.Message)]; !terminal {
+					pending = append(pending, record)
+				}
 			}
-			pipelineFailureWithKind(PipelineUserBehaviorProjection, "kafka_fetch_failed", 0, kafkaFetchFailureKind(err))
-			log.Printf("[BehaviorProjection] collect Kafka message: %v", err)
-			break
 		}
-		batch = append(batch, message)
+		return applyKafkaBatchWithForeignKeyIsolation(ctx, pending,
+			func(applyCtx context.Context, subset []userBehaviorEventRecord) error {
+				return apply(applyCtx, db, strings.TrimSpace(kafkaConfig.UserBehaviorGroupID), kafkaConfig, subset)
+			},
+			func(err error) bool {
+				return kafkaPostgresForeignKeyIsAllowed(err,
+					"fk_post_behaviors_user", "fk_post_behaviors_post",
+					"fk_post_reaction_user", "fk_post_reaction_post",
+					"fk_user_reco_profile_dirty_user")
+			},
+			func(handleCtx context.Context, record userBehaviorEventRecord, fkErr error) error {
+				constraint, _ := kafkaPostgresForeignKeyConstraint(fkErr)
+				if !userBehaviorForeignKeyIsPermanentForRecord(record, constraint) {
+					return retryableKafkaError(kafkaFailureCodeDatabaseTransaction, fkErr)
+				}
+				dlqErr := publishConfirmedMissingParentKafkaForeignKeyDLQ(
+					handleCtx, db, lookup, publisher, kafkaConfig.ConsumerDLQTopic,
+					kafkaConsumerUserBehaviorProjection, record.Message, fkErr,
+					record.Payload.UserID, record.Payload.PostID,
+				)
+				if dlqErr != nil {
+					metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeDLQPublishFailed, kafkaFailureCode(dlqErr))
+					return dlqErr
+				}
+				log.Printf("[BehaviorProjection] route permanent foreign-key message to DLQ topic=%s partition=%d offset=%d constraint=%s", record.Message.Topic, record.Message.Partition, record.Message.Offset, constraint)
+				metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeMessageDLQ, kafkaFailureCodeDatabaseForeignKey)
+				if terminalDLQ == nil {
+					terminalDLQ = make(map[kafkaMessageIdentity]struct{})
+				}
+				terminalDLQ[kafkaMessageIdentityOf(record.Message)] = struct{}{}
+				return nil
+			},
+		)
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if kafkaFailureClassOf(err) == kafkaFailureRetryable && attempts >= policy.MaxAttempts {
+			metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeRetryExhausted, kafkaFailureCode(err))
+		}
+		return fmt.Errorf("apply user behavior batch of %d messages: %w", len(batch), err)
 	}
-	return batch
+	metrics.RecordKafkaConsumerRecovery(kafkaConsumerUserBehaviorProjection, kafkaRecoveryOutcomeBatchApplied, kafkaRecoveryCodeNone)
+	return nil
 }
 
 func decodeUserBehaviorMessage(message kafka.Message) (userBehaviorEventRecord, error) {

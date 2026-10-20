@@ -317,3 +317,26 @@ pause for configuration and input review. HTTP 413 and Provider Contract Errors
 may split a multi-message batch; an unresolved single-message provider error
 remains uncommitted and pauses for recovery. Only confirmed Kafka message-level
 permanent errors, such as invalid event envelopes, are sent to the DLQ.
+
+## Worker Kafka Recovery
+
+Kafka consumer health is tracked per stable worker slot. A successful commit
+clears failures only for the slot that committed, and the pipeline failure
+metric reports the maximum consecutive failure count across its required slots.
+Readiness also requires an active, recovery-eligible Reader session for every
+required slot after the startup grace period.
+
+A batch collection deadline is a normal end to the collection window. A
+terminal Kafka fetch error lets the consumer finish and commit messages already
+fetched, records the fetch failure, then closes that Reader so the supervisor
+can create a new session. Shutdown cancellation does not create a transport
+failure.
+
+Committed Lag is sampled by a bounded pool with a five-second overall budget,
+a four-second per-group budget, and at most five concurrent groups. Each
+pipeline publishes its own sample. A successful Lag sample remains valid when
+the additional consumer-group query fails, but that failure cannot trigger idle
+recovery. Idle recovery requires fresh zero Lag, a stable group containing all
+local Reader sessions, and unchanged failure and session versions. The
+`/readyz` endpoint reads the latest background readiness snapshot and does not
+query Kafka synchronously.

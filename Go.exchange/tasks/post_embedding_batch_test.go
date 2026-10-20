@@ -336,13 +336,13 @@ func TestPostEmbeddingBatchRetryableProviderFailureDoesNotCommit(t *testing.T) {
 	}
 }
 
-func TestPostEmbeddingBatchFetchFailureDoesNotCommit(t *testing.T) {
+func TestPostEmbeddingBatchFetchFailureSafelyCommitsFetchedMessage(t *testing.T) {
 	store, messages := newPostEmbeddingBatchFixture(t, 1)
 	fetchErr := errors.New("broker read failed")
 	reader := &postEmbeddingBatchTestReader{messages: messages, fetchErr: fetchErr}
 	embedder := &postEmbeddingBatchTestEmbedder{}
 	err := consumePostEmbeddingBatchForTest(context.Background(), reader, store, embedder, &postEmbeddingBatchTestPublisher{}, 3, 50*time.Millisecond, kafkaRetryPolicy{MaxAttempts: 1})
-	if !errors.Is(err, fetchErr) || len(reader.commits) != 0 || len(embedder.calls) != 0 {
+	if !errors.Is(err, fetchErr) || len(reader.commits) != 1 || len(reader.commits[0]) != 1 || reader.commits[0][0].Offset != messages[0].Offset || len(embedder.calls) != 1 {
 		t.Fatalf("err=%v commits=%v provider_calls=%d", err, reader.commits, len(embedder.calls))
 	}
 }
