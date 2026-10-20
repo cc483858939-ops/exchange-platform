@@ -28,8 +28,6 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const postEmbeddingConsumerRestartDelay = 2 * time.Second
-
 type postEmbeddingMessageReader interface {
 	FetchMessage(context.Context) (kafka.Message, error)
 	CommitMessages(context.Context, ...kafka.Message) error
@@ -171,30 +169,17 @@ func startPostEmbeddingConsumer(ctx context.Context, wg *sync.WaitGroup) {
 		defer wg.Done()
 		KafkaConsumerSlotStarted(PipelinePostEmbedding, 0)
 		defer KafkaConsumerSlotStopped(PipelinePostEmbedding, 0)
-		recovery := newPostEmbeddingRecoveryCoordinator(providerRetryRuntime{})
-		for {
-			err := runPostEmbeddingConsumer(ctx, 0, recovery)
-			if ctx.Err() != nil {
-				metrics.SetEmbeddingProviderPause(false, "", 0)
-				return
+		err := runPostEmbeddingConsumer(ctx, 0)
+		if ctx.Err() != nil {
+			metrics.SetEmbeddingProviderPause(false, "", 0)
+			return
+		}
+		if err != nil {
+			if isPostEmbeddingLocalConfigurationError(err) {
+				metrics.RecordPostEmbeddingInstanceQuarantine("configuration")
 			}
-			delay, decision, isProviderFailure := recovery.cooldownFor(err)
-			if err != nil && !isProviderFailure {
-				delay = postEmbeddingConsumerRestartDelay
-			}
-			if err == nil {
-				delay = postEmbeddingConsumerRestartDelay
-			}
-			if isProviderFailure {
-				log.Printf("[PostEmbedding] consumer cooldown action=%s reason=%s http_status=%d duration=%s", decision.Action, decision.Reason, decision.HTTPStatus, delay)
-			}
-			if waitErr := recovery.runtime.Sleep(ctx, delay); waitErr != nil {
-				metrics.SetEmbeddingProviderPause(false, "", 0)
-				return
-			}
-			if isProviderFailure {
-				metrics.SetEmbeddingProviderPause(false, "", 0)
-			}
+			KafkaConsumerSlotFailed(PipelinePostEmbedding, 0, "post_embedding_group_stopped", pipelineFailureConfiguration)
+			log.Printf("[PostEmbedding] consumer group stopped: %v", err)
 		}
 	}()
 }
@@ -202,23 +187,23 @@ func startPostEmbeddingConsumer(ctx context.Context, wg *sync.WaitGroup) {
 type postEmbeddingConsumerHooks struct {
 	retryRuntime      providerRetryRuntime
 	onProviderFailure func()
-	onOffsetCommit    func()
+	providerGate      *postEmbeddingProviderGate
 }
 
-func runPostEmbeddingConsumer(ctx context.Context, slotID int, recovery *postEmbeddingRecoveryCoordinator) error {
+func runPostEmbeddingConsumer(ctx context.Context, slotID int) error {
 	appConfig := config.AppConfig
 	if appConfig == nil {
 		decision := ProviderDecision{Action: ProviderActionPause, Reason: providerReasonConfig}
 		KafkaConsumerSlotFailed(PipelinePostEmbedding, slotID, "embedding_config_invalid", pipelineFailureConfiguration)
 		metrics.RecordEmbeddingProviderFailure(providerReasonConfig)
-		return &postEmbeddingProviderFailure{decision: decision, cause: errors.New("application config is not initialized")}
+		return &postEmbeddingLocalConfigurationError{cause: &postEmbeddingProviderFailure{decision: decision, cause: errors.New("application config is not initialized")}}
 	}
 	kafkaConfig := appConfig.Kafka
 	embeddingConfig := appConfig.Embedding.Normalized()
 	if err := embeddingConfig.ValidateBatchSettings(); err != nil {
 		KafkaConsumerSlotFailed(PipelinePostEmbedding, slotID, "embedding_config_invalid", pipelineFailureConfiguration)
 		metrics.RecordEmbeddingProviderFailure(providerReasonConfig)
-		return &postEmbeddingProviderFailure{decision: ProviderDecision{Action: ProviderActionPause, Reason: providerReasonConfig}, cause: err}
+		return &postEmbeddingLocalConfigurationError{cause: &postEmbeddingProviderFailure{decision: ProviderDecision{Action: ProviderActionPause, Reason: providerReasonConfig}, cause: err}}
 	}
 	db := global.WorkerDb
 	if db == nil {
@@ -229,48 +214,50 @@ func runPostEmbeddingConsumer(ctx context.Context, slotID int, recovery *postEmb
 	if buildVersion == "" {
 		KafkaConsumerSlotFailed(PipelinePostEmbedding, slotID, "embedding_config_invalid", pipelineFailureConfiguration)
 		metrics.RecordEmbeddingProviderFailure(providerReasonConfig)
-		return &postEmbeddingProviderFailure{decision: ProviderDecision{Action: ProviderActionPause, Reason: providerReasonConfig}, cause: errors.New("build embedding version is empty")}
+		return &postEmbeddingLocalConfigurationError{cause: &postEmbeddingProviderFailure{decision: ProviderDecision{Action: ProviderActionPause, Reason: providerReasonConfig}, cause: errors.New("build embedding version is empty")}}
 	}
 	if strings.TrimSpace(kafkaConfig.ConsumerDLQTopic) == "" {
 		KafkaConsumerSlotFailed(PipelinePostEmbedding, slotID, "embedding_config_invalid", pipelineFailureConfiguration)
-		return errors.New("consumer DLQ topic is required")
+		return &postEmbeddingLocalConfigurationError{cause: errors.New("consumer DLQ topic is required")}
 	}
 	embedder, err := embeddings.NewOpenAICompatibleEmbedder(embeddingConfig)
 	if err != nil {
 		KafkaConsumerSlotFailed(PipelinePostEmbedding, slotID, "embedding_provider_unavailable", pipelineFailureConfiguration)
 		metrics.RecordEmbeddingProviderFailure(providerReasonConfig)
-		return &postEmbeddingProviderFailure{decision: ProviderDecision{Action: ProviderActionPause, Reason: providerReasonConfig}, cause: err}
+		return &postEmbeddingLocalConfigurationError{cause: &postEmbeddingProviderFailure{decision: ProviderDecision{Action: ProviderActionPause, Reason: providerReasonConfig}, cause: err}}
 	}
-	reader, clientID, err := eventing.NewKafkaReader(kafkaConfig, kafkaConfig.PostEmbeddingTopic, kafkaConfig.PostEmbeddingGroupID)
+	clientID := newPostEmbeddingInstanceClientID()
+	group, err := newKafkaPostEmbeddingConsumerGroup(kafkaConfig, clientID)
 	if err != nil {
-		KafkaConsumerSlotFailed(PipelinePostEmbedding, slotID, "kafka_reader_unavailable", pipelineFailureConfiguration)
+		KafkaConsumerSlotFailed(PipelinePostEmbedding, slotID, "kafka_group_unavailable", pipelineFailureConfiguration)
 		return err
 	}
-	trackedReader := trackKafkaConsumerReader(PipelinePostEmbedding, slotID, kafkaConfig.PostEmbeddingTopic, kafkaConfig.PostEmbeddingGroupID, clientID, reader)
 	defer func() {
-		if closeErr := trackedReader.Close(); closeErr != nil {
-			log.Printf("[PostEmbedding] close Kafka reader: %v", closeErr)
+		if closeErr := group.Close(); closeErr != nil {
+			log.Printf("[PostEmbedding] close Kafka consumer group: %v", closeErr)
 		}
 	}()
 	publisher := eventingRawKafkaMessagePublisher{kafkaConfig: kafkaConfig}
 	store := gormPostEmbeddingStore{db: db}
-	hooks := postEmbeddingConsumerHooks{
-		retryRuntime:      normalizedProviderRetryRuntime(recovery.runtime),
-		onProviderFailure: recovery.noteProviderFailure,
-		onOffsetCommit:    recovery.offsetCommitted,
+	retryRuntime := normalizedProviderRetryRuntime(providerRetryRuntime{})
+	providerGate := newPostEmbeddingProviderGate(retryRuntime)
+	processBatch := func(batchCtx context.Context, messages []kafka.Message) error {
+		return processPostEmbeddingBatchWithHooks(
+			batchCtx, messages, publisher, embedder, store, buildVersion, kafkaConfig,
+			defaultKafkaRetryPolicy,
+			postEmbeddingConsumerHooks{retryRuntime: retryRuntime, providerGate: providerGate},
+		)
 	}
-	if err := consumePostEmbeddingMessagesWithBatchPolicyAndHooks(
-		ctx, trackedReader, publisher, embedder, store, buildVersion, kafkaConfig,
-		embeddingConfig.BatchSize, time.Duration(embeddingConfig.BatchMaxWaitMs)*time.Millisecond, defaultKafkaRetryPolicy, hooks,
-	); err != nil {
-		if errors.Is(err, errPostEmbeddingSourceChanged) {
-			log.Printf("[PostEmbedding] source changed during embedding; leaving Kafka message uncommitted for redelivery")
-			return err
-		}
+	runtime := newProductionPostEmbeddingGroupRuntime(
+		kafkaConfig, clientID, embeddingConfig.BatchSize,
+		time.Duration(embeddingConfig.BatchMaxWaitMs)*time.Millisecond,
+		processBatch, providerGate, retryRuntime,
+	)
+	runtime.slotID = slotID
+	if err := runPostEmbeddingKafkaGroup(ctx, group, runtime); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		log.Printf("[PostEmbedding] consume: %v", err)
 		return err
 	}
 	return ctx.Err()
@@ -389,9 +376,6 @@ func consumePostEmbeddingMessagesWithBatchPolicyAndHooks(
 		metrics.ObservePostEmbeddingProcessingDuration(time.Since(started))
 		if committed {
 			metrics.RecordKafkaConsumerRecovery(kafkaConsumerPostEmbedding, kafkaRecoveryOutcomeBatchApplied, kafkaRecoveryCodeNone)
-			if hooks.onOffsetCommit != nil {
-				hooks.onOffsetCommit()
-			}
 		}
 		if batchErr != nil {
 			metrics.RecordPostEmbeddingBatchFailure()
@@ -402,7 +386,9 @@ func consumePostEmbeddingMessagesWithBatchPolicyAndHooks(
 
 func fetchPostEmbeddingBatch(
 	ctx context.Context,
-	reader postEmbeddingMessageReader,
+	reader interface {
+		FetchMessage(context.Context) (kafka.Message, error)
+	},
 	batchSize int,
 	maxWait time.Duration,
 ) kafkaBatchFetchResult {
@@ -540,7 +526,7 @@ func processPostEmbeddingWorkItemsWithHooks(
 	for index, item := range workItems {
 		texts[index] = item.Text
 	}
-	result, err := generatePostEmbeddingTextsWithRuntime(ctx, embedder, texts, policy, hooks.retryRuntime, hooks.onProviderFailure)
+	result, err := generatePostEmbeddingTextsWithRuntimeAndGate(ctx, embedder, texts, policy, hooks.retryRuntime, hooks.onProviderFailure, hooks.providerGate)
 	if err != nil {
 		decision, providerFailure := providerFailureDecision(err)
 		if !providerFailure {
@@ -664,6 +650,18 @@ func generatePostEmbeddingTextsWithRuntime(
 	runtime providerRetryRuntime,
 	onProviderFailure func(),
 ) (embeddings.EmbedResult, error) {
+	return generatePostEmbeddingTextsWithRuntimeAndGate(ctx, embedder, texts, policy, runtime, onProviderFailure, nil)
+}
+
+func generatePostEmbeddingTextsWithRuntimeAndGate(
+	ctx context.Context,
+	embedder embeddings.Embedder,
+	texts []string,
+	policy kafkaRetryPolicy,
+	runtime providerRetryRuntime,
+	onProviderFailure func(),
+	providerGate *postEmbeddingProviderGate,
+) (embeddings.EmbedResult, error) {
 	if ctx == nil {
 		return embeddings.EmbedResult{}, errors.New("post embedding provider context is nil")
 	}
@@ -673,6 +671,14 @@ func generatePostEmbeddingTextsWithRuntime(
 	for attempt := 1; attempt <= policy.MaxAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return embeddings.EmbedResult{}, err
+		}
+		var permit *postEmbeddingProviderPermit
+		if providerGate != nil {
+			var err error
+			permit, err = providerGate.acquire(ctx)
+			if err != nil {
+				return embeddings.EmbedResult{}, err
+			}
 		}
 		generated, err := embedder.Embed(ctx, texts)
 		if err == nil {
@@ -686,20 +692,31 @@ func generatePostEmbeddingTextsWithRuntime(
 					decision.Action = ProviderActionPause
 				}
 				lastFailure = &postEmbeddingProviderFailure{decision: decision, cause: err}
+				if ctx.Err() != nil {
+					providerGate.providerRequestCanceled(permit)
+					return embeddings.EmbedResult{}, ctx.Err()
+				}
+				providerGate.providerRequestFailed(permit, decision, postEmbeddingFailureScopePartition)
 			} else {
 				metrics.RecordPostEmbeddingAPIRequest("success", len(texts))
 				generated.Model = strings.TrimSpace(generated.Model)
+				providerGate.providerRequestSucceeded(permit)
 				return generated, nil
 			}
 		} else {
 			if errors.Is(err, context.Canceled) {
+				providerGate.providerRequestCanceled(permit)
 				return embeddings.EmbedResult{}, err
 			}
 			if ctx.Err() != nil {
+				providerGate.providerRequestCanceled(permit)
 				return embeddings.EmbedResult{}, ctx.Err()
 			}
 			decision := classifyPostEmbeddingProviderError(err, len(texts))
 			lastFailure = &postEmbeddingProviderFailure{decision: decision, cause: err}
+			if providerGate != nil {
+				providerGate.providerRequestFailed(permit, decision, classifyPostEmbeddingFailureScope(decision, len(texts)))
+			}
 			metrics.RecordEmbeddingProviderFailure(decision.Reason)
 			if decision.RetryAfterProvided && !decision.RetryAfterValid {
 				metrics.RecordEmbeddingProviderFailure(providerReasonRetryAfterInvalid)

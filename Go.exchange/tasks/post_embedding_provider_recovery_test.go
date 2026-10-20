@@ -14,8 +14,6 @@ import (
 
 	"Go.exchange/embeddings"
 	appmetrics "Go.exchange/metrics"
-
-	"github.com/segmentio/kafka-go"
 )
 
 func TestClassifyPostEmbeddingProviderErrors(t *testing.T) {
@@ -161,7 +159,7 @@ func TestPostEmbeddingLongRetryAfterMovesToCooldownWithoutShortRetry(t *testing.
 	}
 }
 
-func TestPostEmbeddingRecoveryCooldownBackoffResetsOnlyOnOffsetCommit(t *testing.T) {
+func TestPostEmbeddingRecoveryCooldownResetsOnlyOnProviderRequestSuccess(t *testing.T) {
 	t.Cleanup(func() { appmetrics.SetEmbeddingProviderPause(false, "", 0) })
 	runtime := providerRetryRuntime{
 		Sleep:  func(context.Context, time.Duration) error { return nil },
@@ -177,54 +175,46 @@ func TestPostEmbeddingRecoveryCooldownBackoffResetsOnlyOnOffsetCommit(t *testing
 	if first != 5*time.Second || second != 10*time.Second {
 		t.Fatalf("retry cooldowns=%s,%s, want 5s,10s", first, second)
 	}
-	recovery.offsetCommitted()
+	recovery.providerRequestSucceeded()
 	third, _, _ := recovery.cooldownFor(retryFailure)
 	if third != 5*time.Second {
-		t.Fatalf("cooldown after committed recovery=%s, want 5s", third)
+		t.Fatalf("cooldown after validated provider request=%s, want 5s", third)
 	}
 }
 
-func TestPostEmbeddingRecoveryCounterWaitsForKafkaOffsetCommit(t *testing.T) {
-	store := newPostEmbeddingTestStore()
-	embedder := &postEmbeddingTestEmbedder{errors: []error{
-		&embeddings.ProviderHTTPError{StatusCode: http.StatusTooManyRequests, ProviderCode: "rate_limit_exceeded"},
-		nil,
-	}}
+func TestPostEmbeddingProviderRecoveryRequiresValidatedProviderSuccess(t *testing.T) {
+	cleanupPostEmbeddingGateMetrics(t)
 	runtime := providerRetryRuntime{
 		Sleep:  func(context.Context, time.Duration) error { return nil },
 		Jitter: func(delay time.Duration) time.Duration { return delay },
+		Now:    func() time.Time { return time.Unix(100, 0) },
 	}
-	recovery := newPostEmbeddingRecoveryCoordinator(runtime)
-	hooks := postEmbeddingConsumerHooks{
-		retryRuntime:      runtime,
-		onProviderFailure: recovery.noteProviderFailure,
-		onOffsetCommit:    recovery.offsetCommitted,
+	gate := newPostEmbeddingProviderGate(runtime)
+	permit, err := gate.acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
 	}
-	message := postEmbeddingTestMessage(t, 42)
+	gate.providerRequestFailed(permit, ProviderDecision{Action: ProviderActionRetry, Reason: providerReasonServer}, postEmbeddingFailureScopeSharedOrUnknown)
+	gate.mu.Lock()
+	gate.openUntil = runtime.Now().Add(-time.Millisecond)
+	gate.mu.Unlock()
 	appmetrics.RecordEmbeddingProviderRecovery()
 	recoveryBefore := postEmbeddingScalarMetric(t, "go_exchange_embedding_provider_recoveries_total")
-	firstReader := &postEmbeddingTestReader{messages: []kafka.Message{message}, commitErr: errors.New("Kafka commit failed"), publisher: &fakeRawKafkaMessagePublisher{}}
-	firstErr := consumePostEmbeddingMessagesWithBatchPolicyAndHooks(
-		context.Background(), firstReader, firstReader.publisher, embedder, store, "v1", postEmbeddingRecoveryConfig(), 1, 0,
-		kafkaRetryPolicy{MaxAttempts: 2, InitialBackoff: time.Millisecond, MaxBackoff: time.Millisecond}, hooks,
+	_, err = generatePostEmbeddingTextsWithRuntimeAndGate(
+		context.Background(), &postEmbeddingTestEmbedder{}, []string{"valid post body"},
+		kafkaRetryPolicy{MaxAttempts: 1}, runtime, nil, gate,
 	)
-	if firstErr == nil || firstReader.commitCalls != 1 || embedder.calls != 2 || len(store.upserted) != 1 {
-		t.Fatalf("first err=%v commits=%d provider=%d upserts=%d", firstErr, firstReader.commitCalls, embedder.calls, len(store.upserted))
-	}
-	if got := postEmbeddingScalarMetric(t, "go_exchange_embedding_provider_recoveries_total"); got != recoveryBefore {
-		t.Fatalf("provider recovery counted before offset commit: before=%v after=%v", recoveryBefore, got)
-	}
-
-	secondReader := &postEmbeddingTestReader{messages: []kafka.Message{message}, stopErr: errors.New("reader stopped"), publisher: &fakeRawKafkaMessagePublisher{}}
-	secondErr := consumePostEmbeddingMessagesWithBatchPolicyAndHooks(
-		context.Background(), secondReader, secondReader.publisher, embedder, store, "v1", postEmbeddingRecoveryConfig(), 1, 0,
-		kafkaRetryPolicy{MaxAttempts: 2, InitialBackoff: time.Millisecond, MaxBackoff: time.Millisecond}, hooks,
-	)
-	if !errors.Is(secondErr, secondReader.stopErr) || secondReader.commitCalls != 1 || embedder.calls != 2 {
-		t.Fatalf("replay err=%v commits=%d provider=%d", secondErr, secondReader.commitCalls, embedder.calls)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if got := postEmbeddingScalarMetric(t, "go_exchange_embedding_provider_recoveries_total"); got != recoveryBefore+1 {
-		t.Fatalf("provider recovery after committed replay=%v want=%v", got, recoveryBefore+1)
+		t.Fatalf("provider recovery after validated request=%v want=%v", got, recoveryBefore+1)
+	}
+	gate.mu.Lock()
+	state := gate.state
+	gate.mu.Unlock()
+	if state != postEmbeddingCircuitClosed {
+		t.Fatalf("breaker state after validated Provider success=%v, want closed", state)
 	}
 }
 

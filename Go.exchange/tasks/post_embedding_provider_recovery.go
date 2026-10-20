@@ -239,47 +239,29 @@ type postEmbeddingRecoveryCoordinator struct {
 	mu                       sync.Mutex
 	runtime                  providerRetryRuntime
 	consecutiveRetryFailures uint
-	providerFailurePending   bool
 }
 
 func newPostEmbeddingRecoveryCoordinator(runtime providerRetryRuntime) *postEmbeddingRecoveryCoordinator {
 	return &postEmbeddingRecoveryCoordinator{runtime: normalizedProviderRetryRuntime(runtime)}
 }
 
-func (r *postEmbeddingRecoveryCoordinator) noteProviderFailure() {
+func (r *postEmbeddingRecoveryCoordinator) providerRequestSucceeded() {
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
-	r.providerFailurePending = true
-	r.mu.Unlock()
-}
-
-func (r *postEmbeddingRecoveryCoordinator) offsetCommitted() {
-	if r == nil {
-		return
-	}
-	r.mu.Lock()
-	wasPending := r.providerFailurePending
-	r.providerFailurePending = false
 	r.consecutiveRetryFailures = 0
 	r.mu.Unlock()
-	metrics.SetEmbeddingProviderPause(false, "", 0)
-	if wasPending {
-		metrics.RecordEmbeddingProviderRecovery()
-	}
 }
 
 func (r *postEmbeddingRecoveryCoordinator) cooldownFor(err error) (time.Duration, ProviderDecision, bool) {
 	decision, ok := providerFailureDecision(err)
 	if !ok {
-		return postEmbeddingConsumerRestartDelay, ProviderDecision{}, false
+		return postEmbeddingPartitionRetryMin, ProviderDecision{}, false
 	}
 	if r == nil {
 		r = newPostEmbeddingRecoveryCoordinator(providerRetryRuntime{})
 	}
-	r.noteProviderFailure()
-
 	var delay time.Duration
 	switch decision.Action {
 	case ProviderActionRetry:
