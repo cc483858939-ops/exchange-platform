@@ -92,13 +92,19 @@ func recordPostEmbeddingPartitionBatchPending(
 	return true
 }
 
-func confirmPostEmbeddingPartitionCommit(
+func confirmPostEmbeddingGenerationCommit(
 	identity postEmbeddingGenerationHealthIdentity,
 	partition int,
 	nextOffset int64,
+	committedAt time.Time,
 ) bool {
 	if !identity.valid() || partition < 0 || nextOffset < 0 || workerShuttingDown.Load() {
 		return false
+	}
+	if committedAt.IsZero() {
+		committedAt = time.Now().UTC()
+	} else {
+		committedAt = committedAt.UTC()
 	}
 	workerPipelines.Lock()
 	defer workerPipelines.Unlock()
@@ -114,7 +120,7 @@ func confirmPostEmbeddingPartitionCommit(
 		return false
 	}
 	partitionHealth, assigned := slot.postEmbeddingPartitions[partition]
-	if !assigned || nextOffset < partitionHealth.LastConfirmedOffset {
+	if !assigned || nextOffset <= partitionHealth.LastConfirmedOffset {
 		return false
 	}
 	partitionHealth.LastConfirmedOffset = nextOffset
@@ -124,7 +130,11 @@ func confirmPostEmbeddingPartitionCommit(
 		partitionHealth.PendingNextOffset = 0
 	}
 	slot.postEmbeddingPartitions[partition] = partitionHealth
+	slot.lastCommittedOffsetAt = committedAt
+	markKafkaConsumerSlotSuccess(&slot, committedAt, "running")
 	state.kafkaSlots[identity.slotID] = slot
+	state.lastProgressAt = committedAt
+	recomputeKafkaPipelineAggregate(&state, "running")
 	workerPipelines.states[identity.pipeline] = state
 	return true
 }
@@ -249,7 +259,7 @@ func KafkaConsumerSlotCommitted(pipeline string, slotID int, offset time.Time) {
 		return
 	}
 	slot, found := state.kafkaSlots[slotID]
-	if !found {
+	if !found || slot.session.generationScoped {
 		return
 	}
 	slot.lastCommittedOffsetAt = offset

@@ -611,7 +611,6 @@ func consumePostEmbeddingPartitionReader(
 			commitErr := commitGate.Commit(ctx, runtime.topic, partition, targetNextOffset)
 			if commitErr == nil {
 				nextOffset = targetNextOffset
-				KafkaConsumerSlotCommitted(PipelinePostEmbedding, runtime.slotID, time.Now().UTC())
 				break
 			}
 			if ctx.Err() != nil {
@@ -633,7 +632,6 @@ func consumePostEmbeddingPartitionReader(
 				}
 				if commitErr := commitGate.Commit(ctx, runtime.topic, partition, targetNextOffset); commitErr == nil {
 					nextOffset = targetNextOffset
-					KafkaConsumerSlotCommitted(PipelinePostEmbedding, runtime.slotID, time.Now().UTC())
 				}
 			}
 			if ctx.Err() != nil {
@@ -812,7 +810,7 @@ func (c *postEmbeddingOffsetCommitCoordinator) Commit(ctx context.Context, topic
 	state.pendingNextOffset = 0
 	c.progress[partition] = state
 	c.mu.Unlock()
-	confirmPostEmbeddingPartitionCommit(c.healthIdentity, partition, nextOffset)
+	confirmPostEmbeddingGenerationCommit(c.healthIdentity, partition, nextOffset, time.Now().UTC())
 	return nil
 }
 
