@@ -117,13 +117,14 @@ func (r *GormCandidateRepository) eligibilityQuery(db *gorm.DB, query *gorm.DB, 
 		Where("NOT EXISTS (?)", mutedAuthor).
 		Where("NOT EXISTS (?)", negative)
 	query = recommendationCandidateWindow(query, input.CandidateWindowStart, input.CandidateWindowEnd)
-	if input.MaterializedInteractionsReady {
-		interacted := db.Table("user_post_reco_states AS rs").
-			Select("1").
-			Where("rs.user_id = ? AND rs.post_id = posts.id AND rs.interacted = TRUE", input.UserID)
-		query = query.Where("NOT EXISTS (?)", interacted)
-	} else if ids := recommendationPostIDList(input.InteractedPostIDs); len(ids) > 0 {
-		query = query.Where("posts.id NOT IN ?", ids)
+	interacted := db.Table("user_post_reco_states AS rs").
+		Select("1").
+		Where("rs.user_id = ? AND rs.post_id = posts.id AND rs.interacted = TRUE", input.UserID)
+	query = query.Where("NOT EXISTS (?)", interacted)
+	if !input.MaterializedInteractionsReady {
+		if ids := recommendationPostIDList(input.InteractedPostIDs); len(ids) > 0 {
+			query = query.Where("posts.id NOT IN ?", ids)
+		}
 	}
 
 	if input.SoftOnly {

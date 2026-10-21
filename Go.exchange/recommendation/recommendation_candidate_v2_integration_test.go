@@ -563,6 +563,111 @@ func TestRecommendationServeKeepsEmbeddingOptionalAcrossServingVersionSwitchesIn
 	assertNoEmbeddingSelected("guest", guest)
 }
 
+func TestRecommendationServeExcludesCanonicalInteractionAcrossServingVersionSwitchIntegration(t *testing.T) {
+	db := openRecommendationCandidateIntegrationDB(t)
+	viewer := newRecommendationCandidateIntegrationUser(t, db, "interaction-version-switch-viewer")
+	author := newRecommendationCandidateIntegrationUser(t, db, "interaction-version-switch-author")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	interacted := newRecommendationCandidateIntegrationPost(t, db, author, "interacted", now.Add(-2*time.Minute))
+	withoutEmbedding := newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, author, "without-embedding", now.Add(-time.Minute))
+	postIDs := []uint{interacted.ID, withoutEmbedding.ID}
+	userIDs := []uint{viewer.ID, author.ID}
+	t.Cleanup(func() {
+		if err := db.Unscoped().Where("user_id = ? AND post_id IN ?", viewer.ID, postIDs).Delete(&models.UserPostRecoState{}).Error; err != nil {
+			t.Errorf("delete canonical interaction fixture: %v", err)
+		}
+		if err := db.Unscoped().Where("user_id = ?", viewer.ID).Delete(&models.UserRecoProfileDirty{}).Error; err != nil {
+			t.Errorf("delete dirty profile fixture: %v", err)
+		}
+		if err := db.Unscoped().Where("user_id = ?", viewer.ID).Delete(&models.UserRecoProfile{}).Error; err != nil {
+			t.Errorf("delete materialized profile fixture: %v", err)
+		}
+		cleanupRecommendationCandidateIntegrationData(db, postIDs, userIDs)
+	})
+	if err := db.Create(&models.UserFollow{FollowerID: viewer.ID, FollowingID: author.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.UserPostRecoState{
+		UserID: viewer.ID, PostID: interacted.ID, Interacted: true,
+		CanonicalVersion: CanonicalOutcomeVersion, RebuiltAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := testDefaultRecommendationConfig()
+	cfg.Snapshot.Enabled = false
+	positive := pgvector.NewVector([]float32{1, 0})
+	if err := db.Create(&models.UserRecoProfile{
+		UserID: viewer.ID, ProfileVersion: MaterializedProfileVersion,
+		ProfileConfigHash: ProfileConfigHash(cfg, "post_embedding_v1"), EmbeddingVersion: "post_embedding_v1",
+		Dimensions: 2, PositiveVector: &positive, PositiveSignalCount: 1, PersonalizedSignalCount: 1,
+		ComputedAt: now.Add(-time.Minute), NextRebuildAt: now.Add(time.Hour), UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := NewGormCandidateRepository(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles, err := NewGormProfileRepository(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(ServiceDependencies{
+		DataDependencies: DataDependencies{Candidates: candidates, Profiles: profiles},
+		ServingVersions:  recommendationCandidateDBServingVersionProvider{db: db},
+	}, ServiceConfig{Recommendation: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serve := func(label string) ServeResult {
+		t.Helper()
+		result, err := service.Serve(context.Background(), ServeRequest{
+			Viewer: Viewer{Kind: ViewerAuthenticated, UserID: viewer.ID}, Limit: len(postIDs),
+			RequestID: "interaction-version-switch-" + label + "-" + uuid.NewString(), Now: now,
+		})
+		if err != nil {
+			t.Fatalf("serve %s: %v", label, err)
+		}
+		return result
+	}
+	assertOnlyUninteractedWithoutEmbedding := func(label string, result ServeResult) {
+		t.Helper()
+		if !equalCandidateIDs(selectedPostIDs(result.Selected), []uint{withoutEmbedding.ID}) {
+			t.Fatalf("%s selected=%v, want only eligible no-vector post %d", label, selectedPostIDs(result.Selected), withoutEmbedding.ID)
+		}
+		if result.Selected[0].Embedding != nil {
+			t.Fatalf("%s no-vector post has embedding %v", label, result.Selected[0].Embedding)
+		}
+	}
+
+	if err := embeddingstate.SetServingVersion(context.Background(), db, "post_embedding_v1"); err != nil {
+		t.Fatal(err)
+	}
+	v1 := serve("v1")
+	if v1.Profile.ProfileStatus != ProfileStatusHit || !v1.Profile.MaterializedInteractionsReady {
+		t.Fatalf("v1 profile=%+v, want compatible materialized profile", v1.Profile)
+	}
+	assertOnlyUninteractedWithoutEmbedding("v1", v1)
+
+	if err := embeddingstate.SetServingVersion(context.Background(), db, "post_embedding_v2"); err != nil {
+		t.Fatal(err)
+	}
+	v2 := serve("v2")
+	if v2.Profile.ProfileStatus != ProfileStatusIncompatible || v2.Profile.MaterializedInteractionsReady || len(v2.Profile.PositiveVector) != 0 {
+		t.Fatalf("v2 profile=%+v, want incompatible profile without a reused vector", v2.Profile)
+	}
+	assertOnlyUninteractedWithoutEmbedding("v2", v2)
+
+	var persisted models.UserRecoProfile
+	if err := db.Where("user_id = ?", viewer.ID).First(&persisted).Error; err != nil {
+		t.Fatalf("load profile after v2 serving: %v", err)
+	}
+	if persisted.EmbeddingVersion != "post_embedding_v1" {
+		t.Fatalf("profile was rebuilt during v2 serving: embedding version=%q", persisted.EmbeddingVersion)
+	}
+}
+
 func addRecommendationCandidateMirrorPost(t *testing.T, db *gorm.DB, account models.DevDataMirrorAccount, post models.Post, ids *[]uint) {
 	t.Helper()
 	mapping := models.DevDataMirrorPost{

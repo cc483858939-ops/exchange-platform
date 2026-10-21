@@ -114,6 +114,38 @@ func TestAuthenticatedCandidateEligibilityFiltersMutedAuthorsBeforeLimit(t *test
 	}
 }
 
+func TestCandidateEligibilityAlwaysExcludesCanonicalInteractionsAndKeepsProfileFallback(t *testing.T) {
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: &sql.DB{}}), &gorm.Config{
+		DryRun: true, DisableAutomaticPing: true, SkipDefaultTransaction: true,
+	})
+	if err != nil {
+		t.Fatalf("open dry-run PostgreSQL database: %v", err)
+	}
+	repository, err := NewGormCandidateRepository(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := CandidateQuery{
+		UserID: 73, ServingVersion: "serving-v2", Limit: 20,
+		CandidateWindowStart: time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC),
+		CandidateWindowEnd:   time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC),
+		InteractedPostIDs:    map[uint]struct{}{101: {}},
+	}
+	query := repository.eligibilityQuery(db, db.Table("posts").Select("posts.id"), input).
+		Order("posts.created_at DESC, posts.id DESC").Limit(input.Limit)
+	var rows []uint
+	if err := query.Find(&rows).Error; err != nil {
+		t.Fatalf("build dry-run interaction eligibility query: %v", err)
+	}
+	sqlText := strings.Join(strings.Fields(query.Statement.SQL.String()), " ")
+	if !strings.Contains(sqlText, "user_post_reco_states AS rs") || !strings.Contains(sqlText, "rs.interacted = TRUE") {
+		t.Fatalf("canonical interaction exclusion must not depend on profile compatibility: %s", sqlText)
+	}
+	if !strings.Contains(sqlText, "posts.id NOT IN") {
+		t.Fatalf("incompatible-profile InteractedPostIDs fallback was not retained: %s", sqlText)
+	}
+}
+
 func TestCandidateEligibilityDecouplesEmbeddingFromWindowBeforeLimit(t *testing.T) {
 	db, err := gorm.Open(postgres.New(postgres.Config{Conn: &sql.DB{}}), &gorm.Config{
 		DryRun: true, DisableAutomaticPing: true, SkipDefaultTransaction: true,

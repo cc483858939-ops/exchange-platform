@@ -798,6 +798,70 @@ func TestRecommendationRetryKeepsStableTrackingClaims(t *testing.T) {
 	}
 }
 
+func TestRecommendationSnapshotNextPageRetainsCandidateWithoutEmbedding(t *testing.T) {
+	store := newMemorySnapshotStore()
+	service, repository, now := newSnapshotTestService(t, store)
+	firstCandidate := testCandidate(1, CandidateSourceRecent)
+	secondCandidate := testCandidate(2, CandidateSourceRecent)
+	repository.semantic = nil
+	repository.following = nil
+	repository.recent = []Candidate{firstCandidate, secondCandidate}
+	repository.trending = nil
+	repository.embeddings = nil
+	service.config.Recommendation.Candidates.Personalized = config.RecommendationCandidateCaps{Recent: 2, Merged: 2}
+	service.config.Recommendation.Candidates.ColdStart = config.RecommendationCandidateCaps{Recent: 2, Merged: 2}
+	service.config.Recommendation.Snapshot.MaxCandidates = 2
+	service.config.Recommendation.Snapshot.PreselectPages = 1
+	service.config.Recommendation.Snapshot.DefaultPageSize = 1
+	service.config.Recommendation.Snapshot.MaxPageSize = 1
+
+	first, err := service.Serve(context.Background(), ServeRequest{
+		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 1,
+		RequestID: "snapshot-no-vector-page-0", Now: now,
+	})
+	if err != nil {
+		t.Fatalf("serve first snapshot page: %v", err)
+	}
+	if len(first.Selected) != 1 || first.Selected[0].Embedding != nil {
+		t.Fatalf("first page=%+v, want one candidate without a vector", first.Selected)
+	}
+	var remainingPostID uint
+	switch first.Selected[0].Post.ID {
+	case firstCandidate.PostID:
+		remainingPostID = secondCandidate.PostID
+	case secondCandidate.PostID:
+		remainingPostID = firstCandidate.PostID
+	default:
+		t.Fatalf("first page returned unexpected post %d", first.Selected[0].Post.ID)
+	}
+	if err := service.FinalizeServing(context.Background(), first, first.Selected); err != nil {
+		t.Fatalf("finalize first snapshot page: %v", err)
+	}
+	if first.NextCursor == "" {
+		t.Fatal("first snapshot page did not return a continuation cursor")
+	}
+
+	second, err := service.Serve(context.Background(), ServeRequest{
+		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 1, Cursor: first.NextCursor,
+		RequestID: "snapshot-no-vector-page-1", Now: now.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("serve second snapshot page: %v", err)
+	}
+	if !second.CacheHit || len(second.Selected) != 1 {
+		t.Fatalf("second page cache hit=%v selected=%v, want one snapshot result", second.CacheHit, selectedPostIDs(second.Selected))
+	}
+	if second.Selected[0].Post.ID != remainingPostID || second.Selected[0].Embedding != nil {
+		t.Fatalf("second page candidate=%+v, want remaining no-vector candidate %d with nil embedding", second.Selected[0], remainingPostID)
+	}
+	if len(repository.snapshotQueries) != 2 {
+		t.Fatalf("snapshot page revalidation queries=%d, want one commit check and one dynamic-page query", len(repository.snapshotQueries))
+	}
+	if !repository.snapshotQueries[1].Now.Equal(now.Add(time.Second)) {
+		t.Fatalf("dynamic snapshot page query time=%s, want %s", repository.snapshotQueries[1].Now, now.Add(time.Second))
+	}
+}
+
 func TestRecommendationSnapshotReuses500CandidatePoolAcrossFivePages(t *testing.T) {
 	store := newMemorySnapshotStore()
 	service, candidates, now := newSnapshotTestService(t, store)
