@@ -109,6 +109,36 @@ source. Recency is handled by Recent recall, publication-time tie breaking,
 and exploration/selection policies rather than a freshness `BaseScore`
 component.
 
+Following, Recent, Trending, onboarding-interest Recent, and guest Public
+Recent/Trending admit otherwise eligible public root posts within the configured
+candidate window even when the post has no embedding for the active model.
+Hydration keeps those posts with a nil embedding; semantic scores and semantic
+exploration are zero for them, while social, trending, language, and other
+non-semantic signals continue to rank them. Semantic recall remains isolated to
+the active `ServingVersion`: it requires a valid, nonzero post vector for that
+version and a compatible positive profile. If that vector disappears between
+semantic recall and hydration or snapshot revalidation, the semantic candidate
+is dropped rather than retaining stale similarity metadata. No older-version
+vector is used as a fallback.
+
+### Embedding model-version switch
+
+`BuildVersion` selects the version written by the Post Embedding worker;
+`ServingVersion` independently selects the version read by semantic recall and
+candidate hydration. To switch models, configure the worker's
+`EMBEDDING_BUILD_VERSION` for the target, allow it to fill target-version
+embeddings, and run `go run ./cmd/check-post-embedding-coverage` to review the
+target coverage for the configured candidate window. The coverage command is a
+report only; it does not block a switch. Then update serving with
+`go run ./cmd/set-embedding-serving-version --version <target-version>`.
+
+Changing `ServingVersion` does not generate embeddings or rebuild profiles.
+Profiles whose embedding version or configuration hash no longer matches are
+treated as incompatible and their vectors are not served; non-semantic
+candidates continue to be available while profile recovery rebuilds a compatible
+profile. After the switch, verify the serving version and profile recovery
+before expecting semantic recall to resume.
+
 Authenticated For You pagination reuses a short-lived Redis candidate snapshot
 for up to 120 seconds. The snapshot stores at most 500 lightweight ranked
 candidates, not rendered Post responses. Every page rechecks current Post

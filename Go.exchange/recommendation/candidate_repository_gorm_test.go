@@ -114,7 +114,7 @@ func TestAuthenticatedCandidateEligibilityFiltersMutedAuthorsBeforeLimit(t *test
 	}
 }
 
-func TestCandidateEligibilityRequiresCurrentEmbeddingAndWindowBeforeLimit(t *testing.T) {
+func TestCandidateEligibilityDecouplesEmbeddingFromWindowBeforeLimit(t *testing.T) {
 	db, err := gorm.Open(postgres.New(postgres.Config{Conn: &sql.DB{}}), &gorm.Config{
 		DryRun: true, DisableAutomaticPing: true, SkipDefaultTransaction: true,
 	})
@@ -138,11 +138,14 @@ func TestCandidateEligibilityRequiresCurrentEmbeddingAndWindowBeforeLimit(t *tes
 	}
 	sqlText := strings.Join(strings.Fields(query.Statement.SQL.String()), " ")
 	limitIndex := strings.Index(sqlText, "LIMIT")
-	for _, fragment := range []string{"eligible_embedding.version =", "eligible_embedding.dimensions > 0", "vector_norm(eligible_embedding.embedding) > 0", "posts.created_at >=", "posts.created_at <="} {
+	for _, fragment := range []string{"posts.created_at >=", "posts.created_at <="} {
 		index := strings.Index(sqlText, fragment)
 		if index < 0 || limitIndex < 0 || index >= limitIndex {
 			t.Fatalf("candidate query is missing pre-limit eligibility %q: %s", fragment, sqlText)
 		}
+	}
+	if strings.Contains(sqlText, "post_embeddings") || strings.Contains(sqlText, "vector_norm") {
+		t.Fatalf("non-semantic candidate eligibility must not require an embedding: %s", sqlText)
 	}
 	var sawServingVersion, sawWindowStart, sawWindowEnd bool
 	for _, value := range query.Statement.Vars {
@@ -154,8 +157,8 @@ func TestCandidateEligibilityRequiresCurrentEmbeddingAndWindowBeforeLimit(t *tes
 			sawWindowEnd = sawWindowEnd || value.Equal(input.CandidateWindowEnd)
 		}
 	}
-	if !sawServingVersion || !sawWindowStart || !sawWindowEnd {
-		t.Fatalf("candidate query variables omit serving version or time window: %#v", query.Statement.Vars)
+	if sawServingVersion || !sawWindowStart || !sawWindowEnd {
+		t.Fatalf("candidate query variables include serving version or omit the time window: %#v", query.Statement.Vars)
 	}
 }
 
@@ -183,10 +186,13 @@ func TestPublicCandidateQueriesRemainUnaffectedByMuteRelationships(t *testing.T)
 	}
 	sqlText := strings.Join(strings.Fields(result.Statement.SQL.String()), " ")
 	limitIndex := strings.Index(sqlText, "LIMIT")
-	for _, fragment := range []string{"eligible_embedding.version =", "eligible_embedding.dimensions > 0", "vector_norm(eligible_embedding.embedding) > 0", "posts.created_at >=", "posts.created_at <="} {
+	for _, fragment := range []string{"posts.visibility = 'public'", "posts.reply_to_post_id IS NULL", "post_author.deleted_at IS NULL", "posts.created_at >=", "posts.created_at <="} {
 		index := strings.Index(sqlText, fragment)
 		if index < 0 || limitIndex < 0 || index >= limitIndex {
 			t.Fatalf("public query is missing pre-limit eligibility %q: %s", fragment, sqlText)
 		}
+	}
+	if strings.Contains(sqlText, "post_embeddings") || strings.Contains(sqlText, "vector_norm") {
+		t.Fatalf("public candidate eligibility must not require an embedding: %s", sqlText)
 	}
 }

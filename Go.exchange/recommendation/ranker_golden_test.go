@@ -21,6 +21,7 @@ func TestRecommendationRankerUsesSemanticAndTrendingBreakdown(t *testing.T) {
 	candidate := hydratedRecommendationCandidate{
 		Candidate: embeddingCandidate{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: .75},
 		Post:      article,
+		Embedding: []float32{.75, .6614378},
 	}
 
 	ranked := rankRecommendationCandidates(userInterestProfile{PositiveVector: []float32{1, 0}}, []hydratedRecommendationCandidate{candidate}, now, cfg)
@@ -29,8 +30,8 @@ func TestRecommendationRankerUsesSemanticAndTrendingBreakdown(t *testing.T) {
 	}
 	got := ranked[0].Breakdown
 	wantTrending := cfg.TrendingWeight * recommendationTrendingRaw(article, now, cfg)
-	if math.Abs(got.PositiveSemantic-.75) > 1e-9 ||
-		math.Abs(got.SemanticComponent-cfg.SemanticWeight*.75) > 1e-9 ||
+	if math.Abs(got.PositiveSemantic-.75) > 1e-7 ||
+		math.Abs(got.SemanticComponent-cfg.SemanticWeight*.75) > 1e-7 ||
 		math.Abs(got.TrendingComponent-wantTrending) > 1e-9 ||
 		got.AuthorAffinityComponent != 0 {
 		t.Fatalf("breakdown=%#v", got)
@@ -46,8 +47,8 @@ func TestRecommendationRankerPublicationAgeDoesNotChangeBaseScore(t *testing.T) 
 	cfg := DefaultConfig()
 	profile := userInterestProfile{PositiveVector: []float32{1, 0}}
 	ranked := rankRecommendationCandidates(profile, []hydratedRecommendationCandidate{
-		{Candidate: embeddingCandidate{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 1, CreatedAt: now.Add(-time.Hour)}, AuthorID: 10}},
-		{Candidate: embeddingCandidate{PostID: 2, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 2, CreatedAt: now.Add(-365 * 24 * time.Hour)}, AuthorID: 11}},
+		{Candidate: embeddingCandidate{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 1, CreatedAt: now.Add(-time.Hour)}, AuthorID: 10}, Embedding: []float32{.5, .8660254}},
+		{Candidate: embeddingCandidate{PostID: 2, FromSemantic: true, PositiveSemanticSimilarity: .5}, Post: models.Post{Model: gorm.Model{ID: 2, CreatedAt: now.Add(-365 * 24 * time.Hour)}, AuthorID: 11}, Embedding: []float32{.5, .8660254}},
 	}, now, cfg)
 	if len(ranked) != 2 || math.Abs(ranked[0].Breakdown.BaseScore-ranked[1].Breakdown.BaseScore) > 1e-9 {
 		t.Fatalf("ranked=%#v, publication age must not affect base score", ranked)
@@ -59,8 +60,8 @@ func TestRecommendationRankerOldRelevantPostBeatsWeakNewArticle(t *testing.T) {
 	cfg := DefaultConfig()
 	profile := userInterestProfile{PositiveVector: []float32{1, 0}}
 	ranked := rankRecommendationCandidates(profile, []hydratedRecommendationCandidate{
-		{Candidate: embeddingCandidate{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: .9}, Post: models.Post{Model: gorm.Model{ID: 1, CreatedAt: now.Add(-365 * 24 * time.Hour)}, AuthorID: 10}},
-		{Candidate: embeddingCandidate{PostID: 2, FromSemantic: true, PositiveSemanticSimilarity: .1}, Post: models.Post{Model: gorm.Model{ID: 2, CreatedAt: now.Add(-time.Hour)}, AuthorID: 11}},
+		{Candidate: embeddingCandidate{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: .9}, Post: models.Post{Model: gorm.Model{ID: 1, CreatedAt: now.Add(-365 * 24 * time.Hour)}, AuthorID: 10}, Embedding: []float32{.9, .4358899}},
+		{Candidate: embeddingCandidate{PostID: 2, FromSemantic: true, PositiveSemanticSimilarity: .1}, Post: models.Post{Model: gorm.Model{ID: 2, CreatedAt: now.Add(-time.Hour)}, AuthorID: 11}, Embedding: []float32{.1, .9949874}},
 	}, now, cfg)
 	if len(ranked) != 2 || ranked[0].Post.ID != 1 {
 		t.Fatalf("ranked=%#v, old relevant article should beat weak new article", ranked)
@@ -177,15 +178,15 @@ func TestRecommendationRankerComputesSemanticOutsideSemanticRecall(t *testing.T)
 	}
 }
 
-func TestRecommendationRankerFallsBackToRecallSemanticWhenHydratedEmbeddingMissing(t *testing.T) {
+func TestRecommendationRankerDoesNotReuseRecallSemanticWhenHydratedEmbeddingMissing(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	profile := userInterestProfile{PositiveVector: []float32{1, 0}}
 	ranked := rankRecommendationCandidates(profile, []hydratedRecommendationCandidate{{
 		Candidate: embeddingCandidate{PostID: 1, FromSemantic: true, PositiveSemanticSimilarity: .8},
 		Post:      models.Post{Model: gorm.Model{ID: 1}, AuthorID: 10},
 	}}, now, DefaultConfig())
-	if len(ranked) != 1 || math.Abs(ranked[0].Breakdown.PositiveSemantic-.8) > 1e-9 {
-		t.Fatalf("ranked=%#v, want recall semantic fallback .8", ranked)
+	if len(ranked) != 1 || ranked[0].Breakdown.PositiveSemantic != 0 || ranked[0].Breakdown.SemanticComponent != 0 || ranked[0].ExplorationSemantic != 0 {
+		t.Fatalf("ranked=%#v, stale recall similarity must not survive missing hydration vector", ranked)
 	}
 }
 
@@ -257,7 +258,7 @@ func TestRecommendationRankerKeepsEmbeddedAndNilEmbeddingCandidates(t *testing.T
 			Embedding: []float32{1, 0},
 		},
 		{
-			Candidate: embeddingCandidate{PostID: 2, FromTrending: true},
+			Candidate: embeddingCandidate{PostID: 2, FromTrending: true, FromSemantic: true, PositiveSemanticSimilarity: .99},
 			Post:      models.Post{Model: gorm.Model{ID: 2, CreatedAt: now}, AuthorID: 11, LikeCount: 3},
 			Embedding: nil,
 		},
@@ -283,6 +284,9 @@ func TestRecommendationRankerKeepsEmbeddedAndNilEmbeddingCandidates(t *testing.T
 	}
 	if nonSemantic.Breakdown.PositiveSemantic != 0 || nonSemantic.Breakdown.NegativeSemantic != 0 || nonSemantic.Breakdown.SemanticComponent != 0 {
 		t.Fatalf("nil-embedding semantic breakdown=%#v, want all semantic scores to be zero", nonSemantic.Breakdown)
+	}
+	if nonSemantic.ExplorationSemantic != 0 {
+		t.Fatalf("nil-embedding exploration semantic=%v, want zero", nonSemantic.ExplorationSemantic)
 	}
 	if nonSemantic.Breakdown.TrendingComponent <= 0 {
 		t.Fatalf("nil-embedding trending component=%v, want positive score", nonSemantic.Breakdown.TrendingComponent)

@@ -17,6 +17,7 @@ import (
 type semanticRecallQueryRecorder struct {
 	count int
 	query string
+	vars  []driver.NamedValue
 }
 
 type semanticRecallQueryConnector struct{ recorder *semanticRecallQueryRecorder }
@@ -47,9 +48,10 @@ func (semanticRecallQueryConn) Begin() (driver.Tx, error) {
 	return semanticRecallQueryTx{}, nil
 }
 
-func (connection semanticRecallQueryConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+func (connection semanticRecallQueryConn) QueryContext(_ context.Context, query string, vars []driver.NamedValue) (driver.Rows, error) {
 	connection.recorder.count++
 	connection.recorder.query = query
+	connection.recorder.vars = append([]driver.NamedValue(nil), vars...)
 	return semanticRecallEmptyRows{}, nil
 }
 
@@ -98,6 +100,8 @@ func TestSemanticRecallBuildsOneWindowScopedCandidateQuery(t *testing.T) {
 		"FROM post_embeddings AS ae",
 		"ae.version =",
 		"ae.dimensions =",
+		"ae.dimensions > 0",
+		"vector_norm(ae.embedding) > 0",
 		"posts.created_at >=",
 		"posts.created_at <=",
 		"ORDER BY ae.embedding <=>",
@@ -109,5 +113,40 @@ func TestSemanticRecallBuildsOneWindowScopedCandidateQuery(t *testing.T) {
 	}
 	if strings.Count(sqlText, "LIMIT") != 1 {
 		t.Fatalf("semantic candidate SQL has multiple limits: %s", sqlText)
+	}
+	var sawServingVersion bool
+	for _, variable := range recorder.vars {
+		if variable.Value == query.ServingVersion {
+			sawServingVersion = true
+		}
+	}
+	if !sawServingVersion {
+		t.Fatalf("semantic recall query did not bind only the active serving version %q: %#v", query.ServingVersion, recorder.vars)
+	}
+}
+
+func TestSemanticRecallSkipsMissingPositiveProfileVector(t *testing.T) {
+	recorder := &semanticRecallQueryRecorder{}
+	sqlDB := sql.OpenDB(semanticRecallQueryConnector{recorder: recorder})
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{
+		DisableAutomaticPing: true, SkipDefaultTransaction: true,
+	})
+	if err != nil {
+		t.Fatalf("open PostgreSQL database: %v", err)
+	}
+	repository, err := NewGormCandidateRepository(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, vector := range [][]float32{nil, {}, {0, 0}} {
+		if candidates, err := repository.LoadSemanticCandidates(context.Background(), CandidateQuery{
+			ServingVersion: "serving-v2", Limit: 10, PositiveVector: vector,
+		}); err != nil || len(candidates) != 0 {
+			t.Fatalf("semantic candidates=%v err=%v for invalid profile vector %v", candidates, err, vector)
+		}
+	}
+	if recorder.count != 0 {
+		t.Fatalf("semantic queries=%d, want no SQL without a valid positive profile vector", recorder.count)
 	}
 }

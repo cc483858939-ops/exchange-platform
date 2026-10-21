@@ -254,7 +254,7 @@ func TestRecommendationServingVersionsRemainRRFV6Contract(t *testing.T) {
 	if RecommendationTrackingTokenVersion != "v3" || eventing.RecommendationBehaviorSchemaVersion != 3 {
 		t.Fatalf("tracking=%q behavior schema=%d", RecommendationTrackingTokenVersion, eventing.RecommendationBehaviorSchemaVersion)
 	}
-	if CandidateRetrievalVersion != "social_semantic_materialized_profile_rrf_v5" || MaterializedProfileVersion != "materialized_profile_v1" {
+	if CandidateRetrievalVersion != "social_semantic_materialized_profile_rrf_v6" || MaterializedProfileVersion != "materialized_profile_v1" {
 		t.Fatalf("retrieval contract changed; materialized profile=%q", MaterializedProfileVersion)
 	}
 }

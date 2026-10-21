@@ -144,6 +144,10 @@ func TestRecommendationSemanticDuplicatePredicateIsIndependentOfPenalty(t *testi
 	if recommendationIsSemanticDuplicate(candidate, selected, cfg) {
 		t.Fatal("dimension-mismatched embedding must not be a duplicate")
 	}
+	candidate.Embedding = nil
+	if recommendationIsSemanticDuplicate(candidate, selected, cfg) {
+		t.Fatal("missing embedding must not be a semantic duplicate")
+	}
 	cfg.Diversity.SemanticDuplicateThreshold = -1
 	if recommendationIsSemanticDuplicate(candidate, selected, cfg) {
 		t.Fatal("no comparable embeddings must not be a duplicate at the threshold lower bound")

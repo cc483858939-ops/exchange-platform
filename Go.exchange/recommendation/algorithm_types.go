@@ -200,5 +200,5 @@ const (
 	LanguageUnd               = "und"
 	RankerVersion             = "rules_v6"
 	SelectionPolicyVersion    = "network_balance_exploration_v2"
-	CandidateRetrievalVersion = "social_semantic_materialized_profile_rrf_v5"
+	CandidateRetrievalVersion = "social_semantic_materialized_profile_rrf_v6"
 )

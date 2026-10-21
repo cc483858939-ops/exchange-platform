@@ -18,8 +18,6 @@ func RankCandidates(profile ProfileFeatures, candidates []RankedCandidate, now t
 		positiveSemantic := 0.0
 		if validComparableEmbedding(candidate.Embedding, profile.PositiveVector) {
 			positiveSemantic = ClampUnit(CosineSimilarity(candidate.Embedding, profile.PositiveVector))
-		} else if candidate.Candidate.FromSemantic && ValidEmbeddingVector(profile.PositiveVector) {
-			positiveSemantic = clampSemanticSimilarity(candidate.Candidate.PositiveSemanticSimilarity)
 		}
 		negativeSemantic := CosineSimilarity(candidate.Embedding, profile.NegativeVector)
 		if negativeSemantic < 0 {

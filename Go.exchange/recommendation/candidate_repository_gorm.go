@@ -88,19 +88,11 @@ AND EXISTS (
 `)
 }
 
-func recommendationCandidateWindowAndEmbedding(query *gorm.DB, servingVersion string, windowStart, windowEnd time.Time) *gorm.DB {
-	if servingVersion == "" || windowStart.IsZero() || windowEnd.IsZero() || windowEnd.Before(windowStart) {
+func recommendationCandidateWindow(query *gorm.DB, windowStart, windowEnd time.Time) *gorm.DB {
+	if windowStart.IsZero() || windowEnd.IsZero() || windowEnd.Before(windowStart) {
 		return query.Where("1 = 0")
 	}
-	return query.
-		Where("posts.created_at >= ? AND posts.created_at <= ?", windowStart.UTC(), windowEnd.UTC()).
-		Where(`EXISTS (
-			SELECT 1 FROM post_embeddings AS eligible_embedding
-			WHERE eligible_embedding.post_id = posts.id
-			  AND eligible_embedding.version = ?
-			  AND eligible_embedding.dimensions > 0
-			  AND vector_norm(eligible_embedding.embedding) > 0
-		)`, servingVersion)
+	return query.Where("posts.created_at >= ? AND posts.created_at <= ?", windowStart.UTC(), windowEnd.UTC())
 }
 
 func (r *GormCandidateRepository) eligibilityQuery(db *gorm.DB, query *gorm.DB, input CandidateQuery) *gorm.DB {
@@ -124,7 +116,7 @@ func (r *GormCandidateRepository) eligibilityQuery(db *gorm.DB, query *gorm.DB, 
 		Where("posts.author_id <> ?", input.UserID).
 		Where("NOT EXISTS (?)", mutedAuthor).
 		Where("NOT EXISTS (?)", negative)
-	query = recommendationCandidateWindowAndEmbedding(query, input.ServingVersion, input.CandidateWindowStart, input.CandidateWindowEnd)
+	query = recommendationCandidateWindow(query, input.CandidateWindowStart, input.CandidateWindowEnd)
 	if input.MaterializedInteractionsReady {
 		interacted := db.Table("user_post_reco_states AS rs").
 			Select("1").
@@ -160,7 +152,7 @@ func servedPostIDs(history map[uint]ServedItem) map[uint]struct{} {
 }
 
 func (r *GormCandidateRepository) LoadSemanticCandidates(ctx context.Context, input CandidateQuery) ([]Candidate, error) {
-	if len(input.PositiveVector) == 0 || input.Limit <= 0 {
+	if !ValidEmbeddingVector(input.PositiveVector) || input.Limit <= 0 {
 		return nil, nil
 	}
 	db, err := recommendationContextDB(ctx, r.db)
@@ -171,7 +163,8 @@ func (r *GormCandidateRepository) LoadSemanticCandidates(ctx context.Context, in
 	query := r.eligibilityQuery(db, db.Table("post_embeddings AS ae").
 		Select("ae.post_id, 1 - (ae.embedding <=> ?) AS positive_semantic_similarity", queryVector).
 		Joins("JOIN posts ON posts.id = ae.post_id").
-		Where("ae.version = ? AND ae.dimensions = ?", input.ServingVersion, len(input.PositiveVector)), input)
+		Where("ae.version = ? AND ae.dimensions = ?", input.ServingVersion, len(input.PositiveVector)).
+		Where("ae.dimensions > 0 AND vector_norm(ae.embedding) > 0"), input)
 	var rows []semanticCandidateRow
 	if err := query.Clauses(clause.OrderBy{Expression: clause.Expr{
 		SQL: "ae.embedding <=> ? ASC, posts.id DESC", Vars: []interface{}{queryVector},
@@ -340,7 +333,7 @@ func (r *GormCandidateRepository) LoadPublicTrendingCandidates(ctx context.Conte
 
 func publicCandidateQuery(db *gorm.DB, input PublicCandidateQuery) *gorm.DB {
 	query := recommendationPublicPostScope(db.Table("posts").Select("posts.id")).Where("posts.reply_to_post_id IS NULL")
-	query = recommendationCandidateWindowAndEmbedding(query, input.ServingVersion, input.CandidateWindowStart, input.CandidateWindowEnd)
+	query = recommendationCandidateWindow(query, input.CandidateWindowStart, input.CandidateWindowEnd)
 	if ids := recommendationPostIDList(input.ExcludedPostIDs); len(ids) > 0 {
 		query = query.Where("posts.id NOT IN ?", ids)
 	}
@@ -423,7 +416,10 @@ func (r *GormCandidateRepository) HydrateCandidates(ctx context.Context, input C
 		}
 		embedding, ok := embeddings[candidate.PostID]
 		if !ok || !ValidEmbeddingVector(embedding) {
-			continue
+			if candidate.FromSemantic {
+				continue
+			}
+			embedding = nil
 		}
 		result = append(result, RankedCandidate{Candidate: candidate, Post: post, Embedding: embedding})
 	}
@@ -485,9 +481,7 @@ func (r *GormCandidateRepository) LoadSnapshotPage(ctx context.Context, input Ca
 		contextQuery := db.Table("posts").Select("posts.id").Where("posts.id IN ?", contextPostIDs)
 		contextQuery = recommendationPublicPostScope(contextQuery).
 			Where("posts.reply_to_post_id IS NULL")
-		contextQuery = recommendationCandidateWindowAndEmbedding(
-			contextQuery, input.ServingVersion, input.CandidateWindowStart, input.CandidateWindowEnd,
-		)
+		contextQuery = recommendationCandidateWindow(contextQuery, input.CandidateWindowStart, input.CandidateWindowEnd)
 		if err := contextQuery.Pluck("posts.id", &validContextIDs).Error; err != nil {
 			return nil, nil, fmt.Errorf("load eligible snapshot context posts: %w", err)
 		}
@@ -523,7 +517,11 @@ func (r *GormCandidateRepository) LoadSnapshotPage(ctx context.Context, input Ca
 		}
 		embedding, exists := embeddings[id]
 		if !exists || !ValidEmbeddingVector(embedding) {
-			continue
+			candidate := byID[id]
+			if candidate.FromSemantic {
+				continue
+			}
+			embedding = nil
 		}
 		result = append(result, RankedCandidate{Candidate: byID[id], Post: post, Embedding: embedding})
 	}
