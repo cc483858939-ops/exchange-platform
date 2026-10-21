@@ -3,6 +3,8 @@ import { createTelemetryPersistence } from './telemetryPersistence';
 import { createClientOperationID } from '../utils/clientOperationId';
 import {
   TelemetryRetryGate,
+  createTelemetryAuthFingerprint,
+  type TelemetryRequestAuthContext,
   type TelemetrySnapshot,
   getTelemetryHTTPFailure,
 } from './telemetryRetryGate';
@@ -34,6 +36,7 @@ type PostViewBatchResponse = {
 
 type CurrentUserIDGetter = () => number | null;
 type AuthStateGetter = () => string | number | null;
+type AuthSessionVersionGetter = () => number | null;
 type PostViewSnapshot = TelemetrySnapshot<QueuedPostViewEvent>;
 
 type FeedObservation = {
@@ -113,6 +116,7 @@ export class PostViewTelemetryClient {
   constructor(
     private readonly getCurrentUserID: CurrentUserIDGetter,
     private readonly getAuthStateKey: AuthStateGetter = () => 'authenticated',
+    private readonly getAuthSessionVersion: AuthSessionVersionGetter = () => null,
   ) {
     this.retryGate = new TelemetryRetryGate(
       () => { if (!this.stopped) void this.flush(); },
@@ -245,7 +249,7 @@ export class PostViewTelemetryClient {
   }
 
   async flush(): Promise<void> {
-    if (this.inFlight) {
+    if (this.stopped || this.inFlight) {
       return;
     }
     const currentUserID = this.syncOwner();
@@ -262,7 +266,9 @@ export class PostViewTelemetryClient {
       return;
     }
 
-    const capturedGeneration = this.sessionGeneration;
+    const requestAuthContext = this.captureRequestAuthContext(currentUserID);
+    if (!requestAuthContext) return;
+    const capturedGeneration = requestAuthContext.sessionGeneration;
     const capturedRetryEpoch = this.retryGate.captureEpoch();
     this.retryGate.cancelScheduled();
     this.inFlight = true;
@@ -306,7 +312,13 @@ export class PostViewTelemetryClient {
           shouldDrain = true;
         }
       } else if (status === 401 || status === 403) {
-        this.pauseForAuth(currentUserID);
+        const failedFingerprint = this.failedRequestAuthFingerprint(requestAuthContext, failure);
+        const currentFingerprint = this.authFingerprint(currentUserID);
+        if (failedFingerprint !== null && failedFingerprint === currentFingerprint) {
+          this.pauseForAuth(currentUserID, failedFingerprint);
+        } else {
+          shouldDrain = currentFingerprint !== null;
+        }
       } else if (status !== 408 && status !== 425 && status !== 429 && !(status !== null && status >= 500 && status <= 599)) {
         if (status !== null && status >= 400 && status <= 499) {
           this.dropBatch(batch);
@@ -355,6 +367,8 @@ export class PostViewTelemetryClient {
       this.activeOwnerID = ownerID;
       this.sessionGeneration += 1;
       this.authPausedFingerprint = null;
+      this.queue = this.queue.filter(event => event.owner_user_id === ownerID);
+      this.retryGate.reset();
       this.persistQueue();
     } else if (this.ownerUnavailable) {
       this.sessionGeneration += 1;
@@ -364,9 +378,49 @@ export class PostViewTelemetryClient {
   }
 
   private authFingerprint(ownerID: number): string | null {
-    const authState = this.getAuthStateKey();
-    if (authState === null || authState === '') return null;
-    return `${ownerID}:${String(authState)}`;
+    return createTelemetryAuthFingerprint(
+      ownerID,
+      this.getAuthStateKey(),
+      this.normalizedAuthSessionVersion(),
+    );
+  }
+
+  private captureRequestAuthContext(ownerID: number): TelemetryRequestAuthContext | null {
+    const authStateKey = this.getAuthStateKey();
+    const sessionVersion = this.normalizedAuthSessionVersion();
+    const authFingerprint = createTelemetryAuthFingerprint(ownerID, authStateKey, sessionVersion);
+    if (authFingerprint === null || authStateKey === null || authStateKey === '') return null;
+    return {
+      ownerID,
+      sessionGeneration: this.sessionGeneration,
+      authFingerprint,
+      authStateKey,
+      sessionVersion,
+    };
+  }
+
+  private failedRequestAuthFingerprint(
+    context: TelemetryRequestAuthContext,
+    failure: ReturnType<typeof getTelemetryHTTPFailure>,
+  ): string | null {
+    const authorization = failure.requestAuthorization?.trim();
+    const authStateKey = authorization || context.authStateKey;
+    const sessionVersion = failure.requestSessionVersion ?? context.sessionVersion;
+    if (authStateKey === context.authStateKey && sessionVersion === context.sessionVersion) {
+      return context.authFingerprint;
+    }
+    return createTelemetryAuthFingerprint(
+      context.ownerID,
+      authStateKey,
+      sessionVersion,
+    );
+  }
+
+  private normalizedAuthSessionVersion(): number | null {
+    const version = this.getAuthSessionVersion();
+    return typeof version === 'number' && Number.isSafeInteger(version) && version >= 0
+      ? version
+      : null;
   }
 
   private canSendForAuth(ownerID: number): boolean {
@@ -379,8 +433,9 @@ export class PostViewTelemetryClient {
     return true;
   }
 
-  private pauseForAuth(ownerID: number): void {
-    this.authPausedFingerprint = this.authFingerprint(ownerID);
+  private pauseForAuth(ownerID: number, failedFingerprint: string): void {
+    if (this.authFingerprint(ownerID) !== failedFingerprint) return;
+    this.authPausedFingerprint = failedFingerprint;
     this.retryGate.cancelScheduled();
     this.persistQueue();
     this.queuePersistence.flush();
@@ -579,9 +634,10 @@ export class PostViewTelemetryClient {
 export function initializePostViewTelemetry(
   getCurrentUserID: CurrentUserIDGetter,
   getAuthStateKey?: AuthStateGetter,
+  getAuthSessionVersion?: AuthSessionVersionGetter,
 ): PostViewTelemetryClient {
   if (!sharedClient) {
-    sharedClient = new PostViewTelemetryClient(getCurrentUserID, getAuthStateKey);
+    sharedClient = new PostViewTelemetryClient(getCurrentUserID, getAuthStateKey, getAuthSessionVersion);
     sharedClient.start();
   }
   return sharedClient;

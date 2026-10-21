@@ -60,24 +60,56 @@ export type TelemetryHTTPFailure = {
   data: unknown;
   retryAfter: string | null;
   date: string | null;
+  requestAuthorization: string | null;
+  requestSessionVersion: number | null;
+};
+
+export type TelemetryRequestAuthContext = {
+  ownerID: number;
+  sessionGeneration: number;
+  authFingerprint: string;
+  authStateKey: string | number;
+  sessionVersion: number | null;
+};
+
+export const createTelemetryAuthFingerprint = (
+  ownerID: number,
+  authStateKey: string | number | null,
+  sessionVersion: number | null,
+): string | null => {
+  if (authStateKey === null || authStateKey === '') return null;
+  return `${ownerID}:${sessionVersion ?? ''}:${String(authStateKey)}`;
 };
 
 export const getTelemetryHTTPFailure = (error: unknown): TelemetryHTTPFailure => {
-  const response = (error as {
+  const value = error as {
+    config?: {
+      headers?: unknown;
+      _authSessionVersion?: unknown;
+    };
     response?: {
       status?: unknown;
       data?: unknown;
       headers?: unknown;
     };
-  } | null)?.response;
+  } | null;
+  const response = value?.response;
+  const requestConfig = value?.config;
   const status = typeof response?.status === 'number' && Number.isFinite(response.status)
     ? response.status
     : null;
+  const rawSessionVersion = requestConfig?._authSessionVersion;
   return {
     status,
     data: response?.data,
     retryAfter: readTelemetryHeader(response?.headers, 'Retry-After'),
     date: readTelemetryHeader(response?.headers, 'Date'),
+    requestAuthorization: readTelemetryHeader(requestConfig?.headers, 'Authorization'),
+    requestSessionVersion: typeof rawSessionVersion === 'number'
+      && Number.isSafeInteger(rawSessionVersion)
+      && rawSessionVersion >= 0
+      ? rawSessionVersion
+      : null,
   };
 };
 

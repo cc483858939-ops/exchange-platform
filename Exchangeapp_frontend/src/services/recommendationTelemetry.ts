@@ -3,6 +3,8 @@ import { createTelemetryPersistence } from './telemetryPersistence';
 import type { RecommendationTracking } from '../types/Recommendation';
 import {
   TelemetryRetryGate,
+  createTelemetryAuthFingerprint,
+  type TelemetryRequestAuthContext,
   type TelemetrySnapshot,
   getTelemetryHTTPFailure,
   readTelemetryHeader,
@@ -147,9 +149,10 @@ export function calculateRectVisibility(rect: DOMRect): number {
 export const getRecommendationTelemetry = (
   getAccessToken: () => string | null,
   getCurrentUserID: () => number | null,
+  getAuthSessionVersion: () => number | null = () => null,
 ) => {
   if (!sharedClient) {
-    sharedClient = new RecommendationTelemetryClient(getAccessToken, getCurrentUserID);
+    sharedClient = new RecommendationTelemetryClient(getAccessToken, getCurrentUserID, getAuthSessionVersion);
     sharedClient.start();
   }
   return sharedClient;
@@ -186,6 +189,7 @@ export class RecommendationTelemetryClient {
   constructor(
     private readonly getAccessToken: () => string | null,
     private readonly getCurrentUserID: () => number | null,
+    private readonly getAuthSessionVersion: () => number | null = () => null,
   ) {
     this.retryGate = new TelemetryRetryGate(
       () => { if (!this.stopped) void this.flush(false); },
@@ -435,7 +439,7 @@ export class RecommendationTelemetryClient {
     const batch = this.selectRequestBatch(this.queue);
     if (batch.length === 0) return;
     this.retryGate.cancelScheduled();
-    const capturedGeneration = this.sessionGeneration;
+    const capturedGeneration = context.authContext.sessionGeneration;
     const capturedRetryEpoch = this.retryGate.captureEpoch();
     this.inFlight = true;
     let shouldDrain = false;
@@ -450,7 +454,7 @@ export class RecommendationTelemetryClient {
         status: typeof response.status === 'number' ? response.status : 200,
         data: response.data,
         headers: response.headers,
-      }, batch, context.ownerID, capturedRetryEpoch);
+      }, batch, context.authContext, capturedRetryEpoch);
     } catch (error) {
       this.syncOwner();
       if (capturedGeneration !== this.sessionGeneration) return;
@@ -459,7 +463,7 @@ export class RecommendationTelemetryClient {
         status: failure.status ?? 0,
         data: failure.data as RecommendationEventBatchResponse | undefined,
         headers: (error as { response?: { headers?: unknown } } | null)?.response?.headers,
-      }, batch, context.ownerID, capturedRetryEpoch);
+      }, batch, context.authContext, capturedRetryEpoch, failure);
     } finally {
       this.inFlight = false;
       if (this.stopped) {
@@ -482,7 +486,7 @@ export class RecommendationTelemetryClient {
     const batch = this.selectRequestBatch(this.queue);
     if (batch.length === 0) return;
     this.retryGate.cancelScheduled();
-    const capturedGeneration = this.sessionGeneration;
+    const capturedGeneration = context.authContext.sessionGeneration;
     const capturedRetryEpoch = this.retryGate.captureEpoch();
     this.keepaliveInFlight = true;
     let shouldDrain = false;
@@ -490,7 +494,7 @@ export class RecommendationTelemetryClient {
       const response = await this.sendKeepalive(batch, context.accessToken);
       this.syncOwner();
       if (capturedGeneration !== this.sessionGeneration) return;
-      shouldDrain = this.handleResponse(response, batch, context.ownerID, capturedRetryEpoch);
+      shouldDrain = this.handleResponse(response, batch, context.authContext, capturedRetryEpoch);
     } catch (error) {
       this.syncOwner();
       if (capturedGeneration !== this.sessionGeneration) return;
@@ -499,7 +503,7 @@ export class RecommendationTelemetryClient {
         status: failure.status ?? 0,
         data: failure.data as RecommendationEventBatchResponse | undefined,
         headers: (error as { response?: { headers?: unknown } } | null)?.response?.headers,
-      }, batch, context.ownerID, capturedRetryEpoch);
+      }, batch, context.authContext, capturedRetryEpoch, failure);
     } finally {
       this.keepaliveInFlight = false;
       if (this.stopped) {
@@ -782,8 +786,9 @@ export class RecommendationTelemetryClient {
   private handleResponse(
     response: RecommendationResponse,
     batch: QueuedRecommendationEvent[],
-    ownerID: number,
+    authContext: TelemetryRequestAuthContext,
     retryEpoch: number,
+    failure?: ReturnType<typeof getTelemetryHTTPFailure>,
   ): boolean {
     const { status, data, headers } = response;
     const retryAfter = readTelemetryHeader(headers, 'Retry-After');
@@ -805,8 +810,13 @@ export class RecommendationTelemetryClient {
     }
 
     if (status === 401 || status === 403) {
-      this.pauseForAuth(ownerID);
-      return false;
+      const failedFingerprint = this.failedRequestAuthFingerprint(authContext, failure);
+      const currentFingerprint = this.authFingerprint(authContext.ownerID);
+      if (failedFingerprint !== null && failedFingerprint === currentFingerprint) {
+        this.pauseForAuth(authContext.ownerID, failedFingerprint);
+        return false;
+      }
+      return currentFingerprint !== null;
     }
     if (
       status === 0
@@ -870,12 +880,18 @@ export class RecommendationTelemetryClient {
     this.retryGate.request(delayMS);
   }
 
-  private getSendContext(): { ownerID: number; accessToken: string } | null {
+  private getSendContext(): {
+    ownerID: number;
+    accessToken: string;
+    authContext: TelemetryRequestAuthContext;
+  } | null {
     const ownerID = this.syncOwner();
     if (!isValidUserID(ownerID) || this.queue.length === 0) return null;
     const accessToken = this.getAccessToken();
     if (!accessToken) return null;
-    const fingerprint = `${ownerID}:${accessToken}`;
+    const sessionVersion = this.normalizedAuthSessionVersion();
+    const fingerprint = createTelemetryAuthFingerprint(ownerID, accessToken, sessionVersion);
+    if (fingerprint === null) return null;
     if (this.authPausedFingerprint !== null) {
       if (this.authPausedFingerprint === fingerprint) return null;
       this.authPausedFingerprint = null;
@@ -884,7 +900,17 @@ export class RecommendationTelemetryClient {
       if (!this.stopped) this.retryGate.request(0);
       return null;
     }
-    return { ownerID, accessToken };
+    return {
+      ownerID,
+      accessToken,
+      authContext: {
+        ownerID,
+        sessionGeneration: this.sessionGeneration,
+        authFingerprint: fingerprint,
+        authStateKey: accessToken,
+        sessionVersion,
+      },
+    };
   }
 
   private recordRetryFailure(retryAfter?: string | null, serverDate?: string | null) {
@@ -892,9 +918,41 @@ export class RecommendationTelemetryClient {
     this.queuePersistence.flush();
   }
 
-  private pauseForAuth(ownerID: number) {
-    const token = this.getAccessToken();
-    this.authPausedFingerprint = token ? `${ownerID}:${token}` : null;
+  private authFingerprint(ownerID: number): string | null {
+    return createTelemetryAuthFingerprint(
+      ownerID,
+      this.getAccessToken(),
+      this.normalizedAuthSessionVersion(),
+    );
+  }
+
+  private failedRequestAuthFingerprint(
+    context: TelemetryRequestAuthContext,
+    failure?: ReturnType<typeof getTelemetryHTTPFailure>,
+  ): string | null {
+    const authorization = failure?.requestAuthorization?.trim();
+    const authStateKey = authorization || context.authStateKey;
+    const sessionVersion = failure?.requestSessionVersion ?? context.sessionVersion;
+    if (authStateKey === context.authStateKey && sessionVersion === context.sessionVersion) {
+      return context.authFingerprint;
+    }
+    return createTelemetryAuthFingerprint(
+      context.ownerID,
+      authStateKey,
+      sessionVersion,
+    );
+  }
+
+  private normalizedAuthSessionVersion(): number | null {
+    const version = this.getAuthSessionVersion();
+    return typeof version === 'number' && Number.isSafeInteger(version) && version >= 0
+      ? version
+      : null;
+  }
+
+  private pauseForAuth(ownerID: number, failedFingerprint: string) {
+    if (this.authFingerprint(ownerID) !== failedFingerprint) return;
+    this.authPausedFingerprint = failedFingerprint;
     this.retryGate.cancelScheduled();
     this.persistQueue();
     this.queuePersistence.flush();
@@ -921,6 +979,7 @@ export class RecommendationTelemetryClient {
       this.resetObservedCards(false);
       this.clearSeenEvents();
       this.queue = [];
+      this.retryGate.reset();
       this.persistQueue();
     } else if (this.ownerUnavailable) {
       this.sessionGeneration += 1;

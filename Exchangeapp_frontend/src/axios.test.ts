@@ -275,6 +275,31 @@ describe('Axios authentication session handling', () => {
     expect(request.headers.Authorization).toBe('Bearer Alice A2');
   });
 
+  it('leaves the final retried request auth context on a 401 after refresh to token B', async () => {
+    mocks.authStore.sessionVersion = 4;
+    mocks.authStore.refreshToken = 'A refresh';
+    mocks.authStore.token = 'Bearer token-a';
+    mocks.authStore.refreshAccessToken.mockImplementation(async () => {
+      mocks.authStore.token = 'Bearer token-b';
+      return 'Bearer token-b';
+    });
+    const request = makeRequest(4, '/recommendation-events', 'Bearer token-a');
+    let finalError: AxiosError | undefined;
+    mocks.instance.mockImplementationOnce(async config => {
+      const prepared = await requestInterceptor()(config as TestRequestConfig);
+      finalError = makeUnauthorizedError(prepared);
+      throw finalError;
+    });
+
+    await expect(responseErrorInterceptor()(makeUnauthorizedError(request)))
+      .rejects.toMatchObject({ response: { status: 401 } });
+
+    expect(mocks.instance).toHaveBeenCalledTimes(1);
+    const finalHeaders = finalError?.config?.headers as unknown as { Authorization?: string } | undefined;
+    expect(finalHeaders?.Authorization).toBe('Bearer token-b');
+    expect((finalError?.config as TestRequestConfig | undefined)?._authSessionVersion).toBe(4);
+  });
+
   it('does not retry an explicitly bound 401 after the user or durable session changes', async () => {
     for (const nextIdentity of [
       { userID: 8, sessionID: 'S1' },

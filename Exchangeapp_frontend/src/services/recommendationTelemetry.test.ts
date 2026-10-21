@@ -268,6 +268,328 @@ describe('RecommendationTelemetryClient delivery', () => {
     expect(mocks.post).toHaveBeenCalledTimes(2);
   });
 
+  it('clears retry cooldown and owner events when the recommendation owner changes', async () => {
+    vi.useFakeTimers();
+    let ownerID = 7;
+    let token = 'Bearer owner-a';
+    mocks.post.mockRejectedValueOnce({
+      response: { status: 429, headers: { 'retry-after': '60' } },
+    });
+    client = new RecommendationTelemetryClient(() => token, () => ownerID);
+    client.start();
+    client.recordClick(42, tracking);
+    await flushMicrotasks();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+
+    ownerID = 8;
+    token = 'Bearer owner-b';
+    client.refreshOwner();
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) => ({
+      data: responseFor(body.events),
+    }));
+    client.recordClick(43, { ...tracking, request_id: 'owner-b-click' });
+    await flushMicrotasks();
+
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(eventsFromPost(1)).toHaveLength(1);
+    expect(savedRecommendationSnapshot().ownerUserId).toBe(8);
+    expect(savedRecommendationSnapshot().events).toEqual([]);
+  });
+
+  it.each([401, 403])('retries with the current token after an old token returns %i', async status => {
+    vi.useFakeTimers();
+    let token = 'Bearer token-a';
+    let rejectOldRequest: ((reason: unknown) => void) | undefined;
+    mocks.post.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectOldRequest = reject;
+    }));
+    client = new RecommendationTelemetryClient(() => token, () => 7);
+    client.start();
+    client.recordClick(42, tracking);
+    await flushMicrotasks();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+
+    token = 'Bearer token-b';
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) => ({
+      data: responseFor(body.events),
+    }));
+    rejectOldRequest?.({
+      response: { status },
+      config: { headers: { Authorization: 'Bearer token-a' }, _authSessionVersion: 0 },
+    });
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(0);
+    await flushMicrotasks();
+
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(eventsFromPost(1)).toHaveLength(1);
+    expect(savedRecommendationSnapshot().events).toEqual([]);
+  });
+
+  it('keeps Retry-After for the same owner across token refresh and temporary identity loss', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-21T00:00:00.000Z'));
+    let ownerID: number | null = 7;
+    let token: string | null = 'Bearer token-a';
+    mocks.post.mockRejectedValueOnce({
+      response: { status: 429, headers: { 'retry-after': '60' } },
+    });
+    client = new RecommendationTelemetryClient(() => token, () => ownerID);
+    client.start();
+    client.recordClick(42, tracking);
+    await flushMicrotasks();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+
+    token = 'Bearer token-b';
+    client.refreshOwner();
+    ownerID = null;
+    client.refreshOwner();
+    await vi.advanceTimersByTimeAsync(30_000);
+    ownerID = 7;
+    client.refreshOwner();
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) => ({
+      data: responseFor(body.events),
+    }));
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await flushMicrotasks();
+
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(eventsFromPost(1)).toHaveLength(1);
+    expect(savedRecommendationSnapshot().events).toEqual([]);
+  });
+
+  it('does not carry A retry state through a temporary identity gap into B', async () => {
+    vi.useFakeTimers();
+    let ownerID: number | null = 7;
+    let token = 'Bearer token-a';
+    mocks.post.mockRejectedValueOnce({
+      response: { status: 429, headers: { 'retry-after': '60' } },
+    });
+    client = new RecommendationTelemetryClient(() => token, () => ownerID);
+    client.start();
+    client.recordClick(42, tracking);
+    await flushMicrotasks();
+
+    ownerID = null;
+    client.refreshOwner();
+    ownerID = 8;
+    token = 'Bearer token-b';
+    client.refreshOwner();
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) => ({
+      data: responseFor(body.events),
+    }));
+    client.recordClick(43, { ...tracking, request_id: 'owner-b-after-gap' });
+    await flushMicrotasks();
+
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(eventsFromPost(1)).toHaveLength(1);
+    expect(savedRecommendationSnapshot()).toMatchObject({ ownerUserId: 8, events: [] });
+  });
+
+  it('drops another owner snapshot and cooldown during initialization', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-21T00:00:00.000Z'));
+    client?.stop();
+    const ownerAEvent = {
+      event_id: 'owner-a-snapshot-event',
+      event_type: 'click',
+      tracking_token: 'v2.owner-a',
+      occurred_at: new Date().toISOString(),
+    };
+    sessionStorage.setItem(recommendationStorageKey, JSON.stringify({
+      events: [ownerAEvent],
+      retry: { retryNotBeforeEpochMs: Date.now() + 60_000, retryAttempt: 3 },
+      ownerUserId: 7,
+    }));
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) => ({
+      data: responseFor(body.events),
+    }));
+    client = new RecommendationTelemetryClient(() => 'Bearer owner-b', () => 8);
+    client.start();
+    client.recordClick(43, { ...tracking, request_id: 'owner-b-init' });
+    await flushMicrotasks();
+
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(eventsFromPost(0)).toHaveLength(1);
+    expect(eventsFromPost(0)[0].event_type).toBe('click');
+    expect(savedRecommendationSnapshot()).toMatchObject({
+      ownerUserId: 8,
+      retry: { retryNotBeforeEpochMs: 0, retryAttempt: 0 },
+      events: [],
+    });
+  });
+
+  it('restores the same owner cooldown from its snapshot', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-21T00:00:00.000Z'));
+    client?.stop();
+    const savedEvent = {
+      event_id: 'same-owner-snapshot-event',
+      event_type: 'click',
+      tracking_token: 'v2.same-owner',
+      occurred_at: new Date().toISOString(),
+    };
+    sessionStorage.setItem(recommendationStorageKey, JSON.stringify({
+      events: [savedEvent],
+      retry: { retryNotBeforeEpochMs: Date.now() + 60_000, retryAttempt: 3 },
+      ownerUserId: 7,
+    }));
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) => ({
+      data: responseFor(body.events),
+    }));
+    client = new RecommendationTelemetryClient(() => 'Bearer test-token', () => 7);
+    client.start();
+    await flushMicrotasks();
+    expect(mocks.post).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(mocks.post).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await flushMicrotasks();
+
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(eventsFromPost(0)[0].event_id).toBe(savedEvent.event_id);
+  });
+
+  it('ignores a stale auth failure after switching owners and sends only the new owner event', async () => {
+    vi.useFakeTimers();
+    let ownerID = 7;
+    let rejectOldRequest: ((reason: unknown) => void) | undefined;
+    mocks.post.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectOldRequest = reject;
+    }));
+    client = new RecommendationTelemetryClient(() => 'Bearer token-a', () => ownerID);
+    client.start();
+    client.recordClick(42, tracking);
+    await flushMicrotasks();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+
+    ownerID = 8;
+    client.refreshOwner();
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) => ({
+      data: responseFor(body.events),
+    }));
+    client.recordReadEnd(43, { ...tracking, request_id: 'new-owner-after-401' }, readPayload);
+    rejectOldRequest?.({
+      response: { status: 401 },
+      config: { headers: { Authorization: 'Bearer token-a' }, _authSessionVersion: 0 },
+    });
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(0);
+    await flushMicrotasks();
+
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(eventsFromPost(1)).toHaveLength(1);
+    expect(eventsFromPost(1)[0].event_type).toBe('read_end');
+    expect(savedRecommendationSnapshot()).toMatchObject({ ownerUserId: 8, events: [] });
+    expect(savedRecommendationSnapshot().retry.retryNotBeforeEpochMs).toBe(0);
+  });
+
+  it('pauses token B when Axios retried with B and the final 401 used B', async () => {
+    vi.useFakeTimers();
+    let token = 'Bearer token-a';
+    let sessionVersion = 4;
+    mocks.post.mockImplementationOnce(async () => {
+      token = 'Bearer token-b';
+      return Promise.reject({
+        response: { status: 401 },
+        config: { headers: { Authorization: 'Bearer token-b' }, _authSessionVersion: 4 },
+      });
+    });
+    client = new RecommendationTelemetryClient(() => token, () => 7, () => sessionVersion);
+    client.start();
+    client.recordClick(42, tracking);
+    await flushMicrotasks();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(savedRecommendationSnapshot().events).toHaveLength(1);
+    sessionVersion = 5;
+    client.refreshOwner();
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) => ({
+      data: responseFor(body.events),
+    }));
+    await vi.advanceTimersByTimeAsync(0);
+    await flushMicrotasks();
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(eventsFromPost(1)).toHaveLength(1);
+  });
+
+  it.each([401, 403])('recovers from a stale keepalive token after %i', async status => {
+    vi.useFakeTimers();
+    let token = 'Bearer token-a';
+    mocks.fetch.mockImplementationOnce(async (_url: string, request: RequestInit) => {
+      token = 'Bearer token-b';
+      expect(new Headers(request.headers).get('Authorization')).toBe('Bearer token-a');
+      return {
+        ok: false,
+        status,
+        headers: new Headers(),
+        json: async () => ({}),
+      };
+    });
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) => ({
+      data: responseFor(body.events),
+    }));
+    client = new RecommendationTelemetryClient(() => token, () => 7);
+    client.start();
+    client.recordReadEnd(42, tracking, readPayload);
+
+    await client.flush(true);
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    expect(mocks.post).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(0);
+    await flushMicrotasks();
+
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(eventsFromPost(0)).toHaveLength(1);
+    expect(savedRecommendationSnapshot().events).toEqual([]);
+  });
+
+  it('keeps Retry-After when an old auth request fails after another request sets cooldown', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-21T00:00:00.000Z'));
+    let token = 'Bearer token-a';
+    let rejectOldRequest: ((reason: unknown) => void) | undefined;
+    mocks.post.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectOldRequest = reject;
+    }));
+    mocks.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      headers: new Headers({ 'Retry-After': '60' }),
+      json: async () => ({}),
+    });
+    client = new RecommendationTelemetryClient(() => token, () => 7);
+    client.start();
+    client.recordClick(42, tracking);
+    await flushMicrotasks();
+    client.recordReadEnd(43, { ...tracking, request_id: 'stale-auth-with-cooldown' }, readPayload);
+    await client.flush(true);
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+
+    token = 'Bearer token-b';
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) => ({
+      data: responseFor(body.events),
+    }));
+    rejectOldRequest?.({
+      response: { status: 401 },
+      config: { headers: { Authorization: 'Bearer token-a' }, _authSessionVersion: 0 },
+    });
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await flushMicrotasks();
+
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(eventsFromPost(1)).toHaveLength(2);
+  });
+
   it('does not send keepalive during Retry-After cooldown', async () => {
     mocks.post.mockRejectedValueOnce({
       response: { status: 429, headers: { 'retry-after': '60' } },

@@ -299,6 +299,7 @@ if (initialHomeDocumentEntry) {
 const recommendationTelemetry = getRecommendationTelemetry(
   () => authStore.token,
   () => authStore.isAuthenticated ? authStore.currentIdentity?.id ?? null : null,
+  () => authStore.sessionVersion,
 );
 const getHomePostViewTelemetry = () => getPostViewTelemetry();
 
@@ -386,6 +387,7 @@ const releaseHomeViewSessionsForViewer = (viewerID: number | null) => {
 let lastHomeViewerID = currentViewerID();
 let lastHomeAuthenticated = authStore.isAuthenticated;
 let lastHomeToken = authStore.token;
+let lastHomeSessionVersion = authStore.sessionVersion;
 
 const activeTab = computed<FeedTab>(() => homeTimeline.activeTab);
 const feedTopPinned = reactive<Record<FeedTab, boolean>>({
@@ -1538,11 +1540,11 @@ watch(
 );
 
 watch(
-  [() => currentViewerID(), () => authStore.isAuthenticated, () => authStore.token],
-  ([viewerID, isAuthenticated, token]) => {
+  [() => currentViewerID(), () => authStore.isAuthenticated, () => authStore.token, () => authStore.sessionVersion],
+  ([viewerID, isAuthenticated, token, sessionVersion]) => {
     const identityChanged = viewerID !== lastHomeViewerID || isAuthenticated !== lastHomeAuthenticated;
-    const tokenChanged = token !== lastHomeToken;
-    if (!identityChanged && !tokenChanged) {
+    const credentialsChanged = token !== lastHomeToken || sessionVersion !== lastHomeSessionVersion;
+    if (!identityChanged && !credentialsChanged) {
       return;
     }
     recommendationTelemetry.refreshOwner?.();
@@ -1554,6 +1556,7 @@ watch(
     lastHomeViewerID = viewerID;
     lastHomeAuthenticated = isAuthenticated;
     lastHomeToken = token;
+    lastHomeSessionVersion = sessionVersion;
   },
 );
 

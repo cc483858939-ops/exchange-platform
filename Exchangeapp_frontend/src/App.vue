@@ -104,6 +104,9 @@ const preserveTopicReturnCache = computed(() => shouldPreserveTopicReturnCache(r
 const postViewTelemetry = initializePostViewTelemetry(() => {
   const id = authStore.currentIdentity?.id;
   return typeof id === 'number' && id > 0 ? id : null;
-}, () => authStore.token);
-watch(() => authStore.token, () => postViewTelemetry?.refreshAuthState?.());
+}, () => authStore.token, () => authStore.sessionVersion);
+watch(
+  [() => authStore.token, () => authStore.sessionVersion],
+  () => postViewTelemetry?.refreshAuthState?.(),
+);
 </script>

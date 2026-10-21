@@ -685,9 +685,10 @@ const currentIdentity = computed(() => (
 const recommendationTelemetry = getRecommendationTelemetry(
   () => authStore.token,
   () => authStore.isAuthenticated ? authStore.currentIdentity?.id ?? null : null,
+  () => authStore.sessionVersion,
 );
 watch(
-  [() => authStore.isAuthenticated, () => authStore.currentIdentity?.id, () => authStore.token],
+  [() => authStore.isAuthenticated, () => authStore.currentIdentity?.id, () => authStore.token, () => authStore.sessionVersion],
   () => recommendationTelemetry.refreshOwner?.(),
   { immediate: true },
 );

@@ -139,7 +139,7 @@ describe('telemetry hot-path budgets', () => {
     expect(saved(recommendationKey)).toHaveLength(2);
   });
 
-  it('keeps Post View owners while coalescing writes and flushing pagehide', async () => {
+  it('resets the Post View snapshot on owner change while coalescing writes and flushing pagehide', async () => {
     let owner = 7;
     views = new PostViewTelemetryClient(() => owner);
     views.start();
@@ -152,8 +152,9 @@ describe('telemetry hot-path budgets', () => {
     owner = 8;
     views.enqueue(51, 'owner-8', 'post_detail');
     window.dispatchEvent(new Event('pagehide'));
-    expect(saved(viewKey)[50]).toMatchObject({ owner_user_id: 8 });
-    expect(saved(viewKey)[0]).toMatchObject({ owner_user_id: 7 });
+    expect(saved(viewKey)).toEqual([
+      expect.objectContaining({ owner_user_id: 8, event_id: 'owner-8' }),
+    ]);
     await Promise.resolve();
     expect(writes.mock.calls.filter(([key]) => key === viewKey)).toHaveLength(2);
   });
@@ -162,6 +163,7 @@ describe('telemetry hot-path budgets', () => {
     let confirm: ((response: unknown) => void) | undefined;
     mocks.post.mockImplementationOnce(() => new Promise(resolve => { confirm = resolve; }));
     views = new PostViewTelemetryClient(() => 7);
+    views.start();
     views.enqueue(1, 'acknowledged', 'feed');
     await Promise.resolve();
     confirm?.({ status: 202, data: { results: [{ event_id: 'acknowledged', status: 'accepted' }] } });

@@ -86,7 +86,7 @@ describe('PostViewTelemetryClient', () => {
     expect(savedPostViewEvents()).toHaveLength(1);
   });
 
-  it('deduplicates compatible event IDs and rejects conflicting identities', async () => {
+  it('deduplicates within an owner and clears old-owner events after account switch', async () => {
     const first = event(1);
     mocks.post.mockRejectedValue(new Error('offline'));
 
@@ -98,9 +98,12 @@ describe('PostViewTelemetryClient', () => {
     expect(client.enqueue(first.post_id + 1, first.event_id, 'post_detail')).toBe(false);
     expect(client.enqueue(first.post_id, first.event_id, 'feed')).toBe(false);
     currentUserID = 8;
-    expect(client.enqueue(first.post_id, first.event_id, 'post_detail')).toBe(false);
-
-    expect(savedPostViewEvents()).toEqual(saved);
+    expect(client.enqueue(first.post_id, first.event_id, 'post_detail')).toBe(true);
+    await settle();
+    expect(savedPostViewEvents()).not.toEqual(saved);
+    expect(savedPostViewEvents()).toEqual([
+      expect.objectContaining({ event_id: first.event_id, owner_user_id: 8 }),
+    ]);
   });
 
   it('retains network failures and schedules the first retry', async () => {
@@ -203,6 +206,294 @@ describe('PostViewTelemetryClient', () => {
     await vi.advanceTimersByTimeAsync(1);
     await settle();
     expect(mocks.post).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not carry an account cooldown or queued events into the next owner', async () => {
+    const ownerAEvent = event(71, 7);
+    mocks.post.mockRejectedValueOnce({
+      response: { status: 429, headers: { 'retry-after': '60' } },
+    });
+    client.enqueue(ownerAEvent.post_id, ownerAEvent.event_id, 'post_detail', ownerAEvent.occurred_at);
+    await settle();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+
+    currentUserID = 8;
+    authStateKey = 'token-owner-b';
+    const ownerBEvent = event(72, 8);
+    mocks.post.mockResolvedValueOnce(successResponse([ownerBEvent]));
+    client.enqueue(ownerBEvent.post_id, ownerBEvent.event_id, 'post_detail', ownerBEvent.occurred_at);
+    await settle();
+
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(mocks.post.mock.calls[1][1].events.map((item: { event_id: string }) => item.event_id))
+      .toEqual([ownerBEvent.event_id]);
+    expect(savedPostViewSnapshot().ownerUserId).toBe(8);
+    expect(savedPostViewEvents().some((item: { owner_user_id: number }) => item.owner_user_id === 7)).toBe(false);
+  });
+
+  it('preserves Retry-After when the same owner refreshes the token', async () => {
+    vi.setSystemTime(new Date('2026-10-21T00:00:00.000Z'));
+    const first = event(75);
+    mocks.post.mockRejectedValueOnce({
+      response: { status: 429, headers: { 'retry-after': '60' } },
+    });
+    client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
+    await settle();
+
+    authStateKey = 'token-v2';
+    client.refreshAuthState();
+    const second = event(76);
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) =>
+      successResponse(body.events));
+    client.enqueue(second.post_id, second.event_id, 'post_detail', second.occurred_at);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await settle();
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(mocks.post.mock.calls[1][1].events.map((item: { event_id: string }) => item.event_id))
+      .toEqual([first.event_id, second.event_id]);
+  });
+
+  it('preserves Retry-After when identity is temporarily unavailable and returns to the same owner', async () => {
+    vi.setSystemTime(new Date('2026-10-21T00:00:00.000Z'));
+    const first = event(77);
+    mocks.post.mockRejectedValueOnce({
+      response: { status: 429, headers: { 'retry-after': '60' } },
+    });
+    client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
+    await settle();
+
+    currentUserID = null;
+    client.refreshAuthState();
+    await vi.advanceTimersByTimeAsync(30_000);
+    currentUserID = 7;
+    client.refreshAuthState();
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) =>
+      successResponse(body.events));
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await settle();
+
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(mocks.post.mock.calls[1][1].events[0].event_id).toBe(first.event_id);
+  });
+
+  it('does not inherit an owner cooldown after A becomes unavailable and B signs in', async () => {
+    const first = event(78);
+    mocks.post.mockRejectedValueOnce({
+      response: { status: 429, headers: { 'retry-after': '60' } },
+    });
+    client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
+    await settle();
+
+    currentUserID = null;
+    client.refreshAuthState();
+    currentUserID = 8;
+    authStateKey = 'token-owner-b';
+    client.refreshAuthState();
+    const second = event(79, 8);
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) =>
+      successResponse(body.events));
+    client.enqueue(second.post_id, second.event_id, 'post_detail', second.occurred_at);
+    await settle();
+
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(mocks.post.mock.calls[1][1].events.map((item: { event_id: string }) => item.event_id))
+      .toEqual([second.event_id]);
+    expect(savedPostViewSnapshot().ownerUserId).toBe(8);
+  });
+
+  it('discards another owner snapshot and cooldown before sending for the current owner', async () => {
+    vi.setSystemTime(new Date('2026-10-21T00:00:00.000Z'));
+    client.stop();
+    const ownerAEvent = event(80, 7);
+    writePostViewSnapshot([ownerAEvent], 7, {
+      retryNotBeforeEpochMs: Date.now() + 60_000,
+      retryAttempt: 3,
+    });
+    currentUserID = 8;
+    authStateKey = 'token-owner-b';
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) =>
+      successResponse(body.events));
+    client = new PostViewTelemetryClient(() => currentUserID, () => authStateKey);
+    client.start();
+    const ownerBEvent = event(81, 8);
+    client.enqueue(ownerBEvent.post_id, ownerBEvent.event_id, 'post_detail', ownerBEvent.occurred_at);
+    await settle();
+
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(mocks.post.mock.calls[0][1].events.map((item: { event_id: string }) => item.event_id))
+      .toEqual([ownerBEvent.event_id]);
+    expect(savedPostViewSnapshot()).toMatchObject({ ownerUserId: 8, retry: { retryNotBeforeEpochMs: 0, retryAttempt: 0 } });
+    expect(savedPostViewEvents()).toEqual([]);
+  });
+
+  it('restores the same owner cooldown and sends only after its deadline', async () => {
+    vi.setSystemTime(new Date('2026-10-21T00:00:00.000Z'));
+    client.stop();
+    const restored = event(82, 7);
+    writePostViewSnapshot([restored], 7, {
+      retryNotBeforeEpochMs: Date.now() + 60_000,
+      retryAttempt: 3,
+    });
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) =>
+      successResponse(body.events));
+    client = new PostViewTelemetryClient(() => currentUserID, () => authStateKey);
+    client.start();
+    await settle();
+    expect(mocks.post).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(mocks.post).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await settle();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(mocks.post.mock.calls[0][1].events[0].event_id).toBe(restored.event_id);
+  });
+
+  it('retries only current-owner events when an old request fails after an account switch', async () => {
+    let rejectOldRequest: ((reason: unknown) => void) | undefined;
+    const ownerAEvent = event(83, 7);
+    mocks.post.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectOldRequest = reject;
+    }));
+    client.enqueue(ownerAEvent.post_id, ownerAEvent.event_id, 'post_detail', ownerAEvent.occurred_at);
+    await settle();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+
+    currentUserID = 8;
+    authStateKey = 'token-owner-b';
+    client.refreshAuthState();
+    const ownerBEvent = event(84, 8);
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) =>
+      successResponse(body.events));
+    client.enqueue(ownerBEvent.post_id, ownerBEvent.event_id, 'post_detail', ownerBEvent.occurred_at);
+    rejectOldRequest?.({
+      response: { status: 401 },
+      config: { headers: { Authorization: 'token-v1' }, _authSessionVersion: 0 },
+    });
+    await settle();
+    await vi.advanceTimersByTimeAsync(0);
+    await settle();
+
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(mocks.post.mock.calls[1][1].events.map((item: { event_id: string }) => item.event_id))
+      .toEqual([ownerBEvent.event_id]);
+    expect(savedPostViewSnapshot().ownerUserId).toBe(8);
+    expect(savedPostViewEvents()).toEqual([]);
+    expect(savedPostViewSnapshot().retry.retryNotBeforeEpochMs).toBe(0);
+  });
+
+  it('does not send newly enqueued events while stopped, even when flush is called directly', async () => {
+    client.stop();
+    const queued = event(73);
+
+    expect(client.enqueue(queued.post_id, queued.event_id, 'post_detail', queued.occurred_at)).toBe(true);
+    await client.flush();
+    client.refreshAuthState();
+    window.dispatchEvent(new Event('online'));
+    await vi.advanceTimersByTimeAsync(300_000);
+
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(savedPostViewEvents().map((item: { event_id: string }) => item.event_id)).toEqual([queued.event_id]);
+  });
+
+  it('resumes delivery after stop and start', async () => {
+    client.stop();
+    const queued = event(85);
+    client.enqueue(queued.post_id, queued.event_id, 'post_detail', queued.occurred_at);
+    await settle();
+    expect(mocks.post).not.toHaveBeenCalled();
+
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) =>
+      successResponse(body.events));
+    client.start();
+    await settle();
+
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(mocks.post.mock.calls[0][1].events[0].event_id).toBe(queued.event_id);
+  });
+
+  it('does not drain a second batch after stop while the first request is in flight', async () => {
+    let resolveFirst: ((value: unknown) => void) | undefined;
+    mocks.post.mockImplementationOnce(() => new Promise(resolve => {
+      resolveFirst = resolve;
+    }));
+    const first = event(88);
+    const second = event(89);
+    client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
+    await settle();
+    client.enqueue(second.post_id, second.event_id, 'post_detail', second.occurred_at);
+    client.stop();
+    resolveFirst?.(successResponse([first]));
+    await settle();
+    await vi.advanceTimersByTimeAsync(300_000);
+
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(savedPostViewEvents().map((item: { event_id: string }) => item.event_id)).toEqual([second.event_id]);
+
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) =>
+      successResponse(body.events));
+    client.start();
+    await settle();
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(mocks.post.mock.calls[1][1].events[0].event_id).toBe(second.event_id);
+  });
+
+  it('does not let stop and start bypass an unexpired cooldown', async () => {
+    vi.setSystemTime(new Date('2026-10-21T00:00:00.000Z'));
+    const first = event(86);
+    mocks.post.mockRejectedValueOnce({
+      response: { status: 429, headers: { 'retry-after': '60' } },
+    });
+    client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
+    await settle();
+    client.stop();
+
+    const second = event(87);
+    client.enqueue(second.post_id, second.event_id, 'post_detail', second.occurred_at);
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) =>
+      successResponse(body.events));
+    client.start();
+    await settle();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await settle();
+
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(mocks.post.mock.calls[1][1].events.map((item: { event_id: string }) => item.event_id))
+      .toEqual([first.event_id, second.event_id]);
+  });
+
+  it.each([401, 403])('does not pause a refreshed token after an old token returns %i', async status => {
+    let rejectOldRequest: ((reason: unknown) => void) | undefined;
+    mocks.post.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectOldRequest = reject;
+    }));
+    client.enqueue(74, event(74).event_id, 'post_detail');
+    await settle();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+
+    authStateKey = 'token-v2';
+    mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) =>
+      successResponse(body.events));
+    rejectOldRequest?.({
+      response: { status },
+      config: { headers: { Authorization: 'token-v1' }, _authSessionVersion: 0 },
+    });
+    await settle();
+    await vi.advanceTimersByTimeAsync(0);
+    await settle();
+
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(mocks.post.mock.calls[1][1].events[0].event_id).toBe(event(74).event_id);
   });
 
   it('uses normal retry for 503 and drops permanent 4xx batches', async () => {
@@ -362,7 +653,7 @@ describe('PostViewTelemetryClient', () => {
     expect(mocks.post.mock.calls[1][1].events[0]).not.toHaveProperty('owner_user_id');
     restored.stop();
   });
-  it('never sends a queued event under another authenticated user', async () => {
+  it('drops a snapshot from another owner instead of later sending it under the old owner', async () => {
     const queued = event(1, 7);
     writePostViewSnapshot([queued]);
     currentUserID = 8;
@@ -370,22 +661,16 @@ describe('PostViewTelemetryClient', () => {
     otherClient.start();
     await settle();
     expect(mocks.post).not.toHaveBeenCalled();
+    expect(savedPostViewSnapshot()).toMatchObject({ ownerUserId: 8, events: [] });
 
     otherClient.stop();
     currentUserID = 7;
     const matchingClient = new PostViewTelemetryClient(() => currentUserID);
-    mocks.post.mockResolvedValueOnce(successResponse([queued]));
     matchingClient.start();
     await settle();
 
-    expect(mocks.post).toHaveBeenCalledTimes(1);
-    expect(mocks.post.mock.calls[0][1].events[0]).toEqual({
-      event_id: queued.event_id,
-      post_id: queued.post_id,
-      occurred_at: queued.occurred_at,
-      source: 'post_detail',
-    });
-    expect(mocks.post.mock.calls[0][1].events[0]).not.toHaveProperty('owner_user_id');
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(savedPostViewSnapshot()).toMatchObject({ ownerUserId: 7, events: [] });
     matchingClient.stop();
   });
 

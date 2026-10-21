@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   calculateTelemetryRetryDelayMS,
+  getTelemetryHTTPFailure,
   parseRetryAfterMS,
   TelemetryRetryGate,
 } from './telemetryRetryGate';
@@ -28,6 +29,23 @@ describe('TelemetryRetryGate', () => {
     expect(calculateTelemetryRetryDelayMS(0, () => 1)).toBe(2_000);
     expect(calculateTelemetryRetryDelayMS(20, () => 0.5)).toBe(225_000);
     expect(calculateTelemetryRetryDelayMS(Number.MAX_VALUE, () => 0)).toBe(150_000);
+  });
+
+  it('extracts the final Axios request auth context without persisting it', () => {
+    const failure = getTelemetryHTTPFailure({
+      config: {
+        headers: { Authorization: 'Bearer token-b' },
+        _authSessionVersion: 4,
+      },
+      response: { status: 401, headers: { 'Retry-After': '60' } },
+    });
+
+    expect(failure).toMatchObject({
+      status: 401,
+      retryAfter: '60',
+      requestAuthorization: 'Bearer token-b',
+      requestSessionVersion: 4,
+    });
   });
 
   it('keeps one timer at the maximum Retry-After deadline and rechecks on fire', () => {
