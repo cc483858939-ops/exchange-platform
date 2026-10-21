@@ -862,6 +862,270 @@ func TestRecommendationSnapshotNextPageRetainsCandidateWithoutEmbedding(t *testi
 	}
 }
 
+type snapshotScoringCandidateRepository struct {
+	*serviceTestCandidateRepository
+}
+
+func (repository snapshotScoringCandidateRepository) HydrateCandidates(ctx context.Context, query CandidateQuery, candidates []Candidate) ([]RankedCandidate, error) {
+	items, err := repository.serviceTestCandidateRepository.HydrateCandidates(ctx, query, candidates)
+	if err != nil {
+		return nil, err
+	}
+	for index := range items {
+		items[index].Embedding = append([]float32(nil), repository.embeddings[items[index].Candidate.PostID]...)
+	}
+	return items, nil
+}
+
+func configureSnapshotScoringFixture(
+	service *RecommendationService,
+	repository *serviceTestCandidateRepository,
+	candidates []Candidate,
+	embeddings map[uint][]float32,
+	positiveVector, negativeVector []float32,
+	negativeConfidence float64,
+	pageSize, preselectPages int,
+) {
+	service.dependencies.Candidates = snapshotScoringCandidateRepository{serviceTestCandidateRepository: repository}
+	repository.semantic = nil
+	repository.following = nil
+	repository.recent = append([]Candidate(nil), candidates...)
+	repository.trending = nil
+	repository.embeddings = embeddings
+
+	cfg := service.config.Recommendation
+	cfg.SemanticWeight = 2
+	cfg.NegativeSemanticWeight = 1.5
+	cfg.Candidates.Personalized = config.RecommendationCandidateCaps{Recent: len(candidates), Merged: len(candidates)}
+	cfg.Candidates.ColdStart = config.RecommendationCandidateCaps{Recent: len(candidates), Merged: len(candidates)}
+	cfg.Snapshot.MaxCandidates = len(candidates)
+	cfg.Snapshot.PreselectPages = preselectPages
+	cfg.Snapshot.DefaultPageSize = pageSize
+	cfg.Snapshot.MaxPageSize = pageSize
+	service.config.Recommendation = cfg
+
+	profiles := service.dependencies.Profiles.(*serviceTestProfileRepository)
+	profile := profiles.loaded.Profile
+	profile.PositiveVector = append([]float32(nil), positiveVector...)
+	profile.NegativeVector = append([]float32(nil), negativeVector...)
+	profile.NegativeConfidence = negativeConfidence
+	profiles.loaded.Profile = profile
+}
+
+func TestRecommendationSnapshotDynamicNextPageRefreshesSemanticScoresAndKeepsMissingVectorCandidate(t *testing.T) {
+	store := newMemorySnapshotStore()
+	service, repository, now := newSnapshotTestService(t, store)
+	candidates := []Candidate{
+		testCandidate(1, CandidateSourceRecent),
+		testCandidate(2, CandidateSourceRecent),
+		testCandidate(3, CandidateSourceRecent),
+	}
+	configureSnapshotScoringFixture(service, repository, candidates, map[uint][]float32{
+		1: {1, 0}, 2: {.8, .6}, 3: {0, 1},
+	}, []float32{1, 0}, nil, 0, 1, 1)
+
+	first, err := service.Serve(context.Background(), ServeRequest{
+		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 1,
+		RequestID: "snapshot-semantic-refresh-page-0", Now: now,
+	})
+	if err != nil {
+		t.Fatalf("serve initial snapshot page: %v", err)
+	}
+	if got := selectedPostIDs(first.Selected); !equalUintSlices(got, []uint{1}) {
+		t.Fatalf("initial page IDs=%v, want highest-scoring post 1", got)
+	}
+	snapshot, err := store.Load(context.Background(), first.PoolID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cachedSecond CachedCandidate
+	for _, cached := range snapshot.Candidates {
+		if cached.PostID == 2 {
+			cachedSecond = cached
+			break
+		}
+	}
+	if cachedSecond.PostID != 2 || cachedSecond.Breakdown.PositiveSemantic <= 0 {
+		t.Fatalf("cached post 2=%+v, want a positive semantic score before its vector is removed", cachedSecond)
+	}
+
+	delete(repository.embeddings, 2)
+	if err := service.FinalizeServing(context.Background(), first, first.Selected); err != nil {
+		t.Fatalf("finalize initial snapshot page: %v", err)
+	}
+	second, err := service.Serve(context.Background(), ServeRequest{
+		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 1, Cursor: first.NextCursor,
+		RequestID: "snapshot-semantic-refresh-page-1", Now: now.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("serve dynamic snapshot page after vector removal: %v", err)
+	}
+	if got := selectedPostIDs(second.Selected); !equalUintSlices(got, []uint{3}) {
+		t.Fatalf("dynamic page IDs=%v, want post 3 after post 2's cached semantic score is cleared", got)
+	}
+	if err := service.FinalizeServing(context.Background(), second, second.Selected); err != nil {
+		t.Fatalf("finalize dynamic snapshot page: %v", err)
+	}
+	if second.NextCursor == "" {
+		t.Fatal("dynamic snapshot page has no cursor for the remaining no-vector candidate")
+	}
+	third, err := service.Serve(context.Background(), ServeRequest{
+		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 1, Cursor: second.NextCursor,
+		RequestID: "snapshot-semantic-refresh-page-2", Now: now.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("serve remaining snapshot candidate without vector: %v", err)
+	}
+	if got := selectedPostIDs(third.Selected); !equalUintSlices(got, []uint{2}) || third.Selected[0].Embedding != nil {
+		t.Fatalf("remaining page=%+v, want retained post 2 with nil embedding", third.Selected)
+	}
+	selected := third.Selected[0]
+	if selected.Candidate.PositiveSemanticSimilarity != 0 || selected.Breakdown.PositiveSemantic != 0 ||
+		selected.Breakdown.NegativeSemantic != 0 || selected.Breakdown.SemanticComponent != 0 || selected.ExplorationSemantic != 0 {
+		t.Fatalf("remaining no-vector page retained stale semantic data: %+v", selected)
+	}
+	if selected.Breakdown.BaseScore != selected.Breakdown.TrendingComponent+selected.Breakdown.AuthorAffinityComponent+
+		selected.Breakdown.LanguageComponent+selected.Breakdown.OnboardingInterestComponent {
+		t.Fatalf("remaining no-vector BaseScore=%v, want only current non-semantic components", selected.Breakdown.BaseScore)
+	}
+}
+
+func TestRecommendationSnapshotPreselectedPageReplayRefreshesSemanticScores(t *testing.T) {
+	store := newMemorySnapshotStore()
+	service, repository, now := newSnapshotTestService(t, store)
+	candidates := []Candidate{
+		testCandidate(1, CandidateSourceRecent),
+		testCandidate(2, CandidateSourceRecent),
+		testCandidate(3, CandidateSourceRecent),
+		testCandidate(4, CandidateSourceRecent),
+	}
+	configureSnapshotScoringFixture(service, repository, candidates, map[uint][]float32{
+		1: {1, 0}, 2: {.9, .1}, 3: {.8, .2}, 4: {.7, .3},
+	}, []float32{1, 0}, []float32{0, 1}, .4, 2, 2)
+
+	first, err := service.Serve(context.Background(), ServeRequest{
+		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 2,
+		RequestID: "snapshot-preselected-replay-page-0", Now: now,
+	})
+	if err != nil {
+		t.Fatalf("serve initial snapshot page: %v", err)
+	}
+	if got := selectedPostIDs(first.Selected); !equalUintSlices(got, []uint{1, 2}) {
+		t.Fatalf("initial page IDs=%v, want [1 2]", got)
+	}
+	snapshot, err := store.Load(context.Background(), first.PoolID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, exists := snapshotPageAt(snapshot, 1)
+	if !exists || len(page.Items) != 2 || !equalUintSlices(cachedPagePostIDs(page), []uint{3, 4}) {
+		t.Fatalf("preselected page=%+v, want cached order [3 4]", page)
+	}
+	if page.Items[0].Breakdown.PositiveSemantic <= 0 || page.Items[1].Breakdown.PositiveSemantic <= 0 {
+		t.Fatalf("preselected page lacks cached semantic scores: %+v", page.Items)
+	}
+
+	// Remove one vector and replace the other with a new valid vector under the
+	// same serving version. Materializing the page must keep its stored order.
+	delete(repository.embeddings, 3)
+	repository.embeddings[4] = []float32{1, 0}
+	serveReplay := func(label string, requestTime time.Time) ServeResult {
+		t.Helper()
+		result, err := service.Serve(context.Background(), ServeRequest{
+			Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 2, Cursor: first.NextCursor,
+			RequestID: "snapshot-preselected-retry-" + label, Now: requestTime,
+		})
+		if err != nil {
+			t.Fatalf("replay preselected snapshot page (%s): %v", label, err)
+		}
+		return result
+	}
+	firstReplay := serveReplay("one", now.Add(time.Second))
+	secondReplay := serveReplay("two", now.Add(2*time.Second))
+	for label, result := range map[string]ServeResult{"first": firstReplay, "retry": secondReplay} {
+		if !result.CacheHit || !equalUintSlices(selectedPostIDs(result.Selected), []uint{3, 4}) {
+			t.Fatalf("%s replay cache=%v selected=%v, want cached order [3 4]", label, result.CacheHit, selectedPostIDs(result.Selected))
+		}
+		if result.RequestID != page.RequestID || !result.Now.Equal(page.ServedAt) {
+			t.Fatalf("%s replay metadata request=%q now=%s, want page request=%q served_at=%s", label, result.RequestID, result.Now, page.RequestID, page.ServedAt)
+		}
+	}
+	if firstReplay.RequestID != secondReplay.RequestID || !equalUintSlices(selectedPostIDs(firstReplay.Selected), selectedPostIDs(secondReplay.Selected)) {
+		t.Fatalf("same-cursor retry changed page identity: first=%+v retry=%+v", firstReplay, secondReplay)
+	}
+	missingVector := firstReplay.Selected[0]
+	if missingVector.Post.ID != 3 || missingVector.Embedding != nil || missingVector.Candidate.PositiveSemanticSimilarity != 0 ||
+		missingVector.Breakdown.PositiveSemantic != 0 || missingVector.Breakdown.NegativeSemantic != 0 ||
+		missingVector.Breakdown.SemanticComponent != 0 || missingVector.ExplorationSemantic != 0 {
+		t.Fatalf("preselected missing-vector candidate retained stale semantic data: %+v", missingVector)
+	}
+	changedVector := firstReplay.Selected[1]
+	if changedVector.Post.ID != 4 || !equalFloat32Slices(changedVector.Embedding, []float32{1, 0}) ||
+		changedVector.Candidate.PositiveSemanticSimilarity != 1 || changedVector.Breakdown.PositiveSemantic != 1 ||
+		changedVector.Breakdown.SemanticComponent <= page.Items[1].Breakdown.SemanticComponent {
+		t.Fatalf("same-version updated vector did not refresh cached semantic score: %+v; cached=%+v", changedVector, page.Items[1])
+	}
+}
+
+func TestRefreshSnapshotSemanticScoresUsesCurrentEmbeddingAndPreservesNonSemanticBreakdown(t *testing.T) {
+	profile := ProfileFeatures{
+		PositiveVector: []float32{1, 0}, NegativeVector: []float32{0, 1}, NegativeConfidence: .5,
+	}
+	cfg := RankingConfig{SemanticWeight: 2, NegativeSemanticWeight: 1.5}
+	base := RankedCandidate{
+		Candidate: Candidate{PostID: 1, PositiveSemanticSimilarity: .99},
+		Breakdown: ScoreBreakdown{
+			PositiveSemantic: .99, NegativeSemantic: .88, NegativeConfidence: .2,
+			InteractionAffinity: .6, FollowingBonusApplied: .1, SemanticComponent: 9,
+			TrendingComponent: .2, AuthorAffinityComponent: .3, LanguageAffinity: .7,
+			LanguageComponent: .4, OnboardingInterestComponent: .5, DiversityPenalty: .15,
+			BaseScore: 99, FinalScore: 98,
+		},
+		ExplorationSemantic: .99,
+	}
+	for _, test := range []struct {
+		name                string
+		embedding           []float32
+		positive, negative  float64
+		component, explore  float64
+		candidateSimilarity float64
+	}{
+		{name: "missing vector"},
+		{name: "dimension mismatch", embedding: []float32{1, 0, 0}},
+		{name: "current changed vector", embedding: []float32{.8, .6}, positive: .8, negative: .6, component: .7, explore: .35, candidateSimilarity: .8},
+		{name: "negative vector", embedding: []float32{0, 1}, negative: 1, component: -1.5, candidateSimilarity: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := base
+			candidate.Embedding = append([]float32(nil), test.embedding...)
+			got := refreshSnapshotSemanticScores(candidate, profile, cfg)
+			if math.Abs(got.Breakdown.PositiveSemantic-test.positive) > 1e-6 ||
+				math.Abs(got.Breakdown.NegativeSemantic-test.negative) > 1e-6 ||
+				math.Abs(got.Breakdown.NegativeConfidence-profile.NegativeConfidence) > 1e-6 ||
+				math.Abs(got.Breakdown.SemanticComponent-test.component) > 1e-6 ||
+				math.Abs(got.ExplorationSemantic-test.explore) > 1e-6 ||
+				math.Abs(got.Candidate.PositiveSemanticSimilarity-test.candidateSimilarity) > 1e-6 {
+				t.Fatalf("refreshed semantic scores=%+v candidate=%+v, want positive=%v negative=%v component=%v exploration=%v similarity=%v",
+					got.Breakdown, got.Candidate, test.positive, test.negative, test.component, test.explore, test.candidateSimilarity)
+			}
+			wantBase := test.component + .2 + .3 + .4 + .5
+			if math.Abs(got.Breakdown.BaseScore-wantBase) > 1e-6 || math.Abs(got.Breakdown.FinalScore-(wantBase-.15)) > 1e-6 {
+				t.Fatalf("refreshed total scores base=%v final=%v, want %v and %v", got.Breakdown.BaseScore, got.Breakdown.FinalScore, wantBase, wantBase-.15)
+			}
+			if got.Breakdown.TrendingComponent != base.Breakdown.TrendingComponent ||
+				got.Breakdown.AuthorAffinityComponent != base.Breakdown.AuthorAffinityComponent ||
+				got.Breakdown.LanguageComponent != base.Breakdown.LanguageComponent ||
+				got.Breakdown.OnboardingInterestComponent != base.Breakdown.OnboardingInterestComponent ||
+				got.Breakdown.DiversityPenalty != base.Breakdown.DiversityPenalty ||
+				got.Breakdown.InteractionAffinity != base.Breakdown.InteractionAffinity ||
+				got.Breakdown.FollowingBonusApplied != base.Breakdown.FollowingBonusApplied ||
+				got.Breakdown.LanguageAffinity != base.Breakdown.LanguageAffinity {
+				t.Fatalf("refresh changed non-semantic breakdown fields: got=%+v want=%+v", got.Breakdown, base.Breakdown)
+			}
+		})
+	}
+}
+
 func TestRecommendationSnapshotReuses500CandidatePoolAcrossFivePages(t *testing.T) {
 	store := newMemorySnapshotStore()
 	service, candidates, now := newSnapshotTestService(t, store)

@@ -8,6 +8,54 @@ import (
 	"Go.exchange/models"
 )
 
+type candidateSemanticScores struct {
+	positive           float64
+	negative           float64
+	negativeConfidence float64
+	component          float64
+	exploration        float64
+}
+
+func scoreCandidateSemantics(candidate RankedCandidate, profile ProfileFeatures, cfg RankingConfig) candidateSemanticScores {
+	positive := 0.0
+	if validComparableEmbedding(candidate.Embedding, profile.PositiveVector) {
+		positive = ClampUnit(CosineSimilarity(candidate.Embedding, profile.PositiveVector))
+	}
+	negative := CosineSimilarity(candidate.Embedding, profile.NegativeVector)
+	if negative < 0 {
+		negative = 0
+	}
+	confidence := profile.NegativeConfidence
+	return candidateSemanticScores{
+		positive: positive, negative: negative, negativeConfidence: confidence,
+		component:   cfg.SemanticWeight * (positive - cfg.NegativeSemanticWeight*confidence*negative),
+		exploration: explorationSemantic(candidate, profile, cfg),
+	}
+}
+
+// refreshSnapshotSemanticScores replaces only the embedding-derived parts of a
+// cached candidate score. Snapshot revalidation may return a new or missing
+// embedding, while its non-semantic score components remain valid for the page.
+func refreshSnapshotSemanticScores(candidate RankedCandidate, profile ProfileFeatures, cfg RankingConfig) RankedCandidate {
+	scores := scoreCandidateSemantics(candidate, profile, cfg)
+	candidate.Candidate.PositiveSemanticSimilarity = 0
+	if validComparableEmbedding(candidate.Embedding, profile.PositiveVector) {
+		candidate.Candidate.PositiveSemanticSimilarity = clampSemanticSimilarity(CosineSimilarity(candidate.Embedding, profile.PositiveVector))
+	}
+
+	breakdown := candidate.Breakdown
+	breakdown.PositiveSemantic = scores.positive
+	breakdown.NegativeSemantic = scores.negative
+	breakdown.NegativeConfidence = scores.negativeConfidence
+	breakdown.SemanticComponent = scores.component
+	breakdown.BaseScore = breakdown.SemanticComponent + breakdown.TrendingComponent +
+		breakdown.AuthorAffinityComponent + breakdown.LanguageComponent + breakdown.OnboardingInterestComponent
+	breakdown.FinalScore = breakdown.BaseScore - breakdown.DiversityPenalty
+	candidate.Breakdown = breakdown
+	candidate.ExplorationSemantic = scores.exploration
+	return candidate
+}
+
 func RankCandidates(profile ProfileFeatures, candidates []RankedCandidate, now time.Time, cfg RankingConfig, languageContexts ...LanguageContext) []RankedCandidate {
 	languageContext := LanguageContext{}
 	if len(languageContexts) > 0 {
@@ -15,16 +63,7 @@ func RankCandidates(profile ProfileFeatures, candidates []RankedCandidate, now t
 	}
 	for index := range candidates {
 		candidate := &candidates[index]
-		positiveSemantic := 0.0
-		if validComparableEmbedding(candidate.Embedding, profile.PositiveVector) {
-			positiveSemantic = ClampUnit(CosineSimilarity(candidate.Embedding, profile.PositiveVector))
-		}
-		negativeSemantic := CosineSimilarity(candidate.Embedding, profile.NegativeVector)
-		if negativeSemantic < 0 {
-			negativeSemantic = 0
-		}
-		negativeConfidence := profile.NegativeConfidence
-		semanticRaw := positiveSemantic - cfg.NegativeSemanticWeight*negativeConfidence*negativeSemantic
+		semantic := scoreCandidateSemantics(*candidate, profile, cfg)
 		trendingRaw := TrendingRaw(candidate.Post, now, cfg.Trending)
 		interactionAffinity := ClampUnit(profile.AuthorAffinity[candidate.Post.AuthorID])
 		followingBonus := 0.0
@@ -45,9 +84,9 @@ func RankCandidates(profile ProfileFeatures, candidates []RankedCandidate, now t
 		candidate.IsInNetwork = followed
 		candidate.IsNovelAuthor = !candidate.IsInNetwork && interactionAffinity <= 0
 		candidate.Breakdown = ScoreBreakdown{
-			PositiveSemantic: positiveSemantic, NegativeSemantic: negativeSemantic, NegativeConfidence: negativeConfidence,
+			PositiveSemantic: semantic.positive, NegativeSemantic: semantic.negative, NegativeConfidence: semantic.negativeConfidence,
 			InteractionAffinity: interactionAffinity, FollowingBonusApplied: followingBonus,
-			SemanticComponent:           cfg.SemanticWeight * semanticRaw,
+			SemanticComponent:           semantic.component,
 			TrendingComponent:           cfg.TrendingWeight * trendingRaw,
 			AuthorAffinityComponent:     cfg.AuthorAffinityWeight * authorScore,
 			OnboardingInterestComponent: onboardingInterestComponent,
@@ -60,7 +99,7 @@ func RankCandidates(profile ProfileFeatures, candidates []RankedCandidate, now t
 			candidate.Breakdown.LanguageComponent +
 			candidate.Breakdown.OnboardingInterestComponent
 		candidate.Breakdown.FinalScore = candidate.Breakdown.BaseScore
-		candidate.ExplorationSemantic = explorationSemantic(*candidate, profile, cfg)
+		candidate.ExplorationSemantic = semantic.exploration
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		return rankedCandidateBefore(candidates[i], candidates[j])

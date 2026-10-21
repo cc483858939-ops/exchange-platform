@@ -298,6 +298,7 @@ func (service *RecommendationService) selectSnapshotPage(ctx context.Context, re
 		hydrated.ExplorationSemantic = cached.ExplorationSemantic
 		hydrated.IsInNetwork = cached.IsInNetwork
 		hydrated.IsNovelAuthor = cached.IsNovelAuthor
+		hydrated = refreshSnapshotSemanticScores(hydrated, profileFeatures(profile), rankingConfig(service.config.Recommendation))
 		ranked = append(ranked, hydrated)
 		eligibleIDs[hydrated.Post.ID] = struct{}{}
 	}
@@ -414,11 +415,12 @@ func (service *RecommendationService) materializeSnapshotPage(ctx context.Contex
 		item.ExplorationSemantic = cached.ExplorationSemantic
 		item.IsInNetwork = cached.IsInNetwork
 		item.IsNovelAuthor = cached.IsNovelAuthor
+		item = refreshSnapshotSemanticScores(item, profileFeatures(profile), rankingConfig(service.config.Recommendation))
 		selected = append(selected, SelectedCandidate{
 			Candidate: item.Candidate, Post: item.Post, Embedding: item.Embedding,
 			Breakdown: item.Breakdown, IsInNetwork: item.IsInNetwork, IsNovelAuthor: item.IsNovelAuthor,
 			ExplorationOpportunity: cached.ExplorationOpportunity, SelectionMode: cached.SelectionMode,
-			ExplorationReason: cached.ExplorationReason, ExplorationSemantic: cached.ExplorationSemantic,
+			ExplorationReason: cached.ExplorationReason, ExplorationSemantic: item.ExplorationSemantic,
 		})
 	}
 	result := ServeResult{
