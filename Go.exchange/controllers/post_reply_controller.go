@@ -21,16 +21,16 @@ func GetPostReplies(ctx *gin.Context) {
 	}
 	limit, err := parseReplyLimit(ctx)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 	cursor, err := parseReplyCursor(ctx)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 	if global.APIDb == nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "database is not initialized"})
+		writeInternalAPIErrorCode(ctx, "INTERNAL_ERROR")
 		return
 	}
 
@@ -65,7 +65,7 @@ func GetPostReplies(ctx *gin.Context) {
 		if handleRequestDBError(ctx, err) {
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 
@@ -78,21 +78,21 @@ func GetPostReplies(ctx *gin.Context) {
 		if handleRequestDBError(ctx, err) {
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	if err := hydratePostResponsesMediaFromDB(db, items); err != nil {
 		if handleRequestDBError(ctx, err) {
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	if err := hydratePostResponseRepostCountsFromDB(db, items); err != nil {
 		if handleRequestDBError(ctx, err) {
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	referenceNow := time.Now().UTC()
@@ -100,7 +100,7 @@ func GetPostReplies(ctx *gin.Context) {
 		if handleRequestDBError(ctx, err) {
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 
@@ -109,7 +109,7 @@ func GetPostReplies(ctx *gin.Context) {
 		last := posts[len(posts)-1]
 		encoded, err := encodeReplyCursor(replyCursor{CreatedAt: last.CreatedAt, ID: last.ID})
 		if err != nil {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			writeInternalAPIError(ctx, err)
 			return
 		}
 		nextCursor = &encoded
@@ -122,8 +122,8 @@ func writeReplyPostLookupError(ctx *gin.Context, err error) {
 		return
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
+		writeAPIError(ctx, "POST_NOT_FOUND")
 		return
 	}
-	ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	writeInternalAPIError(ctx, err)
 }

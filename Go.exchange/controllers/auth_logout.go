@@ -21,9 +21,9 @@ func (c *AuthController) Logout(ctx *gin.Context) {
 	var request logoutRequest
 	if err := bindAuthJSON(ctx, &request); err != nil {
 		if isAuthRequestTooLarge(err) {
-			writeAuthError(ctx, http.StatusRequestEntityTooLarge, "AUTH_REQUEST_TOO_LARGE", "Authentication request is too large")
+			writeAuthError(ctx, "AUTH_REQUEST_TOO_LARGE")
 		} else {
-			writeAuthError(ctx, http.StatusBadRequest, "AUTH_REQUEST_INVALID", "Invalid request data")
+			writeAuthError(ctx, "AUTH_REQUEST_INVALID")
 		}
 		return
 	}
@@ -32,9 +32,9 @@ func (c *AuthController) Logout(ctx *gin.Context) {
 	}
 	if err := c.tokens.RevokeRefresh(ctx.Request.Context(), request.RefreshToken); err != nil {
 		if errors.Is(err, auth.ErrRefreshInvalid) {
-			writeAuthError(ctx, http.StatusUnauthorized, "AUTH_REFRESH_INVALID", "Invalid refresh credential")
+			writeAuthError(ctx, "AUTH_REFRESH_INVALID")
 		} else {
-			writeAuthError(ctx, http.StatusServiceUnavailable, "AUTH_LOGOUT_UNAVAILABLE", "Server sign-out could not be confirmed")
+			writeInternalAPIErrorAs(ctx, err, "AUTH_LOGOUT_UNAVAILABLE")
 		}
 		return
 	}

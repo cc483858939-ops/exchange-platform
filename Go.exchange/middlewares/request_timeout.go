@@ -1,8 +1,8 @@
 package middlewares
 
 import (
+	"Go.exchange/apierrors"
 	"context"
-	"net/http"
 	"strings"
 
 	"Go.exchange/config"
@@ -25,7 +25,7 @@ func RequestTimeout() gin.HandlerFunc {
 		ctx.Next()
 
 		if requestCtx.Err() == context.DeadlineExceeded && !ctx.Writer.Written() {
-			ctx.AbortWithStatusJSON(http.StatusGatewayTimeout, gin.H{"error": "request timed out"})
+			apierrors.WritePublicError(ctx, apierrors.CodeRequestTimeout)
 		}
 	}
 }

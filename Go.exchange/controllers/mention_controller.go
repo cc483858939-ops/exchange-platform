@@ -40,34 +40,31 @@ type mentionSuggestionRow struct {
 func GetMyMentionSuggestions(ctx *gin.Context) {
 	viewerID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 	prefix, ok := postmention.ValidPrefix(ctx.Query("prefix"))
 	if !ok || len([]rune(prefix)) > maxMentionPrefixRunes {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid mention prefix"})
+		writeAPIError(ctx, "INVALID_MENTION_PREFIX")
 		return
 	}
 	limit := defaultMentionSuggestionLimit
 	if raw, exists := ctx.GetQuery("limit"); exists {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed < 1 || parsed > maxMentionSuggestionLimit {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid mention suggestion limit"})
+			writeAPIError(ctx, "INVALID_MENTION_SUGGESTION_LIMIT")
 			return
 		}
 		limit = parsed
 	}
 	if global.APIDb == nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "database is not initialized"})
+		writeInternalAPIErrorCode(ctx, "INTERNAL_ERROR")
 		return
 	}
 	db := global.APIDb.WithContext(ctx.Request.Context())
 	items, err := loadMentionSuggestions(db, viewerID, prefix, limit)
 	if err != nil {
-		if handleRequestDBError(ctx, err) {
-			return
-		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"items": items})

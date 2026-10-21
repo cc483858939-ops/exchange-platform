@@ -3,7 +3,6 @@ package controllers
 import (
 	"context"
 	"errors"
-	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -136,22 +135,19 @@ func deletePostInTransactionFromDB(ctx context.Context, postID, viewerID uint) (
 }
 
 func writePostDeleteStoreError(ctx *gin.Context, err error) {
-	if handleRequestDBError(ctx, err) {
-		return
-	}
-	ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+	writeInternalAPIError(ctx, err)
 }
 
 func DeletePost(ctx *gin.Context) {
 	postID, err := parsePostDeleteID(ctx.Param("id"))
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 
 	viewerID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 	if err := loadPostDeleteViewer(ctx.Request.Context(), viewerID); err != nil {
@@ -159,7 +155,7 @@ func DeletePost(ctx *gin.Context) {
 			return
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+			writeAPIError(ctx, "UNAUTHORIZED")
 			return
 		}
 		writePostDeleteStoreError(ctx, err)
@@ -170,9 +166,9 @@ func DeletePost(ctx *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, errPostDeleteNotFound):
-			ctx.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
+			writeAPIError(ctx, "POST_NOT_FOUND")
 		case errors.Is(err, errPostDeleteForbidden):
-			ctx.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+			writeAPIError(ctx, "FORBIDDEN")
 		default:
 			writePostDeleteStoreError(ctx, err)
 		}
@@ -180,20 +176,20 @@ func DeletePost(ctx *gin.Context) {
 	}
 
 	if err := invalidatePostDeleteDetailCache(postID); err != nil {
-		log.Printf("[PostDelete] invalidate post detail cache for %d: %v", postID, err)
+		logAPIInternalError(ctx, http.StatusNoContent, err)
 	}
 	if deleteResult.ParentPostID != nil {
 		if err := invalidatePostDeleteDetailCache(*deleteResult.ParentPostID); err != nil {
-			log.Printf("[PostDelete] invalidate parent post detail cache for %d: %v", *deleteResult.ParentPostID, err)
+			logAPIInternalError(ctx, http.StatusNoContent, err)
 		}
 	}
 	if deleteResult.QuoteTargetPostID != nil {
 		if err := invalidatePostDeleteDetailCache(*deleteResult.QuoteTargetPostID); err != nil {
-			log.Printf("[PostDelete] invalidate quote target post detail cache for %d: %v", *deleteResult.QuoteTargetPostID, err)
+			logAPIInternalError(ctx, http.StatusNoContent, err)
 		}
 	}
 	if err := cleanupDeletedPostLikeState(postID); err != nil {
-		log.Printf("[PostDelete] clean up like state for %d: %v", postID, err)
+		logAPIInternalError(ctx, http.StatusNoContent, err)
 	}
 
 	ctx.Status(http.StatusNoContent)

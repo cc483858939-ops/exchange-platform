@@ -129,16 +129,16 @@ func encodeNotificationCursor(cursor notificationCursor) (string, error) {
 func GetMyNotifications(ctx *gin.Context) {
 	viewerID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 	limit, cursor, err := parseNotificationQuery(ctx)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 	if global.APIDb == nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "database is not initialized"})
+		writeInternalAPIErrorCode(ctx, "INTERNAL_ERROR")
 		return
 	}
 	db := global.APIDb.WithContext(ctx.Request.Context())
@@ -148,10 +148,7 @@ func GetMyNotifications(ctx *gin.Context) {
 	}
 	var rows []notificationQueryRow
 	if err := query.Order("n.activity_at DESC, n.id DESC").Limit(limit + 1).Scan(&rows).Error; err != nil {
-		if handleRequestDBError(ctx, err) {
-			return
-		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	response := notificationPageResponse{Items: make([]notificationResponse, 0, minInt(len(rows), limit))}
@@ -169,7 +166,7 @@ func GetMyNotifications(ctx *gin.Context) {
 	if hasMore && len(rows) > 0 {
 		next, err := encodeNotificationCursor(notificationCursor{ActivityAt: rows[len(rows)-1].ActivityAt, ID: rows[len(rows)-1].ID})
 		if err != nil {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+			writeInternalAPIError(ctx, err)
 			return
 		}
 		response.NextCursor = &next
@@ -180,21 +177,18 @@ func GetMyNotifications(ctx *gin.Context) {
 func GetMyUnreadNotificationCount(ctx *gin.Context) {
 	viewerID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 	if global.APIDb == nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "database is not initialized"})
+		writeInternalAPIErrorCode(ctx, "INTERNAL_ERROR")
 		return
 	}
 	var count int64
 	db := global.APIDb.WithContext(ctx.Request.Context())
 	query := visibleNotificationsForViewer(db, viewerID, time.Now().UTC())
 	if err := query.Where("n.read_at IS NULL").Count(&count).Error; err != nil {
-		if handleRequestDBError(ctx, err) {
-			return
-		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"unread_count": count})
@@ -203,16 +197,16 @@ func GetMyUnreadNotificationCount(ctx *gin.Context) {
 func MarkMyNotificationRead(ctx *gin.Context) {
 	viewerID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil || id == 0 {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid notification id"})
+		writeAPIError(ctx, "INVALID_NOTIFICATION_ID")
 		return
 	}
 	if global.APIDb == nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "database is not initialized"})
+		writeInternalAPIErrorCode(ctx, "INTERNAL_ERROR")
 		return
 	}
 	readAt := time.Now().UTC()
@@ -221,10 +215,7 @@ func MarkMyNotificationRead(ctx *gin.Context) {
 		Where("id = ? AND recipient_id = ? AND read_at IS NULL", id, viewerID).
 		Updates(map[string]interface{}{"read_at": readAt, "updated_at": readAt})
 	if result.Error != nil {
-		if handleRequestDBError(ctx, result.Error) {
-			return
-		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		writeInternalAPIError(ctx, result.Error)
 		return
 	}
 	if result.RowsAffected == 0 {
@@ -235,14 +226,11 @@ SELECT EXISTS (
     FROM notifications
     WHERE id = ? AND recipient_id = ?
 )`, id, viewerID).Scan(&exists).Error; err != nil {
-			if handleRequestDBError(ctx, err) {
-				return
-			}
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+			writeInternalAPIError(ctx, err)
 			return
 		}
 		if !exists {
-			ctx.JSON(http.StatusNotFound, gin.H{"error": "notification not found"})
+			writeAPIError(ctx, "NOTIFICATION_NOT_FOUND")
 			return
 		}
 	}
@@ -252,11 +240,11 @@ SELECT EXISTS (
 func MarkMyNotificationsReadAll(ctx *gin.Context) {
 	viewerID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 	if global.APIDb == nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "database is not initialized"})
+		writeInternalAPIErrorCode(ctx, "INTERNAL_ERROR")
 		return
 	}
 	readAt := time.Now().UTC()
@@ -264,10 +252,7 @@ func MarkMyNotificationsReadAll(ctx *gin.Context) {
 		Where("recipient_id = ? AND read_at IS NULL", viewerID).
 		Updates(map[string]interface{}{"read_at": readAt, "updated_at": readAt})
 	if result.Error != nil {
-		if handleRequestDBError(ctx, result.Error) {
-			return
-		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		writeInternalAPIError(ctx, result.Error)
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"updated": result.RowsAffected})

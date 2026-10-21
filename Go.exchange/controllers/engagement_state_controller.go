@@ -1,7 +1,7 @@
 package controllers
 
 import (
-	"log"
+	"errors"
 	"net/http"
 	"sync"
 
@@ -41,11 +41,11 @@ type engagementStatesResponse struct {
 func GetPostEngagementStates(ctx *gin.Context) {
 	var request postLikeStatesRequest
 	if err := bindBoundedPostStates(ctx, &request); err != nil {
-		writeJSONRequestError(ctx, err, "Invalid post_ids")
+		writeJSONRequestError(ctx, err)
 		return
 	}
 	if len(request.PostIDs) == 0 || len(request.PostIDs) > maxPostLikeStateIDs {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "post_ids must contain between 1 and 100 ids"})
+		writeAPIError(ctx, "POST_IDS_MUST_CONTAIN_BETWEEN_1_AND_100_IDS")
 		return
 	}
 
@@ -53,7 +53,7 @@ func GetPostEngagementStates(ctx *gin.Context) {
 	seen := make(map[uint]struct{}, len(request.PostIDs))
 	for _, postID := range request.PostIDs {
 		if postID == 0 {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": "post_ids must contain positive ids"})
+			writeAPIError(ctx, "POST_IDS_MUST_CONTAIN_POSITIVE_IDS")
 			return
 		}
 		if _, exists := seen[postID]; exists {
@@ -65,7 +65,7 @@ func GetPostEngagementStates(ctx *gin.Context) {
 
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 
@@ -92,18 +92,18 @@ func GetPostEngagementStates(ctx *gin.Context) {
 	}()
 	loaders.Wait()
 
+	if likeErr != nil && repostErr != nil && bookmarkErr != nil {
+		writeInternalAPIErrorAs(ctx, errors.Join(likeErr, repostErr, bookmarkErr), "SERVICE_UNAVAILABLE")
+		return
+	}
 	if likeErr != nil {
-		log.Printf("post engagement like state loader failed: %v", likeErr)
+		logAPIInternalError(ctx, http.StatusOK, likeErr)
 	}
 	if repostErr != nil {
-		log.Printf("post engagement repost state loader failed: %v", repostErr)
+		logAPIInternalError(ctx, http.StatusOK, repostErr)
 	}
 	if bookmarkErr != nil {
-		log.Printf("post engagement bookmark state loader failed: %v", bookmarkErr)
-	}
-	if likeErr != nil && repostErr != nil && bookmarkErr != nil {
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "Engagement states are temporarily unavailable"})
-		return
+		logAPIInternalError(ctx, http.StatusOK, bookmarkErr)
 	}
 
 	response := engagementStatesResponse{Items: make([]engagementStateItem, 0, len(uniqueIDs))}

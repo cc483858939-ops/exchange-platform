@@ -83,12 +83,12 @@ var loadPublicUserByExactUsername = func(ctx context.Context, username string) (
 func requireActiveProfileViewerID(ctx *gin.Context) (uint, bool) {
 	rawViewerID, exists := ctx.Get("user_id")
 	if !exists {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing viewer identity"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return 0, false
 	}
 	viewerID, ok := jwtUserIDClaim(rawViewerID)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing viewer identity"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return 0, false
 	}
 
@@ -97,9 +97,9 @@ func requireActiveProfileViewerID(ctx *gin.Context) (uint, bool) {
 			return 0, false
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "viewer is no longer active"})
+			writeAPIError(ctx, "UNAUTHORIZED")
 		} else {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			writeInternalAPIError(ctx, err)
 		}
 		return 0, false
 	}
@@ -199,10 +199,10 @@ func writeUserAPIError(ctx *gin.Context, err error) {
 		return
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		writeAPIError(ctx, "USER_NOT_FOUND")
 		return
 	}
-	ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	writeInternalAPIError(ctx, err)
 }
 
 func decodeUserProfilePatch(reader io.Reader, viewerID uint) (map[string]any, error) {
@@ -340,32 +340,32 @@ func UpdateUserProfile(ctx *gin.Context) {
 
 	targetID, err := parsePublicUserID(ctx.Param("id"))
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 	if targetID != viewerID {
-		ctx.JSON(http.StatusForbidden, gin.H{"error": "you can only edit your own profile"})
+		writeAPIError(ctx, "FORBIDDEN")
 		return
 	}
 
 	if err := limitJSONRequest(ctx, profilePatchMaxBytes); err != nil {
-		writeJSONRequestError(ctx, err, "malformed JSON body")
+		writeJSONRequestError(ctx, err)
 		return
 	}
 	updates, err := decodeUserProfilePatch(ctx.Request.Body, viewerID)
 	if err != nil {
-		writeJSONRequestError(ctx, err, err.Error())
+		writeJSONRequestError(ctx, err)
 		return
 	}
 	if global.APIDb == nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "database is not initialized"})
+		writeInternalAPIErrorCode(ctx, "INTERNAL_ERROR")
 		return
 	}
 	if result := global.APIDb.WithContext(ctx.Request.Context()).Model(&models.User{}).Where("id = ?", viewerID).Updates(updates); result.Error != nil {
 		if handleRequestDBError(ctx, result.Error) {
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
+		writeInternalAPIError(ctx, result.Error)
 		return
 	}
 
@@ -374,7 +374,7 @@ func UpdateUserProfile(ctx *gin.Context) {
 		if handleRequestDBError(ctx, err) {
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	ctx.JSON(http.StatusOK, updated)
@@ -383,7 +383,7 @@ func UpdateUserProfile(ctx *gin.Context) {
 func GetUserByID(ctx *gin.Context) {
 	id, err := parsePublicUserID(ctx.Param("id"))
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 	user, err := loadPublicUserByID(ctx.Request.Context(), id)
@@ -397,7 +397,7 @@ func GetUserByID(ctx *gin.Context) {
 func GetUserByExactUsername(ctx *gin.Context) {
 	username := ctx.Param("username")
 	if !postmention.ValidUsername(username) {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid username"})
+		writeAPIError(ctx, "INVALID_USERNAME")
 		return
 	}
 	user, err := loadPublicUserByExactUsername(ctx.Request.Context(), username)
@@ -416,25 +416,22 @@ func SearchUsers(ctx *gin.Context) {
 
 	rawQuery, exists := ctx.GetQuery("q")
 	if !exists {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "search query is required"})
+		writeAPIError(ctx, "SEARCH_QUERY_IS_REQUIRED")
 		return
 	}
 	query, err := normalizeUserSearchQuery(rawQuery)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 	limit, offset, err := parseUserSearchPagination(ctx)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 	page, err := searchUsers(ctx.Request.Context(), viewerID, query, limit, offset)
 	if err != nil {
-		if handleRequestDBError(ctx, err) {
-			return
-		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	if page.Items == nil {

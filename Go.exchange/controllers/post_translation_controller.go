@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -92,28 +91,28 @@ func loadPostTranslationFieldsFromDB(db *gorm.DB, postID uint) (postTranslationF
 
 func translatePost(ctx *gin.Context, service translation.Service) {
 	if _, ok := userIDFromContext(ctx); !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 
 	postID, err := parsePostTranslationID(ctx.Param("id"))
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid post id"})
+		writeAPIError(ctx, "INVALID_POST_ID")
 		return
 	}
 	request, err := decodePostTranslationRequest(ctx)
 	if err != nil {
 		var maxBytesError *http.MaxBytesError
 		if errors.As(err, &maxBytesError) {
-			ctx.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "translation request body too large"})
+			writeAPIError(ctx, "PAYLOAD_TOO_LARGE")
 			return
 		}
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid translation request"})
+		writeAPIError(ctx, "INVALID_TRANSLATION_REQUEST")
 		return
 	}
 	targetLanguage, ok := translation.NormalizeTargetLanguage(request.TargetLanguage)
 	if !ok {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid target language"})
+		writeAPIError(ctx, "INVALID_TARGET_LANGUAGE")
 		return
 	}
 	db := global.APIDb
@@ -126,11 +125,10 @@ func translatePost(ctx *gin.Context, service translation.Service) {
 			return
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			ctx.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
+			writeAPIError(ctx, "POST_NOT_FOUND")
 			return
 		}
-		log.Printf("[PostTranslation] load post %d: %v", postID, err)
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 
@@ -144,7 +142,7 @@ func translatePost(ctx *gin.Context, service translation.Service) {
 		return
 	}
 	if service == nil {
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "translation is unavailable"})
+		writeInternalAPIErrorCode(ctx, "SERVICE_UNAVAILABLE")
 		return
 	}
 
@@ -170,22 +168,21 @@ func writePostTranslationError(ctx *gin.Context, err error) {
 	var providerError *translation.ProviderError
 	switch {
 	case errors.Is(err, translation.ErrSourceTooLong):
-		ctx.JSON(http.StatusUnprocessableEntity, gin.H{"error": "post content is too long to translate"})
+		writeAPIError(ctx, "VALIDATION_FAILED")
 	case errors.Is(err, translation.ErrProviderRateLimited):
 		if errors.As(err, &providerError) && providerError.RetryAfterHeader != "" {
 			ctx.Header("Retry-After", providerError.RetryAfterHeader)
 		}
-		ctx.JSON(http.StatusTooManyRequests, gin.H{"error": "translation provider rate limit reached"})
+		writeAPIError(ctx, "TRANSLATION_RATE_LIMITED")
 	case errors.Is(err, translation.ErrFeatureDisabled),
 		errors.Is(err, translation.ErrProviderTimeout),
 		errors.Is(err, translation.ErrProviderUnavailable),
 		errors.Is(err, translation.ErrProviderInvalidResponse),
 		errors.Is(err, translation.ErrProviderMisconfigured):
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "translation is unavailable"})
+		writeInternalAPIErrorAs(ctx, err, "SERVICE_UNAVAILABLE")
 	case errors.Is(err, translation.ErrInvalidTargetLanguage):
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid target language"})
+		writeAPIError(ctx, "INVALID_TARGET_LANGUAGE")
 	default:
-		log.Printf("[PostTranslation] service error: %v", err)
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		writeInternalAPIError(ctx, err)
 	}
 }

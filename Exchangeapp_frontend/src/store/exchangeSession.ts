@@ -2,6 +2,7 @@ import { reactive, ref, watch } from 'vue';
 import { defineStore } from 'pinia';
 import { isAxiosError } from 'axios';
 import axios from '../axios';
+import type { ApiErrorResponse } from '../api';
 
 export type ExchangeMarketMeta = {
   asOf: string;
@@ -34,11 +35,26 @@ export type QuoteRequestResult = {
   error?: unknown;
 };
 
+class EmptyCurrencyResponseError extends Error {}
+
 const readError = (error: unknown, fallback: string) => {
-  if (!isAxiosError(error) && error instanceof Error && error.message.trim()) {
-    return error.message;
+  if (!isAxiosError(error)) {
+    return fallback;
   }
-  return fallback;
+  const data = error.response?.data as Partial<ApiErrorResponse> | undefined;
+  switch (data?.code) {
+    case 'INVALID_CURRENCY':
+      return 'Invalid currency.';
+    case 'INVALID_AMOUNT':
+      return 'Invalid amount.';
+    case 'UNSUPPORTED_CURRENCY':
+      return 'Currency is not supported.';
+    case 'EXCHANGE_UNAVAILABLE':
+    case 'SERVICE_UNAVAILABLE':
+      return 'Exchange-rate service is temporarily unavailable.';
+    default:
+      return fallback;
+  }
 };
 
 const sameQuoteForm = (left: ExchangeForm, right: ExchangeForm) => (
@@ -114,7 +130,7 @@ export const useExchangeSessionStore = defineStore('exchangeSession', () => {
     try {
       const { data } = await axios.get<CurrencyResponse>('/exchange/currencies');
       if (!data.currencies?.length) {
-        throw new Error('No currencies are available for the current market.');
+        throw new EmptyCurrencyResponseError();
       }
       if (requestVersion !== currencyRequestVersion.value) {
         return;
@@ -133,7 +149,9 @@ export const useExchangeSessionStore = defineStore('exchangeSession', () => {
       if (requestVersion !== currencyRequestVersion.value) {
         return;
       }
-      const message = readError(error, 'Could not load exchange-rate data. Please try again.');
+      const message = error instanceof EmptyCurrencyResponseError
+        ? 'No currencies are available for the current market.'
+        : readError(error, 'Could not load exchange-rate data. Please try again.');
       if (hasCache) {
         refreshError.value = message;
       } else {

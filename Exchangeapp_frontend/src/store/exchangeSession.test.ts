@@ -63,7 +63,7 @@ describe('exchange session store', () => {
 
     expect(store.currencies).toEqual(currencies.currencies);
     expect(store.market?.source).toBe('test-market');
-    expect(store.refreshError).toContain('market offline');
+    expect(store.refreshError).toBe('Could not load exchange-rate data. Please try again.');
     expect(store.loaded).toBe(true);
     expect(store.refreshing).toBe(false);
   });
@@ -141,7 +141,7 @@ describe('exchange session store', () => {
     expect(failed.applied).toBe(true);
     expect(failed.success).toBe(false);
     expect(store.quote).toBeNull();
-    expect(store.quoteError).toContain('quote offline');
+    expect(store.quoteError).toBe('Could not get a quote. Please try again.');
   });
 
   it('invalidates the quote synchronously when the amount changes', () => {
@@ -211,6 +211,19 @@ describe('exchange session store', () => {
 
     expect(result.error).toBe('Could not get a quote. Please try again.');
     expect(store.quoteError).toBe('Could not get a quote. Please try again.');
+  });
+
+  it('maps an allow-listed quote error code to frontend-owned safe copy', async () => {
+    mocks.get.mockRejectedValueOnce({
+      isAxiosError: true,
+      response: { data: { code: 'INVALID_AMOUNT', error: 'database secret' } },
+    });
+    const store = useExchangeSessionStore();
+
+    const result = await store.requestQuote();
+
+    expect(result.error).toBe('Invalid amount.');
+    expect(store.quoteError).toBe('Invalid amount.');
   });
 
   it('swaps currencies in the store without issuing a quote request', () => {

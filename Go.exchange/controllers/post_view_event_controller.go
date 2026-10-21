@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"Go.exchange/apierrors"
 	"Go.exchange/config"
 	"Go.exchange/eventing"
 	"Go.exchange/global"
@@ -45,6 +46,11 @@ type postViewEventBatchResponse struct {
 	Results  []postViewEventResult `json:"results"`
 }
 
+type postViewEventValidationResponse struct {
+	apierrors.ErrorResponse
+	postViewEventBatchResponse
+}
+
 type validatedPostViewEvent struct {
 	EventID    string
 	PostID     uint
@@ -77,7 +83,7 @@ func RecordPostViewEvents(ctx *gin.Context) {
 func recordPostViewEvents(ctx *gin.Context, publisher eventing.BatchPublisher) {
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 	ctx.Request.Body = http.MaxBytesReader(ctx.Writer, ctx.Request.Body, postViewTelemetryMaxBodyBytes)
@@ -85,25 +91,25 @@ func recordPostViewEvents(ctx *gin.Context, publisher eventing.BatchPublisher) {
 	if err := ctx.ShouldBindJSON(&request); err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			ctx.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body exceeds 64 KiB"})
+			writeAPIError(ctx, "PAYLOAD_TOO_LARGE")
 			return
 		}
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid post view event batch"})
+		writeAPIError(ctx, "INVALID_POST_VIEW_EVENT_BATCH")
 		return
 	}
 	if len(request.Events) == 0 || len(request.Events) > postViewTelemetryMaxBatchEvents {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "events must contain between 1 and 50 items"})
+		writeAPIError(ctx, "EVENTS_MUST_CONTAIN_BETWEEN_1_AND_50_ITEMS")
 		return
 	}
 
 	allowed, err := allowPostViewEvents(userID, len(request.Events))
 	if err != nil {
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "post view telemetry rate limiter unavailable"})
+		writeInternalAPIErrorAs(ctx, err, "SERVICE_UNAVAILABLE")
 		return
 	}
 	if !allowed {
 		ctx.Header("Retry-After", "60")
-		ctx.JSON(http.StatusTooManyRequests, gin.H{"error": "post view telemetry rate limit exceeded"})
+		writeAPIError(ctx, "POST_VIEW_RATE_LIMITED")
 		return
 	}
 
@@ -124,7 +130,7 @@ func recordPostViewEvents(ctx *gin.Context, publisher eventing.BatchPublisher) {
 	}
 	if len(valid) == 0 {
 		completePostViewEventResponse(&response)
-		ctx.JSON(http.StatusUnprocessableEntity, response)
+		writePostViewValidationResponse(ctx, response)
 		return
 	}
 
@@ -132,17 +138,17 @@ func recordPostViewEvents(ctx *gin.Context, publisher eventing.BatchPublisher) {
 	for _, event := range valid {
 		envelope, err := eventing.NewPostViewedEnvelope(event.EventID, userID, event.PostID, event.OccurredAt, event.Source)
 		if err != nil {
-			ctx.JSON(http.StatusUnprocessableEntity, gin.H{"error": "invalid post view event"})
+			writeAPIError(ctx, "VALIDATION_FAILED")
 			return
 		}
 		envelopes = append(envelopes, envelope)
 	}
 	if publisher == nil {
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "post view publisher unavailable"})
+		writeInternalAPIErrorCode(ctx, "SERVICE_UNAVAILABLE")
 		return
 	}
 	if err := publisher.PublishBatch(ctx.Request.Context(), envelopes); err != nil {
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "failed to publish post view events"})
+		writeInternalAPIErrorAs(ctx, err, "SERVICE_UNAVAILABLE")
 		return
 	}
 	for _, index := range validIndexes {
@@ -160,6 +166,13 @@ func completePostViewEventResponse(response *postViewEventBatchResponse) {
 			response.Rejected++
 		}
 	}
+}
+
+func writePostViewValidationResponse(ctx *gin.Context, response postViewEventBatchResponse) {
+	status, apiError := apierrors.PublicErrorResponse(ctx, apierrors.CodeValidationFailed)
+	ctx.AbortWithStatusJSON(status, postViewEventValidationResponse{
+		ErrorResponse: apiError, postViewEventBatchResponse: response,
+	})
 }
 
 func enforcePostViewEventRateLimit(userID uint, eventCount int) (bool, error) {

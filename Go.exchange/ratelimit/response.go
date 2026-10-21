@@ -1,21 +1,12 @@
 package ratelimit
 
 import (
+	"Go.exchange/apierrors"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
-
-const (
-	rateLimitedCode          = "RATE_LIMITED"
-	rateLimitUnavailableCode = "RATE_LIMIT_UNAVAILABLE"
-)
-
-type errorResponse struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
 
 func setRateLimitHeaders(ctx *gin.Context, decision Decision) {
 	if ctx == nil {
@@ -31,8 +22,8 @@ func setRateLimitHeaders(ctx *gin.Context, decision Decision) {
 	}
 }
 
-func writeRateLimitResponse(ctx *gin.Context, status int, code, message string) {
-	ctx.AbortWithStatusJSON(status, errorResponse{Code: code, Message: message})
+func writeRateLimitResponse(ctx *gin.Context, code apierrors.Code) {
+	apierrors.WritePublicError(ctx, code)
 }
 
 func retryAfterSeconds(duration time.Duration) int64 {

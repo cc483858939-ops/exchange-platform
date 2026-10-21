@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"Go.exchange/apierrors"
 	"Go.exchange/services"
 
 	"github.com/gin-gonic/gin"
@@ -100,11 +101,11 @@ func TestGetExchangeQuoteErrorContract(t *testing.T) {
 			if response.Code != test.wantStatus {
 				t.Fatalf("status = %d, want %d", response.Code, test.wantStatus)
 			}
-			var body exchangeErrorResponse
+			var body apierrors.ErrorResponse
 			if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 				t.Fatalf("decode error response: %v", err)
 			}
-			if body.Code != test.wantCode {
+			if string(body.Code) != test.wantCode {
 				t.Fatalf("code = %q, want %q", body.Code, test.wantCode)
 			}
 			if body.Error != test.wantError {
@@ -125,7 +126,7 @@ func TestGetExchangeCurrenciesMapsUnavailableTo503(t *testing.T) {
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
 	}
-	var body exchangeErrorResponse
+	var body apierrors.ErrorResponse
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode error response: %v", err)
 	}

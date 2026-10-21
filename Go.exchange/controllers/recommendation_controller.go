@@ -63,7 +63,7 @@ func NewRecommendationHandler(service recommendation.Service, responseMapper Rec
 func (handler *RecommendationHandler) GetPostRecommendations(ctx *gin.Context) {
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 	handler.serve(ctx, recommendation.Viewer{Kind: recommendation.ViewerAuthenticated, UserID: userID})
@@ -76,7 +76,7 @@ func (handler *RecommendationHandler) GetPublicPostRecommendations(ctx *gin.Cont
 
 func (handler *RecommendationHandler) serve(ctx *gin.Context, viewer recommendation.Viewer) {
 	if handler == nil || handler.service == nil || handler.responseMapper == nil {
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "recommendation service is unavailable"})
+		writeInternalAPIErrorCode(ctx, "SERVICE_UNAVAILABLE")
 		return
 	}
 	requestCtx := ctx.Request.Context()
@@ -101,11 +101,11 @@ func (handler *RecommendationHandler) serve(ctx *gin.Context, viewer recommendat
 		trace.SpanFromContext(requestCtx).SetAttributes(attribute.String("recommendation.request_id", result.RequestID))
 	}
 	if err != nil {
-		recommendationErrorResponse(ctx, err, result.StrategyID)
+		recommendationErrorResponse(ctx, err)
 		return
 	}
 	if err := servingCtx.Err(); err != nil {
-		recommendationErrorResponse(ctx, err, result.StrategyID)
+		recommendationErrorResponse(ctx, err)
 		return
 	}
 	recommendations, err := func() ([]RecommendedPostResponse, error) {
@@ -124,14 +124,14 @@ func (handler *RecommendationHandler) serve(ctx *gin.Context, viewer recommendat
 		return mapped, mapErr
 	}()
 	if err != nil {
-		recommendationErrorResponse(ctx, err, result.StrategyID)
+		recommendationErrorResponse(ctx, err)
 		return
 	}
 	mappedSelected := selectedForMappedRecommendations(result.Selected, recommendations)
 	if finalizer, ok := handler.service.(recommendation.MappedServingFinalizer); ok {
 		facts, err := finalizer.FinalizeMappedServing(servingCtx, result, mappedSelected)
 		if err != nil {
-			recommendationErrorResponse(ctx, err, result.StrategyID)
+			recommendationErrorResponse(ctx, err)
 			return
 		}
 		attachRecommendationTrackingFacts(recommendations, facts)
@@ -139,7 +139,7 @@ func (handler *RecommendationHandler) serve(ctx *gin.Context, viewer recommendat
 		attachRecommendationTrackingFacts(recommendations, result.Tracking)
 		if finalizer, ok := handler.service.(recommendation.ServingFinalizer); ok {
 			if err := finalizer.FinalizeServing(servingCtx, result, mappedSelected); err != nil {
-				recommendationErrorResponse(ctx, err, result.StrategyID)
+				recommendationErrorResponse(ctx, err)
 				return
 			}
 		}
@@ -198,7 +198,7 @@ func attachRecommendationTrackingFacts(recommendations []RecommendedPostResponse
 	}
 }
 
-func recommendationErrorResponse(ctx *gin.Context, err error, _ string) {
+func recommendationErrorResponse(ctx *gin.Context, err error) {
 	if err == nil {
 		return
 	}
@@ -207,18 +207,18 @@ func recommendationErrorResponse(ctx *gin.Context, err error, _ string) {
 		return
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		ctx.JSON(http.StatusGatewayTimeout, gin.H{"error": "recommendation timed out"})
+		writeAPIError(ctx, "REQUEST_TIMEOUT")
 		return
 	}
 	if errors.Is(err, recommendation.ErrInvalidCursor) {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_CURSOR"})
+		writeAPIError(ctx, "INVALID_CURSOR")
 		return
 	}
 	if errors.Is(err, recommendation.ErrCursorExpired) {
-		ctx.JSON(http.StatusGone, gin.H{"error": "CURSOR_EXPIRED"})
+		writeAPIError(ctx, "CURSOR_EXPIRED")
 		return
 	}
-	ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	writeInternalAPIError(ctx, err)
 }
 
 func strconvUint(id uint) string { return strconv.FormatUint(uint64(id), 10) }

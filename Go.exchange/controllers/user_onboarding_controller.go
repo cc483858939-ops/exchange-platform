@@ -3,7 +3,6 @@ package controllers
 import (
 	"errors"
 	"io"
-	"log"
 	"net/http"
 	"sort"
 	"time"
@@ -39,12 +38,12 @@ type replaceUserOnboardingInterestsRequest struct {
 func GetMyOnboarding(ctx *gin.Context) {
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
-		writeUserOnboardingError(ctx, http.StatusUnauthorized, "ONBOARDING_AUTH_REQUIRED", "Authentication is required")
+		writeUserOnboardingError(ctx, "ONBOARDING_AUTH_REQUIRED")
 		return
 	}
 	status, err := loadUserOnboardingStatus(ctx, global.APIDb, userID)
 	if err != nil {
-		writeUserOnboardingStoreError(ctx, userID, err)
+		writeUserOnboardingStoreError(ctx, err)
 		return
 	}
 	ctx.JSON(http.StatusOK, status)
@@ -53,16 +52,16 @@ func GetMyOnboarding(ctx *gin.Context) {
 func UpdateMyOnboardingProgress(ctx *gin.Context) {
 	var request updateUserOnboardingProgressRequest
 	if err := bindUserOnboardingJSON(ctx, &request); err != nil {
-		writeUserOnboardingError(ctx, requestBodyErrorStatus(err), "ONBOARDING_REQUEST_INVALID", "Invalid onboarding request")
+		writeUserOnboardingRequestError(ctx, err)
 		return
 	}
 	if !validUserOnboardingStep(request.CurrentStep) {
-		writeUserOnboardingError(ctx, http.StatusBadRequest, "ONBOARDING_STEP_INVALID", "Invalid onboarding step")
+		writeUserOnboardingError(ctx, "ONBOARDING_STEP_INVALID")
 		return
 	}
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
-		writeUserOnboardingError(ctx, http.StatusUnauthorized, "ONBOARDING_AUTH_REQUIRED", "Authentication is required")
+		writeUserOnboardingError(ctx, "ONBOARDING_AUTH_REQUIRED")
 		return
 	}
 	status, err := mutateUserOnboarding(ctx, userID, func(tx *gorm.DB, state *models.UserOnboarding) error {
@@ -72,7 +71,7 @@ func UpdateMyOnboardingProgress(ctx *gin.Context) {
 		return tx.Model(state).Update("current_step", request.CurrentStep).Error
 	})
 	if err != nil {
-		writeUserOnboardingStoreError(ctx, userID, err)
+		writeUserOnboardingStoreError(ctx, err)
 		return
 	}
 	ctx.JSON(http.StatusOK, status)
@@ -81,42 +80,41 @@ func UpdateMyOnboardingProgress(ctx *gin.Context) {
 func ReplaceMyOnboardingInterests(ctx *gin.Context) {
 	var request replaceUserOnboardingInterestsRequest
 	if err := bindUserOnboardingJSON(ctx, &request); err != nil {
-		writeUserOnboardingError(ctx, requestBodyErrorStatus(err), "ONBOARDING_REQUEST_INVALID", "Invalid onboarding request")
+		writeUserOnboardingRequestError(ctx, err)
 		return
 	}
 	if request.TopicSlugs == nil {
-		writeUserOnboardingError(ctx, http.StatusBadRequest, "ONBOARDING_INTERESTS_REQUIRED", "topic_slugs is required")
+		writeUserOnboardingError(ctx, "ONBOARDING_INTERESTS_REQUIRED")
 		return
 	}
 	allowed, err := loadEnabledOnboardingTopicSlugs()
 	if err != nil {
-		log.Printf("[Onboarding] load curated topics: %v", err)
-		writeUserOnboardingError(ctx, http.StatusInternalServerError, "ONBOARDING_TOPICS_UNAVAILABLE", "Onboarding topics are unavailable")
+		writeInternalAPIErrorAs(ctx, err, "ONBOARDING_TOPICS_UNAVAILABLE")
 		return
 	}
 	if len(*request.TopicSlugs) > len(allowed) {
-		writeUserOnboardingError(ctx, http.StatusBadRequest, "ONBOARDING_INTERESTS_INVALID", "Invalid onboarding interests")
+		writeUserOnboardingError(ctx, "ONBOARDING_INTERESTS_INVALID")
 		return
 	}
 	seen := make(map[string]struct{}, len(*request.TopicSlugs))
 	for _, slug := range *request.TopicSlugs {
 		if slug == "" {
-			writeUserOnboardingError(ctx, http.StatusBadRequest, "ONBOARDING_INTERESTS_INVALID", "Invalid onboarding interests")
+			writeUserOnboardingError(ctx, "ONBOARDING_INTERESTS_INVALID")
 			return
 		}
 		if _, exists := seen[slug]; exists {
-			writeUserOnboardingError(ctx, http.StatusBadRequest, "ONBOARDING_INTERESTS_DUPLICATE", "Duplicate onboarding interest")
+			writeUserOnboardingError(ctx, "ONBOARDING_INTERESTS_DUPLICATE")
 			return
 		}
 		if _, exists := allowed[slug]; !exists {
-			writeUserOnboardingError(ctx, http.StatusBadRequest, "ONBOARDING_INTERESTS_INVALID", "Invalid onboarding interests")
+			writeUserOnboardingError(ctx, "ONBOARDING_INTERESTS_INVALID")
 			return
 		}
 		seen[slug] = struct{}{}
 	}
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
-		writeUserOnboardingError(ctx, http.StatusUnauthorized, "ONBOARDING_AUTH_REQUIRED", "Authentication is required")
+		writeUserOnboardingError(ctx, "ONBOARDING_AUTH_REQUIRED")
 		return
 	}
 	status, err := mutateUserOnboarding(ctx, userID, func(tx *gorm.DB, _ *models.UserOnboarding) error {
@@ -133,7 +131,7 @@ func ReplaceMyOnboardingInterests(ctx *gin.Context) {
 		return tx.Create(&rows).Error
 	})
 	if err != nil {
-		writeUserOnboardingStoreError(ctx, userID, err)
+		writeUserOnboardingStoreError(ctx, err)
 		return
 	}
 	ctx.JSON(http.StatusOK, status)
@@ -142,7 +140,7 @@ func ReplaceMyOnboardingInterests(ctx *gin.Context) {
 func CompleteMyOnboarding(ctx *gin.Context) {
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
-		writeUserOnboardingError(ctx, http.StatusUnauthorized, "ONBOARDING_AUTH_REQUIRED", "Authentication is required")
+		writeUserOnboardingError(ctx, "ONBOARDING_AUTH_REQUIRED")
 		return
 	}
 	status, err := mutateUserOnboarding(ctx, userID, func(tx *gorm.DB, state *models.UserOnboarding) error {
@@ -153,7 +151,7 @@ func CompleteMyOnboarding(ctx *gin.Context) {
 		return tx.Model(state).Updates(map[string]any{"completed_at": now, "updated_at": now}).Error
 	})
 	if err != nil {
-		writeUserOnboardingStoreError(ctx, userID, err)
+		writeUserOnboardingStoreError(ctx, err)
 		return
 	}
 	ctx.JSON(http.StatusOK, status)
@@ -210,11 +208,12 @@ func bindUserOnboardingJSON(ctx *gin.Context, destination any) error {
 	return nil
 }
 
-func requestBodyErrorStatus(err error) int {
+func writeUserOnboardingRequestError(ctx *gin.Context, err error) {
 	if isRequestBodyTooLarge(err) {
-		return http.StatusRequestEntityTooLarge
+		writeAPIError(ctx, "ONBOARDING_REQUEST_TOO_LARGE")
+		return
 	}
-	return http.StatusBadRequest
+	writeUserOnboardingError(ctx, "ONBOARDING_REQUEST_INVALID")
 }
 
 func loadUserOnboardingStatus(ctx *gin.Context, db *gorm.DB, userID uint) (userOnboardingStatusResponse, error) {
@@ -260,19 +259,14 @@ func mutateUserOnboarding(ctx *gin.Context, userID uint, mutate func(*gorm.DB, *
 	return status, err
 }
 
-func writeUserOnboardingStoreError(ctx *gin.Context, userID uint, err error) {
-	if handleRequestDBError(ctx, err) {
-		return
-	}
+func writeUserOnboardingStoreError(ctx *gin.Context, err error) {
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		log.Printf("[Onboarding] missing state user=%d", userID)
-		writeUserOnboardingError(ctx, http.StatusInternalServerError, "ONBOARDING_STATE_MISSING", "Onboarding state is unavailable")
+		writeInternalAPIErrorAs(ctx, err, "ONBOARDING_STATE_MISSING")
 		return
 	}
-	log.Printf("[Onboarding] persistence failed user=%d: %v", userID, err)
-	writeUserOnboardingError(ctx, http.StatusInternalServerError, "ONBOARDING_UNAVAILABLE", "Onboarding is temporarily unavailable")
+	writeInternalAPIErrorAs(ctx, err, "ONBOARDING_UNAVAILABLE")
 }
 
-func writeUserOnboardingError(ctx *gin.Context, status int, code, message string) {
-	ctx.JSON(status, gin.H{"code": code, "message": message})
+func writeUserOnboardingError(ctx *gin.Context, code string) {
+	writeAPIError(ctx, code)
 }

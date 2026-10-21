@@ -55,10 +55,10 @@ func isRequestBodyTooLarge(err error) bool {
 	return errors.As(err, &sizeError)
 }
 
-func writeJSONRequestError(ctx *gin.Context, err error, invalidMessage string) {
+func writeJSONRequestError(ctx *gin.Context, err error) {
 	if isRequestBodyTooLarge(err) {
-		ctx.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "Request body too large"})
+		writeAPIError(ctx, "PAYLOAD_TOO_LARGE")
 		return
 	}
-	ctx.JSON(http.StatusBadRequest, gin.H{"error": invalidMessage})
+	writeAPIError(ctx, "INVALID_REQUEST")
 }

@@ -2,12 +2,15 @@ package router
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"Go.exchange/apierrors"
 
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel/attribute"
@@ -16,6 +19,44 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 )
+
+func TestSetupRouterUsesUnifiedErrorsForUnknownAPIRoutes(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	engine, err := SetupRouter(nil, nil, nil, nil, nil, newRouterRecommendationHandler(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		method string
+		path   string
+		status int
+		code   string
+	}{
+		{method: http.MethodGet, path: "/api/not-a-real-route", status: http.StatusNotFound, code: "NOT_FOUND"},
+		{method: http.MethodPost, path: "/api/public/recommendations/posts", status: http.StatusMethodNotAllowed, code: "METHOD_NOT_ALLOWED"},
+	} {
+		t.Run(test.code, func(t *testing.T) {
+			request := httptest.NewRequest(test.method, test.path, nil)
+			request.Header.Set(apierrors.RequestIDHeader, "client-controlled-id")
+			response := httptest.NewRecorder()
+			engine.ServeHTTP(response, request)
+
+			if response.Code != test.status {
+				t.Fatalf("status=%d, want %d", response.Code, test.status)
+			}
+			var payload apierrors.ErrorResponse
+			if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("decode unified error response: %v; body=%s", err, response.Body.String())
+			}
+			requestID := response.Header().Get(apierrors.RequestIDHeader)
+			if payload.Code != apierrors.Code(test.code) || payload.Error == "" ||
+				payload.RequestID == "" || payload.RequestID != requestID || requestID == "client-controlled-id" {
+				t.Fatalf("unexpected response contract: payload=%+v header_request_id=%q", payload, requestID)
+			}
+		})
+	}
+}
 
 func TestSetupRouterIgnoresForwardedHeadersWithoutTrustedProxy(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")

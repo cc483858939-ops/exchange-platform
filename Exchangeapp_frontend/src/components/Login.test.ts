@@ -167,7 +167,10 @@ describe('Login return navigation', () => {
 
   it('stays on Login and keeps the target when authentication fails', async () => {
     mocks.route.query = { returnTo: '/notifications' };
-    mocks.authStore.login.mockRejectedValueOnce(new Error('Invalid username or password'));
+    mocks.authStore.login.mockRejectedValueOnce(new AuthRequestError(
+      'Untrusted error text is ignored',
+      'AUTH_CREDENTIALS_INVALID',
+    ));
     wrapper = mountLogin();
 
     await submit();

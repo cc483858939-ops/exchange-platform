@@ -349,7 +349,7 @@ describe('replySubmission store', () => {
   it('keeps a mention-limit validation failure non-retryable and releases it without losing the reply draft', async () => {
     mocks.createClientOperationID.mockReturnValueOnce('validation-attempt').mockReturnValueOnce('corrected-attempt');
     mocks.createPostReply.mockRejectedValueOnce({
-      response: { status: 400, data: { error: 'a post can mention at most 5 different users' } },
+      response: { status: 400, data: { code: 'POST_MENTION_LIMIT_EXCEEDED', error: 'TEST_A2_INTERNAL_ERROR' } },
     });
     drafts().setViewer(7);
     drafts().setDraft(42, '@alice @bob @carol @dana @erin @frank');

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import { computed, onScopeDispose, ref } from 'vue';
 import axios from 'axios';
 import { apiBaseUrl } from '../api';
+import type { ApiErrorResponse } from '../api';
 import {
   AUTH_USER_STORAGE_KEY,
   AuthRefreshCoordinationUnavailableError,
@@ -35,12 +36,6 @@ type AuthResponse = {
   user: unknown;
 };
 
-type AuthErrorResponse = {
-  code?: string;
-  error?: string;
-  message?: string;
-};
-
 type ValidatedAuthResponse = {
   session: PersistedAuthSession;
   identity: AuthIdentity;
@@ -62,14 +57,29 @@ const toAuthRequestError = (error: unknown, fallback: string): AuthRequestError 
     );
   }
 
-  const data = (error as { response?: { data?: AuthErrorResponse } }).response?.data;
+  const data = (error as { response?: { data?: Partial<ApiErrorResponse> } }).response?.data;
   const code = typeof data?.code === 'string' && data.code.trim() ? data.code.trim() : null;
-  const message = typeof data?.message === 'string' && data.message.trim()
-    ? data.message.trim()
-    : typeof data?.error === 'string' && data.error.trim()
-      ? data.error.trim()
-      : fallback;
-  return new AuthRequestError(message, code);
+  const message = code ? authErrorMessages[code] : undefined;
+  return new AuthRequestError(message ?? fallback, message ? code : null);
+};
+
+const authErrorMessages: Record<string, string> = {
+  AUTH_TOKEN_MISSING: 'Authentication required.',
+  AUTH_TOKEN_INVALID: 'Authentication failed.',
+  AUTH_CREDENTIALS_INVALID: 'Invalid username or password.',
+  AUTH_REQUEST_INVALID: 'Invalid request data.',
+  AUTH_REQUEST_TOO_LARGE: 'Authentication request is too large.',
+  AUTH_RATE_LIMITED: 'Too many authentication attempts.',
+  AUTH_RATE_LIMIT_UNAVAILABLE: 'Authentication is temporarily unavailable.',
+  AUTH_USERNAME_UNAVAILABLE: 'Username is unavailable.',
+  AUTH_REFRESH_INVALID: 'Authentication failed.',
+  AUTH_REFRESH_EXPIRED: 'Authentication failed.',
+  AUTH_REFRESH_REUSED: 'Authentication failed.',
+  AUTH_INTERNAL: 'Authentication failed. Please try again.',
+  AUTH_LIKE_STATE_UNAVAILABLE: 'Registration is temporarily unavailable.',
+  AUTH_ONBOARDING_INIT_FAILED: 'Registration could not be completed.',
+  AUTH_TOKEN_ISSUE_FAILED: 'Authentication failed. Please try again.',
+  AUTH_LOGOUT_UNAVAILABLE: 'Sign out could not be confirmed. Please try again.',
 };
 
 const shouldClearAuthAfterRefreshFailure = (error: unknown): boolean => {
@@ -81,7 +91,7 @@ const shouldClearAuthAfterRefreshFailure = (error: unknown): boolean => {
     return false;
   }
 
-  const data = error.response.data as AuthErrorResponse | undefined;
+  const data = error.response.data as Partial<ApiErrorResponse> | undefined;
   return data?.code === 'AUTH_REFRESH_INVALID'
     || data?.code === 'AUTH_REFRESH_EXPIRED'
     || data?.code === 'AUTH_REFRESH_REUSED';

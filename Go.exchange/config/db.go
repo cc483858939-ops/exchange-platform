@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 type DatabaseTimeoutProfile struct {
@@ -164,7 +165,11 @@ func openDatabase(dsn string, options DatabaseOptions) (*gorm.DB, error) {
 	sqlDB.SetMaxIdleConns(options.MaxIdleConns)
 	sqlDB.SetMaxOpenConns(options.MaxOpenConns)
 	sqlDB.SetConnMaxLifetime(options.ConnMaxLifetime)
-	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{})
+	// GORM's default error logger includes the failed SQL and underlying error
+	// text. API failures are logged through the redacted request-aware logger.
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{
+		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
+	})
 	if err != nil {
 		_ = sqlDB.Close()
 		return nil, err

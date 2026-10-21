@@ -471,11 +471,13 @@ describe('auth store cross-tab session coordination', () => {
   it('preserves structured register errors and maps network and timeout failures', async () => {
     const store = createAuthStore();
     mocks.post.mockRejectedValueOnce({ response: { data: {
-      code: 'AUTH_USERNAME_UNAVAILABLE', message: 'Username is unavailable',
+      code: 'AUTH_USERNAME_UNAVAILABLE',
+      error: 'postgres://internal.example/secret should never be shown',
+      request_id: 'a2-test-request',
     } } });
     const structured = await store.register('alice', 'secret123').catch((error: unknown) => error);
     expect(structured).toBeInstanceOf(AuthRequestError);
-    expect(structured).toMatchObject({ code: 'AUTH_USERNAME_UNAVAILABLE', message: 'Username is unavailable' });
+    expect(structured).toMatchObject({ code: 'AUTH_USERNAME_UNAVAILABLE', message: 'Username is unavailable.' });
 
     mocks.post.mockRejectedValueOnce(new Error('Network Error'));
     const network = await store.register('alice', 'secret123').catch((error: unknown) => error);

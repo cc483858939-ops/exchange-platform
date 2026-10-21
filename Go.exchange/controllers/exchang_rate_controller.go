@@ -14,7 +14,7 @@ import (
 func CreateExchangeRate(ctx *gin.Context) {
 	var exchangeRate models.ExchangeRate
 	if err := ctx.ShouldBind(&exchangeRate); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 	exchangeRate.Date = time.Now()
@@ -22,7 +22,7 @@ func CreateExchangeRate(ctx *gin.Context) {
 		if handleRequestDBError(ctx, err) {
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	ctx.JSON(http.StatusOK, exchangeRate)
@@ -34,10 +34,10 @@ func GetExchangeRates(ctx *gin.Context) {
 			return
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			writeAPIError(ctx, "NOT_FOUND")
 			return
 		} else {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			writeInternalAPIError(ctx, err)
 			return
 		}
 	}

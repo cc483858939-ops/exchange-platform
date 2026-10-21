@@ -3,7 +3,6 @@ package controllers
 import (
 	"context"
 	"errors"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -60,12 +59,12 @@ var invalidatePostCreateParentDetailCache = func(postID uint) error {
 	return InvalidatePostDetailCacheByID(postID)
 }
 
-func initializePostLikeStateAfterCommit(ctx context.Context, postID uint) {
-	if err := initializePostLikeState(ctx, postID); err != nil {
-		log.Printf("[PostCreate] initialize Redis like state post=%d: %v", postID, err)
-		if global.APIDb != nil {
-			global.APIDb.Logger.Error(ctx, "failed to initialize post like state", err)
-		}
+func initializePostLikeStateAfterCommit(ctx *gin.Context, postID uint) {
+	if ctx == nil || ctx.Request == nil {
+		return
+	}
+	if err := initializePostLikeState(ctx.Request.Context(), postID); err != nil {
+		logAPIInternalError(ctx, http.StatusCreated, err)
 	}
 }
 
@@ -97,15 +96,12 @@ func createPost(ctx *gin.Context) {
 func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter, enabled bool) {
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 	clientPublishID, hasClientPublishID, err := parseClientPublishKey(ctx)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{
-			"code":  invalidClientPublishCode,
-			"error": errInvalidClientPublishKey.Error(),
-		})
+		writeAPIError(ctx, invalidClientPublishCode)
 		return
 	}
 
@@ -115,40 +111,40 @@ func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter, enab
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		var maxBytesError *http.MaxBytesError
 		if errors.As(err, &maxBytesError) {
-			ctx.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
+			writeAPIError(ctx, "PAYLOAD_TOO_LARGE")
 			return
 		}
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 
 	content := strings.TrimSpace(req.Content)
 	if content == "" {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "content is required"})
+		writeAPIError(ctx, "CONTENT_IS_REQUIRED")
 		return
 	}
 	if req.ReplyToPostID != nil && utf8.RuneCountInString(content) > maxReplyContentRunes {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "reply content exceeds 1000 Unicode code points"})
+		writeAPIError(ctx, "REPLY_CONTENT_EXCEEDS_1000_UNICODE_CODE_POINTS")
 		return
 	}
 	now := time.Now().UTC()
 	if req.ReplyToPostID != nil && *req.ReplyToPostID == 0 {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid reply_to_post_id"})
+		writeAPIError(ctx, "INVALID_REPLY_TO_POST_ID")
 		return
 	}
 	if req.QuotePostID != nil && *req.QuotePostID == 0 {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid quote_post_id"})
+		writeAPIError(ctx, "INVALID_QUOTE_POST_ID")
 		return
 	}
 	if req.ReplyToPostID != nil && req.QuotePostID != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "a post cannot be both a reply and a quote"})
+		writeAPIError(ctx, "A_POST_CANNOT_BE_BOTH_A_REPLY_AND_A_QUOTE")
 		return
 	}
 	var clientPublishFingerprint string
 	if hasClientPublishID {
 		clientPublishFingerprint, err = createPostPayloadFingerprint(content, req)
 		if err != nil {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			writeInternalAPIError(ctx, err)
 			return
 		}
 		req.ClientPublishID = clientPublishID
@@ -162,17 +158,17 @@ func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter, enab
 			return
 		}
 		if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": lookupErr.Error()})
+			writeInternalAPIError(ctx, lookupErr)
 			return
 		}
 	}
 	mentionTokens, err := postmention.ExtractTokens(content)
 	if errors.Is(err, postmention.ErrTooManyCandidates) {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "too many mention candidates"})
+		writeAPIError(ctx, "TOO_MANY_MENTION_CANDIDATES")
 		return
 	}
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid mention text"})
+		writeAPIError(ctx, "INVALID_MENTION_TEXT")
 		return
 	}
 	req.MentionTokens = mentionTokens
@@ -188,17 +184,17 @@ func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter, enab
 			return
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+			writeAPIError(ctx, "UNAUTHORIZED")
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	media, err := validatePostMediaRequests(ctx.Request.Context(), userID, req.Media)
 	if err != nil {
 		switch {
 		default:
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid media"})
+			writeAPIError(ctx, "INVALID_MEDIA")
 		}
 		return
 	}
@@ -207,7 +203,7 @@ func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter, enab
 	err = persistPostGraphFn(ctx.Request.Context(), &post, userID, content, req, media, now)
 	if err != nil {
 		if errors.Is(err, errTooManyPostMentions) {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeAPIError(ctx, "INVALID_REQUEST")
 			return
 		}
 		if hasClientPublishID && isClientPublishUniqueViolation(err) {
@@ -224,25 +220,25 @@ func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter, enab
 			return
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			ctx.JSON(http.StatusNotFound, gin.H{"error": "reply or quote target unavailable"})
+			writeAPIError(ctx, "POST_REFERENCE_UNAVAILABLE")
 			return
 		}
 		if errors.Is(err, errInvalidPostMedia) {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid media"})
+			writeAPIError(ctx, "INVALID_MEDIA")
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	initializePostLikeStateAfterCommit(ctx, post.ID)
 	if post.ReplyToPostID != nil {
 		if err := invalidatePostCreateParentDetailCache(*post.ReplyToPostID); err != nil {
-			log.Printf("[PostCreate] invalidate parent post detail cache for %d: %v", *post.ReplyToPostID, err)
+			logAPIInternalError(ctx, http.StatusCreated, err)
 		}
 	}
 	if post.QuotePostID != nil {
 		if err := invalidatePostCreateParentDetailCache(*post.QuotePostID); err != nil {
-			log.Printf("[PostCreate] invalidate quote target detail cache for %d: %v", *post.QuotePostID, err)
+			logAPIInternalError(ctx, http.StatusCreated, err)
 		}
 	}
 
@@ -257,7 +253,7 @@ func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter, enab
 		if handleRequestDBError(ctx, err) {
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	ctx.JSON(http.StatusCreated, response)
@@ -488,10 +484,10 @@ func GetPostByID(ctx *gin.Context) {
 			return
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			writeAPIError(ctx, "NOT_FOUND")
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	ctx.JSON(http.StatusOK, post)

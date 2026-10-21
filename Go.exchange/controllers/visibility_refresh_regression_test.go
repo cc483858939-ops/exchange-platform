@@ -226,7 +226,7 @@ func TestRefreshProfileErrorsKeepTransientFailureDistinctFromInvalidSession(t *t
 		code   string
 	}{
 		{"temporary", errors.New("temporary database failure"), 500, "AUTH_INTERNAL"},
-		{"deadline", context.DeadlineExceeded, 504, "request timed out"},
+		{"deadline", context.DeadlineExceeded, 504, "REQUEST_TIMEOUT"},
 		{"missing user", nil, 401, "AUTH_REFRESH_INVALID"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -246,9 +246,10 @@ func TestRefreshProfileErrorsKeepTransientFailureDistinctFromInvalidSession(t *t
 			ctx.Request = httptest.NewRequest(http.MethodPost, "/api/auth/refresh", strings.NewReader(`{"refresh_token":"old-token","request_id":"550e8400-e29b-41d4-a716-446655440000"}`))
 			ctx.Request.Header.Set("Content-Type", "application/json")
 			controller.Refresh(ctx)
-			if response.Code != test.status || !strings.Contains(response.Body.String(), test.code) || tokens.rotateCalls != 1 {
+			if response.Code != test.status || tokens.rotateCalls != 1 {
 				t.Fatalf("status=%d body=%s rotations=%d", response.Code, response.Body.String(), tokens.rotateCalls)
 			}
+			requireAPIError(t, response, test.code)
 			if tokens.refreshRequestIDs[0] != "550e8400-e29b-41d4-a716-446655440000" {
 				t.Fatal("request identity was not passed to token rotation")
 			}

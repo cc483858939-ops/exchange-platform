@@ -251,13 +251,13 @@ func unfollowAndLoadStateFromDB(ctx context.Context, viewerID, targetID uint) (u
 func validateFollowParticipants(ctx *gin.Context) (uint, uint, bool) {
 	viewerID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return 0, 0, false
 	}
 
 	targetID, err := parsePublicUserID(ctx.Param("id"))
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return 0, 0, false
 	}
 
@@ -266,7 +266,7 @@ func validateFollowParticipants(ctx *gin.Context) (uint, uint, bool) {
 			return 0, 0, false
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+			writeAPIError(ctx, "UNAUTHORIZED")
 		} else {
 			writeFollowStoreError(ctx, err)
 		}
@@ -277,7 +277,7 @@ func validateFollowParticipants(ctx *gin.Context) (uint, uint, bool) {
 			return 0, 0, false
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			ctx.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			writeAPIError(ctx, "USER_NOT_FOUND")
 		} else {
 			writeFollowStoreError(ctx, err)
 		}
@@ -303,10 +303,7 @@ func parseFollowListPagination(ctx *gin.Context) (int, int, error) {
 }
 
 func writeFollowStoreError(ctx *gin.Context, err error) {
-	if handleRequestDBError(ctx, err) {
-		return
-	}
-	ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+	writeInternalAPIError(ctx, err)
 }
 
 func writeFollowState(ctx *gin.Context, targetID uint, state userFollowState) {
@@ -341,7 +338,7 @@ func FollowUser(ctx *gin.Context) {
 		return
 	}
 	if viewerID == targetID {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "cannot follow yourself"})
+		writeAPIError(ctx, "CANNOT_FOLLOW_YOURSELF")
 		return
 	}
 	state, err := followAndLoadState(ctx.Request.Context(), viewerID, targetID)
@@ -358,7 +355,7 @@ func UnfollowUser(ctx *gin.Context) {
 		return
 	}
 	if viewerID == targetID {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "cannot unfollow yourself"})
+		writeAPIError(ctx, "CANNOT_UNFOLLOW_YOURSELF")
 		return
 	}
 	state, err := unfollowAndLoadState(ctx.Request.Context(), viewerID, targetID)
@@ -383,7 +380,7 @@ func getUserConnections(ctx *gin.Context, kind followConnectionKind) {
 	}
 	limit, offset, err := parseFollowListPagination(ctx)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 	page, err := loadUserConnections(ctx.Request.Context(), viewerID, targetID, kind, limit, offset)

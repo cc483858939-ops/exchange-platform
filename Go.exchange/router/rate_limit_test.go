@@ -348,7 +348,7 @@ func TestSetupRouterExposesRateLimitHeadersThroughCORS(t *testing.T) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 	exposed := response.Header().Get("Access-Control-Expose-Headers")
-	for _, header := range []string{"Retry-After", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"} {
+	for _, header := range []string{"Retry-After", "X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"} {
 		if !strings.Contains(strings.ToLower(exposed), strings.ToLower(header)) {
 			t.Fatalf("exposed headers=%q missing %q", exposed, header)
 		}

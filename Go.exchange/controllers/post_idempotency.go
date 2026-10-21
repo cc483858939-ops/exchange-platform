@@ -23,7 +23,6 @@ const (
 	maxClientPublishKeyLength = 128
 	clientPublishUniqueIndex  = "uidx_posts_author_client_publish_id"
 	clientPublishConflictCode = "POST_IDEMPOTENCY_CONFLICT"
-	clientPublishConflictText = "Idempotency-Key was already used with a different post payload."
 	invalidClientPublishCode  = "POST_INVALID_IDEMPOTENCY_KEY"
 )
 
@@ -140,10 +139,7 @@ var buildStoredPostCreateResponseFn = buildStoredPostCreateResponse
 func respondToExistingClientPublish(ctx *gin.Context, post models.Post, fingerprint string, now time.Time) bool {
 	if post.DeletedAt.Valid || post.ClientPublishFingerprint == nil ||
 		*post.ClientPublishFingerprint != fingerprint {
-		ctx.JSON(http.StatusConflict, gin.H{
-			"code":  clientPublishConflictCode,
-			"error": clientPublishConflictText,
-		})
+		writeAPIError(ctx, clientPublishConflictCode)
 		return true
 	}
 	response, err := buildStoredPostCreateResponseFn(ctx.Request.Context(), post, now)
@@ -151,7 +147,7 @@ func respondToExistingClientPublish(ctx *gin.Context, post models.Post, fingerpr
 		if handleRequestDBError(ctx, err) {
 			return true
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeInternalAPIError(ctx, err)
 		return true
 	}
 	ctx.Header("Idempotency-Replayed", "true")

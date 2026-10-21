@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -97,14 +96,14 @@ func (c *AuthController) Register(ctx *gin.Context) {
 	var request registerRequest
 	if err := bindAuthJSON(ctx, &request); err != nil {
 		if isAuthRequestTooLarge(err) {
-			writeAuthError(ctx, http.StatusRequestEntityTooLarge, "AUTH_REQUEST_TOO_LARGE", "Authentication request is too large")
+			writeAuthError(ctx, "AUTH_REQUEST_TOO_LARGE")
 			return
 		}
-		writeAuthError(ctx, http.StatusBadRequest, "AUTH_REQUEST_INVALID", "Invalid request data")
+		writeAuthError(ctx, "AUTH_REQUEST_INVALID")
 		return
 	}
 	if !postmention.ValidUsername(request.Username) {
-		writeAuthError(ctx, http.StatusBadRequest, "AUTH_REQUEST_INVALID", "Invalid request data")
+		writeAuthError(ctx, "AUTH_REQUEST_INVALID")
 		return
 	}
 	if !c.allowAttempt(ctx, auth.AttemptRegister, strings.ToLower(strings.TrimSpace(request.Username))) {
@@ -113,13 +112,13 @@ func (c *AuthController) Register(ctx *gin.Context) {
 
 	hashedPassword, err := utils.HashPassword(request.Password)
 	if err != nil {
-		writeAuthError(ctx, http.StatusInternalServerError, "AUTH_INTERNAL", "Authentication failed")
+		writeInternalAPIErrorAs(ctx, err, "AUTH_INTERNAL")
 		return
 	}
 	user := models.User{Username: request.Username, Password: hashedPassword}
 	if c.userLikeInit == nil {
 		metrics.RecordLikeLifecycleEvent("user_init_failure")
-		writeAuthError(ctx, http.StatusServiceUnavailable, "AUTH_LIKE_STATE_UNAVAILABLE", "Registration is temporarily unavailable")
+		writeInternalAPIErrorAs(ctx, errors.New("user like initializer is unavailable"), "AUTH_LIKE_STATE_UNAVAILABLE")
 		return
 	}
 	requestCtx := ctx.Request.Context()
@@ -137,42 +136,33 @@ func (c *AuthController) Register(ctx *gin.Context) {
 		userLikeInitAttempted = true
 		if err := c.userLikeInit.InitializeUserEmpty(requestCtx, user.ID); err != nil {
 			metrics.RecordLikeLifecycleEvent("user_init_failure")
-			log.Printf("[AuthRegister] initialize User Like state user=%d: %v", user.ID, err)
-			return fmt.Errorf("%w: %v", errRegistrationUserLikeInit, err)
+			return fmt.Errorf("%w: %w", errRegistrationUserLikeInit, err)
 		}
 		return nil
 	})
 	if err != nil {
 		if userLikeInitAttempted {
-			c.cleanupRolledBackUserLikeInitialization(requestCtx, user.ID)
+			c.cleanupRolledBackUserLikeInitialization(ctx, user.ID)
 		}
 		if errors.Is(err, errRegistrationUserLikeInit) {
-			writeAuthError(ctx, http.StatusServiceUnavailable, "AUTH_LIKE_STATE_UNAVAILABLE", "Registration is temporarily unavailable")
+			writeInternalAPIErrorAs(ctx, err, "AUTH_LIKE_STATE_UNAVAILABLE")
 			return
 		}
 		if errors.Is(err, errRegistrationOnboardingInit) {
-			if handleRequestDBError(ctx, err) {
-				return
-			}
-			log.Printf("[AuthRegister] initialize onboarding state user=%d: %v", user.ID, err)
-			writeAuthError(ctx, http.StatusInternalServerError, "AUTH_ONBOARDING_INIT_FAILED", "Registration could not be completed")
+			writeInternalAPIErrorAs(ctx, err, "AUTH_ONBOARDING_INIT_FAILED")
 			return
 		}
 		if errors.Is(err, errRegistrationUsernameConflict) {
-			writeAuthError(ctx, http.StatusConflict, "AUTH_USERNAME_UNAVAILABLE", "Username is unavailable")
+			writeAuthError(ctx, "AUTH_USERNAME_UNAVAILABLE")
 			return
 		}
-		if handleRequestDBError(ctx, err) {
-			return
-		}
-		log.Printf("[AuthRegister] create user: %v", err)
-		writeAuthError(ctx, http.StatusInternalServerError, "AUTH_INTERNAL", "Registration could not be completed")
+		writeInternalAPIErrorAs(ctx, err, "AUTH_INTERNAL")
 		return
 	}
 
 	pair, err := c.tokens.IssuePair(ctx.Request.Context(), user.ID)
 	if err != nil {
-		writeAuthError(ctx, http.StatusInternalServerError, "AUTH_TOKEN_ISSUE_FAILED", "Authentication failed")
+		writeInternalAPIErrorAs(ctx, err, "AUTH_TOKEN_ISSUE_FAILED")
 		return
 	}
 	writeAuthResponse(ctx, pair, user)
@@ -186,11 +176,12 @@ func isRegistrationUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
-func (c *AuthController) cleanupRolledBackUserLikeInitialization(ctx context.Context, userID uint) {
-	if c == nil || c.db == nil || userID == 0 {
+func (c *AuthController) cleanupRolledBackUserLikeInitialization(request *gin.Context, userID uint) {
+	if c == nil || c.db == nil || request == nil || request.Request == nil || userID == 0 {
 		return
 	}
-	checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+	requestContext := request.Request.Context()
+	checkCtx, cancel := context.WithTimeout(context.WithoutCancel(requestContext), time.Second)
 	defer cancel()
 	var existing models.User
 	err := c.db.WithContext(checkCtx).Unscoped().Select("id").Where("id = ?", userID).Take(&existing).Error
@@ -198,17 +189,17 @@ func (c *AuthController) cleanupRolledBackUserLikeInitialization(ctx context.Con
 		return
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		log.Printf("[AuthRegister] preserve User Like initialization user=%d because rollback status is unknown: %v", userID, err)
+		logAPIInternalError(request, http.StatusInternalServerError, err)
 		return
 	}
 	compensator, ok := c.userLikeInit.(userLikeInitCompensator)
 	if !ok {
 		return
 	}
-	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(requestContext), time.Second)
 	defer cleanupCancel()
 	if err := compensator.CleanupUncommittedUserLikeInitialization(cleanupCtx, userID); err != nil {
-		log.Printf("[AuthRegister] cleanup rolled-back User Like initialization user=%d: %v", userID, err)
+		logAPIInternalError(request, http.StatusInternalServerError, err)
 	}
 }
 
@@ -216,10 +207,10 @@ func (c *AuthController) Login(ctx *gin.Context) {
 	var request loginRequest
 	if err := bindAuthJSON(ctx, &request); err != nil {
 		if isAuthRequestTooLarge(err) {
-			writeAuthError(ctx, http.StatusRequestEntityTooLarge, "AUTH_REQUEST_TOO_LARGE", "Authentication request is too large")
+			writeAuthError(ctx, "AUTH_REQUEST_TOO_LARGE")
 			return
 		}
-		writeAuthError(ctx, http.StatusBadRequest, "AUTH_REQUEST_INVALID", "Invalid request data")
+		writeAuthError(ctx, "AUTH_REQUEST_INVALID")
 		return
 	}
 	if !c.allowAttempt(ctx, auth.AttemptLogin, strings.ToLower(strings.TrimSpace(request.Username))) {
@@ -232,20 +223,20 @@ func (c *AuthController) Login(ctx *gin.Context) {
 			return
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			writeAuthError(ctx, http.StatusUnauthorized, "AUTH_CREDENTIALS_INVALID", "Invalid username or password")
+			writeAuthError(ctx, "AUTH_CREDENTIALS_INVALID")
 			return
 		}
-		writeAuthError(ctx, http.StatusInternalServerError, "AUTH_INTERNAL", "Authentication failed")
+		writeInternalAPIErrorAs(ctx, err, "AUTH_INTERNAL")
 		return
 	}
 	if !utils.CheckPassword(request.Password, user.Password) {
-		writeAuthError(ctx, http.StatusUnauthorized, "AUTH_CREDENTIALS_INVALID", "Invalid username or password")
+		writeAuthError(ctx, "AUTH_CREDENTIALS_INVALID")
 		return
 	}
 
 	pair, err := c.tokens.IssuePair(ctx.Request.Context(), user.ID)
 	if err != nil {
-		writeAuthError(ctx, http.StatusInternalServerError, "AUTH_TOKEN_ISSUE_FAILED", "Authentication failed")
+		writeInternalAPIErrorAs(ctx, err, "AUTH_TOKEN_ISSUE_FAILED")
 		return
 	}
 	writeAuthResponse(ctx, pair, user)
@@ -255,10 +246,10 @@ func (c *AuthController) Refresh(ctx *gin.Context) {
 	var request refreshRequest
 	if err := bindAuthJSON(ctx, &request); err != nil {
 		if isAuthRequestTooLarge(err) {
-			writeAuthError(ctx, http.StatusRequestEntityTooLarge, "AUTH_REQUEST_TOO_LARGE", "Authentication request is too large")
+			writeAuthError(ctx, "AUTH_REQUEST_TOO_LARGE")
 			return
 		}
-		writeAuthError(ctx, http.StatusBadRequest, "AUTH_REQUEST_INVALID", "Invalid request data")
+		writeAuthError(ctx, "AUTH_REQUEST_INVALID")
 		return
 	}
 	if !c.allowAttempt(ctx, auth.AttemptRefresh, strings.TrimSpace(request.RefreshToken)) {
@@ -269,13 +260,13 @@ func (c *AuthController) Refresh(ctx *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrRefreshExpired):
-			writeAuthError(ctx, http.StatusUnauthorized, "AUTH_REFRESH_EXPIRED", "Authentication failed")
+			writeAuthError(ctx, "AUTH_REFRESH_EXPIRED")
 		case errors.Is(err, auth.ErrRefreshReused):
-			writeAuthError(ctx, http.StatusUnauthorized, "AUTH_REFRESH_REUSED", "Authentication failed")
+			writeAuthError(ctx, "AUTH_REFRESH_REUSED")
 		case errors.Is(err, auth.ErrRefreshInvalid):
-			writeAuthError(ctx, http.StatusUnauthorized, "AUTH_REFRESH_INVALID", "Authentication failed")
+			writeAuthError(ctx, "AUTH_REFRESH_INVALID")
 		default:
-			writeAuthError(ctx, http.StatusInternalServerError, "AUTH_INTERNAL", "Authentication failed")
+			writeInternalAPIErrorAs(ctx, err, "AUTH_INTERNAL")
 		}
 		return
 	}
@@ -286,9 +277,9 @@ func (c *AuthController) Refresh(ctx *gin.Context) {
 			return
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			writeAuthError(ctx, http.StatusUnauthorized, "AUTH_REFRESH_INVALID", "Authentication failed")
+			writeAuthError(ctx, "AUTH_REFRESH_INVALID")
 		} else {
-			writeAuthError(ctx, http.StatusInternalServerError, "AUTH_INTERNAL", "Authentication failed")
+			writeInternalAPIErrorAs(ctx, err, "AUTH_INTERNAL")
 		}
 		return
 	}
@@ -333,7 +324,7 @@ func isAuthRequestTooLarge(err error) bool {
 
 func (c *AuthController) allowAttempt(ctx *gin.Context, action auth.AttemptAction, subject string) bool {
 	if c == nil || c.limiter == nil {
-		writeAuthError(ctx, http.StatusServiceUnavailable, "AUTH_RATE_LIMIT_UNAVAILABLE", "Authentication temporarily unavailable")
+		writeInternalAPIErrorAs(ctx, errors.New("auth attempt limiter is unavailable"), "AUTH_RATE_LIMIT_UNAVAILABLE")
 		return false
 	}
 	decision, err := c.limiter.Allow(ctx.Request.Context(), auth.AttemptInput{
@@ -342,14 +333,14 @@ func (c *AuthController) allowAttempt(ctx *gin.Context, action auth.AttemptActio
 		Subject:  subject,
 	})
 	if err != nil {
-		writeAuthError(ctx, http.StatusServiceUnavailable, "AUTH_RATE_LIMIT_UNAVAILABLE", "Authentication temporarily unavailable")
+		writeInternalAPIErrorAs(ctx, err, "AUTH_RATE_LIMIT_UNAVAILABLE")
 		return false
 	}
 	if decision.Allowed {
 		return true
 	}
 	ctx.Header("Retry-After", strconv.Itoa(auth.RetryAfterSeconds(action, decision.RetryAfter)))
-	writeAuthError(ctx, http.StatusTooManyRequests, "AUTH_RATE_LIMITED", "Too many authentication attempts")
+	writeAuthError(ctx, "AUTH_RATE_LIMITED")
 	return false
 }
 
@@ -369,6 +360,6 @@ func writeAuthResponse(ctx *gin.Context, pair auth.TokenPair, user models.User) 
 	})
 }
 
-func writeAuthError(ctx *gin.Context, status int, code string, message string) {
-	ctx.JSON(status, gin.H{"code": code, "message": message})
+func writeAuthError(ctx *gin.Context, code string) {
+	writeAPIError(ctx, code)
 }

@@ -59,10 +59,9 @@ export const isPostMentionLimitValidationError = (error: unknown): boolean => {
   const response = (error as {
     response?: {
       status?: unknown;
-      data?: { error?: unknown; code?: unknown };
+      data?: { code?: unknown };
     };
   }).response;
   return response?.status === 400
-    && response.data?.code !== 'POST_IDEMPOTENCY_CONFLICT'
-    && response.data?.error === 'a post can mention at most 5 different users';
+    && response.data?.code === 'POST_MENTION_LIMIT_EXCEEDED';
 };

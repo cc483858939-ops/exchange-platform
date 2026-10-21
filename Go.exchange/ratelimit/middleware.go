@@ -2,11 +2,10 @@ package ratelimit
 
 import (
 	"context"
-	"fmt"
-	"log"
-	"net/http"
+	"errors"
 	"strconv"
 
+	"Go.exchange/apierrors"
 	"Go.exchange/metrics"
 
 	"github.com/gin-gonic/gin"
@@ -38,12 +37,12 @@ func Enforce(ctx *gin.Context, limiter Limiter, action Action, failureMode Failu
 	}
 	subject, ok := SubjectFromContext(ctx)
 	if !ok {
-		writeRateLimitResponse(ctx, http.StatusUnauthorized, "AUTH_REQUIRED", "Authentication required")
+		writeRateLimitResponse(ctx, apierrors.CodeAuthRequired)
 		return false
 	}
 	if limiter == nil {
 		metrics.RecordRateLimitError(string(action))
-		return handleLimiterError(ctx, action, failureMode, fmt.Errorf("rate limiter is unavailable"))
+		return handleLimiterError(ctx, failureMode, errors.New("rate limiter is unavailable"))
 	}
 	requestContext := context.Background()
 	if ctx.Request != nil {
@@ -51,11 +50,11 @@ func Enforce(ctx *gin.Context, limiter Limiter, action Action, failureMode Failu
 	}
 	decision, err := limiter.Allow(requestContext, Input{Subject: subject, Action: action})
 	if err != nil {
-		return handleLimiterError(ctx, action, failureMode, err)
+		return handleLimiterError(ctx, failureMode, err)
 	}
 	setRateLimitHeaders(ctx, decision)
 	if !decision.Allowed {
-		writeRateLimitResponse(ctx, http.StatusTooManyRequests, rateLimitedCode, "Too many requests")
+		writeRateLimitResponse(ctx, apierrors.CodeRateLimited)
 		return false
 	}
 	return true
@@ -90,18 +89,11 @@ func SubjectFromContext(ctx *gin.Context) (string, bool) {
 	return "", false
 }
 
-func handleLimiterError(ctx *gin.Context, action Action, failureMode FailureMode, err error) bool {
-	log.Printf("[RateLimit] action=%s failure_mode=%s error=%v", action, failureModeName(failureMode), err)
+func handleLimiterError(ctx *gin.Context, failureMode FailureMode, err error) bool {
 	if failureMode == FailOpen {
+		apierrors.LogInternalError(ctx, 0, apierrors.CodeRateLimitUnavailable, err)
 		return true
 	}
-	writeRateLimitResponse(ctx, http.StatusServiceUnavailable, rateLimitUnavailableCode, "Rate limiting is temporarily unavailable")
+	apierrors.WriteInternalErrorAs(ctx, err, apierrors.CodeRateLimitUnavailable)
 	return false
-}
-
-func failureModeName(mode FailureMode) string {
-	if mode == FailOpen {
-		return "fail_open"
-	}
-	return "fail_closed"
 }

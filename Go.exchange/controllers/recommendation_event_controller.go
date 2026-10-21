@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"Go.exchange/apierrors"
 	"Go.exchange/config"
 	"Go.exchange/eventing"
 	"Go.exchange/metrics"
@@ -54,6 +54,11 @@ type recommendationEventBatchResponse struct {
 	Duplicates int                         `json:"duplicates"`
 	Rejected   int                         `json:"rejected"`
 	Results    []recommendationEventResult `json:"results"`
+}
+
+type recommendationEventValidationResponse struct {
+	apierrors.ErrorResponse
+	recommendationEventBatchResponse
 }
 
 type validatedRecommendationEvent struct {
@@ -111,12 +116,12 @@ func recordRecommendationEvents(ctx *gin.Context, publisher eventing.BatchPublis
 	defer func() { metrics.ObserveRecommendationTelemetryIngestDuration(time.Since(started)) }()
 
 	if !config.RecommendationTelemetryEnabled() {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": "recommendation telemetry is disabled"})
+		writeAPIError(ctx, "RECOMMENDATION_TELEMETRY_DISABLED")
 		return
 	}
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 
@@ -125,30 +130,30 @@ func recordRecommendationEvents(ctx *gin.Context, publisher eventing.BatchPublis
 	if err := ctx.ShouldBindJSON(&request); err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			ctx.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body exceeds 64 KiB"})
+			writeAPIError(ctx, "PAYLOAD_TOO_LARGE")
 			return
 		}
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid recommendation event batch"})
+		writeAPIError(ctx, "INVALID_RECOMMENDATION_EVENT_BATCH")
 		return
 	}
 	if len(request.Events) == 0 || len(request.Events) > recommendationTelemetryMaxBatchEvents {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "events must contain between 1 and 50 items"})
+		writeAPIError(ctx, "EVENTS_MUST_CONTAIN_BETWEEN_1_AND_50_ITEMS")
 		return
 	}
 	metrics.ObserveRecommendationTelemetryBatchSize(len(request.Events))
 
 	if rateLimiter == nil {
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "recommendation telemetry rate limiter unavailable"})
+		writeInternalAPIErrorCode(ctx, "SERVICE_UNAVAILABLE")
 		return
 	}
 	allowed, err := rateLimiter(userID, len(request.Events))
 	if err != nil {
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "recommendation telemetry rate limiter unavailable"})
+		writeInternalAPIErrorAs(ctx, err, "SERVICE_UNAVAILABLE")
 		return
 	}
 	if !allowed {
 		ctx.Header("Retry-After", "60")
-		ctx.JSON(http.StatusTooManyRequests, gin.H{"error": "recommendation telemetry rate limit exceeded"})
+		writeAPIError(ctx, "RECOMMENDATION_RATE_LIMITED")
 		return
 	}
 
@@ -171,7 +176,7 @@ func recordRecommendationEvents(ctx *gin.Context, publisher eventing.BatchPublis
 
 	if len(validEvents) == 0 {
 		completeRecommendationEventResponse(&response, request.Events)
-		ctx.JSON(http.StatusUnprocessableEntity, response)
+		writeRecommendationValidationResponse(ctx, response)
 		return
 	}
 
@@ -179,7 +184,7 @@ func recordRecommendationEvents(ctx *gin.Context, publisher eventing.BatchPublis
 	for eventIndex, event := range validEvents {
 		envelope, err := eventing.NewRecommendationBehaviorEnvelope(event.EventID, event.EventType, event.OccurredAt, event.Payload)
 		if err != nil {
-			ctx.JSON(http.StatusUnprocessableEntity, gin.H{"error": "invalid recommendation event"})
+			writeAPIError(ctx, "VALIDATION_FAILED")
 			return
 		}
 		envelopes[eventIndex] = envelope
@@ -201,16 +206,15 @@ func recordRecommendationEvents(ctx *gin.Context, publisher eventing.BatchPublis
 			seenClickOpportunities[clickKey] = struct{}{}
 			if clickCooldown == nil {
 				metrics.RecordRecommendationClickCooldown("redis_error")
-				releaseRecommendationClickReservations(userID, clickCooldown, reservations)
-				ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "recommendation click cooldown unavailable"})
+				releaseRecommendationClickReservations(ctx, userID, clickCooldown, reservations)
+				writeInternalAPIErrorCode(ctx, "SERVICE_UNAVAILABLE")
 				return
 			}
 			result, acquireErr := clickCooldown.Acquire(ctx.Request.Context(), userID, postID, event.Payload.RequestID, event.EventID)
 			if acquireErr != nil {
 				metrics.RecordRecommendationClickCooldown("redis_error")
-				log.Printf("[RecommendationTelemetry] click cooldown acquire failed: %v", acquireErr)
-				releaseRecommendationClickReservations(userID, clickCooldown, reservations)
-				ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "recommendation click cooldown unavailable"})
+				releaseRecommendationClickReservations(ctx, userID, clickCooldown, reservations)
+				writeInternalAPIErrorAs(ctx, acquireErr, "SERVICE_UNAVAILABLE")
 				return
 			}
 			switch result {
@@ -223,15 +227,14 @@ func recordRecommendationEvents(ctx *gin.Context, publisher eventing.BatchPublis
 				continue
 			case RecommendationClickCooldownPending:
 				metrics.RecordRecommendationClickCooldown("pending")
-				releaseRecommendationClickReservations(userID, clickCooldown, reservations)
+				releaseRecommendationClickReservations(ctx, userID, clickCooldown, reservations)
 				ctx.Header("Retry-After", "1")
-				ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "recommendation click publication is pending; retry the batch"})
+				writeAPIError(ctx, "RECOMMENDATION_RETRY_BATCH")
 				return
 			default:
 				metrics.RecordRecommendationClickCooldown("redis_error")
-				log.Printf("[RecommendationTelemetry] click cooldown acquire returned an invalid result")
-				releaseRecommendationClickReservations(userID, clickCooldown, reservations)
-				ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "recommendation click cooldown unavailable"})
+				releaseRecommendationClickReservations(ctx, userID, clickCooldown, reservations)
+				writeInternalAPIErrorCode(ctx, "SERVICE_UNAVAILABLE")
 				return
 			}
 		}
@@ -243,13 +246,13 @@ func recordRecommendationEvents(ctx *gin.Context, publisher eventing.BatchPublis
 		if response.Duplicates > 0 {
 			ctx.JSON(http.StatusAccepted, response)
 		} else {
-			ctx.JSON(http.StatusUnprocessableEntity, response)
+			writeRecommendationValidationResponse(ctx, response)
 		}
 		return
 	}
 	if publisher == nil {
-		releaseRecommendationClickReservations(userID, clickCooldown, reservations)
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "recommendation event publisher unavailable"})
+		releaseRecommendationClickReservations(ctx, userID, clickCooldown, reservations)
+		writeInternalAPIErrorCode(ctx, "SERVICE_UNAVAILABLE")
 		return
 	}
 
@@ -260,8 +263,8 @@ func recordRecommendationEvents(ctx *gin.Context, publisher eventing.BatchPublis
 		defer cancel()
 	}
 	if err := publisher.PublishBatch(publishCtx, publishEnvelopes); err != nil {
-		releaseRecommendationClickReservations(userID, clickCooldown, reservations)
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "failed to publish recommendation events"})
+		releaseRecommendationClickReservations(ctx, userID, clickCooldown, reservations)
+		writeInternalAPIErrorAs(ctx, err, "SERVICE_UNAVAILABLE")
 		return
 	}
 
@@ -269,7 +272,7 @@ func recordRecommendationEvents(ctx *gin.Context, publisher eventing.BatchPublis
 	for _, event := range reservations {
 		if err := clickCooldown.Commit(commitCtx, userID, event.Payload.PostID, event.Payload.RequestID, event.EventID); err != nil {
 			metrics.RecordRecommendationClickCooldown("commit_error")
-			log.Printf("[RecommendationTelemetry] published click cooldown confirmation failed: %v", err)
+			logAPIInternalError(ctx, http.StatusAccepted, err)
 		}
 	}
 	cancelCommit()
@@ -286,16 +289,23 @@ func markRecommendationEventDuplicate(response *recommendationEventBatchResponse
 	response.Results[index].Reason = reason
 }
 
-func releaseRecommendationClickReservations(userID uint, cooldown RecommendationClickCooldown, reservations []validatedRecommendationEvent) {
+func writeRecommendationValidationResponse(ctx *gin.Context, response recommendationEventBatchResponse) {
+	status, apiError := apierrors.PublicErrorResponse(ctx, apierrors.CodeValidationFailed)
+	ctx.AbortWithStatusJSON(status, recommendationEventValidationResponse{
+		ErrorResponse: apiError, recommendationEventBatchResponse: response,
+	})
+}
+
+func releaseRecommendationClickReservations(ctx *gin.Context, userID uint, cooldown RecommendationClickCooldown, reservations []validatedRecommendationEvent) {
 	if cooldown == nil || len(reservations) == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), recommendationClickCooldownCleanupTimeout)
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), recommendationClickCooldownCleanupTimeout)
 	defer cancel()
 	for _, event := range reservations {
-		if err := cooldown.Release(ctx, userID, event.Payload.PostID, event.Payload.RequestID, event.EventID); err != nil {
+		if err := cooldown.Release(cleanupCtx, userID, event.Payload.PostID, event.Payload.RequestID, event.EventID); err != nil {
 			metrics.RecordRecommendationClickCooldown("redis_error")
-			log.Printf("[RecommendationTelemetry] click cooldown release failed: %v", err)
+			logAPIInternalError(ctx, http.StatusServiceUnavailable, err)
 			continue
 		}
 		metrics.RecordRecommendationClickCooldown("released")

@@ -98,8 +98,7 @@ const formatLoginError = (error: unknown) => {
     return 'Request timed out. Check your connection and try again.';
   }
 
-  const message = error instanceof Error ? error.message : '';
-  if (message === 'Invalid username or password') {
+  if (error instanceof AuthRequestError && error.code === 'AUTH_CREDENTIALS_INVALID') {
     return 'Invalid username or password.';
   }
   return 'Could not log in. Please try again.';

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"Go.exchange/apierrors"
 	"Go.exchange/auth"
 	"Go.exchange/config"
 	"Go.exchange/controllers"
@@ -53,7 +54,23 @@ func setupRouter(authController *controllers.AuthController, verifier auth.Acces
 		return nil, err
 	}
 
-	router := gin.Default()
+	router := gin.New()
+	router.Use(gin.Logger(), apierrors.Recovery(), apierrors.RequestIDMiddleware())
+	router.HandleMethodNotAllowed = true
+	router.NoRoute(func(ctx *gin.Context) {
+		if isJSONAPIPath(ctx.Request.URL.Path) {
+			apierrors.WritePublicError(ctx, apierrors.CodeNotFound)
+			return
+		}
+		ctx.AbortWithStatus(http.StatusNotFound)
+	})
+	router.NoMethod(func(ctx *gin.Context) {
+		if isJSONAPIPath(ctx.Request.URL.Path) {
+			apierrors.WritePublicError(ctx, apierrors.CodeMethodNotAllowed)
+			return
+		}
+		ctx.AbortWithStatus(http.StatusMethodNotAllowed)
+	})
 	if err := router.SetTrustedProxies(trustedProxies); err != nil {
 		return nil, err
 	}
@@ -68,7 +85,7 @@ func setupRouter(authController *controllers.AuthController, verifier auth.Acces
 		AllowOrigins:     allowedOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Idempotency-Key", "X-Guest-Recommendation-Session"},
-		ExposeHeaders:    []string{"Content-Length", "Retry-After", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "Idempotency-Replayed"},
+		ExposeHeaders:    []string{"Content-Length", "Retry-After", "X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "Idempotency-Replayed"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))
@@ -162,6 +179,13 @@ func setupRouter(authController *controllers.AuthController, verifier auth.Acces
 	}
 
 	return router, nil
+}
+
+func isJSONAPIPath(path string) bool {
+	if path != "/api" && !strings.HasPrefix(path, "/api/") {
+		return false
+	}
+	return path != "/api/files" && !strings.HasPrefix(path, "/api/files/")
 }
 
 func traceProvider() trace.TracerProvider {

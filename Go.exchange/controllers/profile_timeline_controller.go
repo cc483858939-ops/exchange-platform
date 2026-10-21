@@ -18,12 +18,12 @@ var loadUserTimelinePage = loadUserTimelinePageFromDB
 func GetUserTimeline(ctx *gin.Context) {
 	id, err := parsePublicUserID(ctx.Param("id"))
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 	limit, cursor, err := parseTimelinePageQuery(ctx)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 	if err := loadUserTimelineUser(ctx.Request.Context(), id); err != nil {

@@ -155,7 +155,7 @@ func loadUserMutesFromDB(ctx context.Context, viewerID uint, limit int, cursor *
 func muteViewerID(ctx *gin.Context) (uint, bool) {
 	viewerID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return 0, false
 	}
 	if _, err := loadActiveProfileViewer(ctx.Request.Context(), viewerID); err != nil {
@@ -163,7 +163,7 @@ func muteViewerID(ctx *gin.Context) (uint, bool) {
 			return 0, false
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "viewer is no longer active"})
+			writeAPIError(ctx, "UNAUTHORIZED")
 		} else {
 			writeUserMuteStoreError(ctx, err)
 		}
@@ -175,17 +175,14 @@ func muteViewerID(ctx *gin.Context) (uint, bool) {
 func parseMuteTarget(ctx *gin.Context) (uint, bool) {
 	targetID, err := parsePublicUserID(ctx.Param("id"))
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return 0, false
 	}
 	return targetID, true
 }
 
 func writeUserMuteStoreError(ctx *gin.Context, err error) {
-	if handleRequestDBError(ctx, err) {
-		return
-	}
-	ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+	writeInternalAPIError(ctx, err)
 }
 
 func MuteUser(ctx *gin.Context) {
@@ -198,7 +195,7 @@ func MuteUser(ctx *gin.Context) {
 		return
 	}
 	if viewerID == targetID {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "cannot mute yourself"})
+		writeAPIError(ctx, "CANNOT_MUTE_YOURSELF")
 		return
 	}
 	if err := loadActiveMuteUser(ctx.Request.Context(), targetID); err != nil {
@@ -206,7 +203,7 @@ func MuteUser(ctx *gin.Context) {
 			return
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			ctx.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			writeAPIError(ctx, "USER_NOT_FOUND")
 		} else {
 			writeUserMuteStoreError(ctx, err)
 		}
@@ -242,12 +239,12 @@ func GetMyMutedUsers(ctx *gin.Context) {
 	}
 	limit, err := parsePageLimit(ctx, defaultUserMuteLimit, maxUserMuteLimit)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 	cursor, err := parseUserMuteCursor(ctx.Query("cursor"))
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 	page, err := loadUserMutes(ctx.Request.Context(), viewerID, limit, cursor)

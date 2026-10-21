@@ -27,7 +27,7 @@ func loadActiveFollowingViewerFromDB(ctx context.Context, id uint) error {
 func GetFollowingTimeline(ctx *gin.Context) {
 	viewerID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 	if err := loadActiveFollowingViewer(ctx.Request.Context(), viewerID); err != nil {
@@ -35,7 +35,7 @@ func GetFollowingTimeline(ctx *gin.Context) {
 			return
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+			writeAPIError(ctx, "UNAUTHORIZED")
 		} else {
 			writePostTimelineStoreError(ctx, err)
 		}
@@ -44,7 +44,7 @@ func GetFollowingTimeline(ctx *gin.Context) {
 
 	limit, cursor, err := parseTimelinePageQuery(ctx)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 

@@ -65,7 +65,7 @@ func mutatePostBookmarkRequest(ctx *gin.Context, bookmarked bool) {
 	}
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 
@@ -80,11 +80,11 @@ func mutatePostBookmarkRequest(ctx *gin.Context, bookmarked bool) {
 func GetPostBookmarkStates(ctx *gin.Context) {
 	var request postBookmarkStatesRequest
 	if err := bindBoundedPostStates(ctx, &request); err != nil {
-		writeJSONRequestError(ctx, err, "Invalid post_ids")
+		writeJSONRequestError(ctx, err)
 		return
 	}
 	if len(request.PostIDs) == 0 || len(request.PostIDs) > maxPostBookmarkStateIDs {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "post_ids must contain between 1 and 100 ids"})
+		writeAPIError(ctx, "POST_IDS_MUST_CONTAIN_BETWEEN_1_AND_100_IDS")
 		return
 	}
 
@@ -92,7 +92,7 @@ func GetPostBookmarkStates(ctx *gin.Context) {
 	seen := make(map[uint]struct{}, len(request.PostIDs))
 	for _, postID := range request.PostIDs {
 		if postID == 0 {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": "post_ids must contain positive ids"})
+			writeAPIError(ctx, "POST_IDS_MUST_CONTAIN_POSITIVE_IDS")
 			return
 		}
 		if _, exists := seen[postID]; exists {
@@ -104,7 +104,7 @@ func GetPostBookmarkStates(ctx *gin.Context) {
 
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 	result, err := loadPostBookmarkStates(ctx.Request.Context(), userID, uniqueIDs)
@@ -145,10 +145,10 @@ func writePostBookmarkError(ctx *gin.Context, err error) {
 	if errors.Is(err, errPostBookmarkUnavailable) ||
 		errors.Is(err, errPostRepostNotFound) ||
 		errors.Is(err, gorm.ErrRecordNotFound) {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
+		writeAPIError(ctx, "POST_NOT_FOUND")
 		return
 	}
-	ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+	writeInternalAPIError(ctx, err)
 }
 
 func mutatePostBookmarkFromDB(ctx context.Context, userID, postID uint, bookmarked bool) (postBookmarkMutationResult, error) {

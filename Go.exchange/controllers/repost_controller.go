@@ -61,7 +61,7 @@ func GetPostRepostState(ctx *gin.Context) {
 	}
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 
@@ -93,7 +93,7 @@ func mutatePostRepostRequest(ctx *gin.Context, reposted bool) {
 	}
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 
@@ -108,11 +108,11 @@ func mutatePostRepostRequest(ctx *gin.Context, reposted bool) {
 func GetPostRepostStates(ctx *gin.Context) {
 	var request postRepostStatesRequest
 	if err := bindBoundedPostStates(ctx, &request); err != nil {
-		writeJSONRequestError(ctx, err, "Invalid post_ids")
+		writeJSONRequestError(ctx, err)
 		return
 	}
 	if len(request.PostIDs) == 0 || len(request.PostIDs) > maxPostRepostStateIDs {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "post_ids must contain between 1 and 100 ids"})
+		writeAPIError(ctx, "POST_IDS_MUST_CONTAIN_BETWEEN_1_AND_100_IDS")
 		return
 	}
 
@@ -120,7 +120,7 @@ func GetPostRepostStates(ctx *gin.Context) {
 	seen := make(map[uint]struct{}, len(request.PostIDs))
 	for _, postID := range request.PostIDs {
 		if postID == 0 {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": "post_ids must contain positive ids"})
+			writeAPIError(ctx, "POST_IDS_MUST_CONTAIN_POSITIVE_IDS")
 			return
 		}
 		if _, exists := seen[postID]; exists {
@@ -132,7 +132,7 @@ func GetPostRepostStates(ctx *gin.Context) {
 
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 	result, err := loadPostRepostStates(ctx.Request.Context(), userID, uniqueIDs)
@@ -192,14 +192,11 @@ func activePostRepostScope(db *gorm.DB) *gorm.DB {
 }
 
 func writePostRepostError(ctx *gin.Context, err error) {
-	if handleRequestDBError(ctx, err) {
-		return
-	}
 	if errors.Is(err, errPostRepostNotFound) || errors.Is(err, gorm.ErrRecordNotFound) {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
+		writeAPIError(ctx, "POST_NOT_FOUND")
 		return
 	}
-	ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+	writeInternalAPIError(ctx, err)
 }
 
 func loadPostRepostStateFromDB(ctx context.Context, userID, postID uint) (postRepostStateResult, error) {

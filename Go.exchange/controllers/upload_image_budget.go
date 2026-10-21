@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"image"
-	"net/http"
 	"os"
 	"strconv"
 	"time"
@@ -52,14 +51,14 @@ func processUploadedImage[T any](ctx context.Context, body []byte, maxPixels int
 	return process(ctx, body)
 }
 
-func writeUploadImageError(ctx *gin.Context, err error, invalidMessage string) {
+func writeUploadImageError(ctx *gin.Context, err error) {
 	if ctx.Request.Context().Err() != nil {
 		return
 	}
 	if errors.Is(err, imagebudget.ErrBusy) {
 		ctx.Header("Retry-After", "1")
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "image processing is busy; try again later"})
+		writeAPIError(ctx, "IMAGE_PROCESSING_BUSY")
 		return
 	}
-	ctx.JSON(http.StatusBadRequest, gin.H{"error": invalidMessage})
+	writeAPIError(ctx, "UNSUPPORTED_IMAGE_TYPE")
 }

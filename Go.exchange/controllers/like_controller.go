@@ -3,11 +3,11 @@ package controllers
 import (
 	"context"
 	"errors"
-	"log"
 	"net/http"
 	"strconv"
 	"time"
 
+	"Go.exchange/apierrors"
 	"Go.exchange/config"
 	"Go.exchange/global"
 	"Go.exchange/likes"
@@ -69,7 +69,7 @@ func mutatePostLike(ctx *gin.Context, liked bool) {
 	}
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 	result, err := setPostLikedState(ctx.Request.Context(), userID, postID, liked)
@@ -101,11 +101,11 @@ func GetPostLikes(ctx *gin.Context) {
 func GetPostLikeStates(ctx *gin.Context) {
 	var request postLikeStatesRequest
 	if err := bindBoundedPostStates(ctx, &request); err != nil {
-		writeJSONRequestError(ctx, err, "Invalid post_ids")
+		writeJSONRequestError(ctx, err)
 		return
 	}
 	if len(request.PostIDs) == 0 || len(request.PostIDs) > maxPostLikeStateIDs {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "post_ids must contain between 1 and 100 ids"})
+		writeAPIError(ctx, "POST_IDS_MUST_CONTAIN_BETWEEN_1_AND_100_IDS")
 		return
 	}
 
@@ -113,7 +113,7 @@ func GetPostLikeStates(ctx *gin.Context) {
 	seen := make(map[uint]struct{}, len(request.PostIDs))
 	for _, postID := range request.PostIDs {
 		if postID == 0 {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": "post_ids must contain positive ids"})
+			writeAPIError(ctx, "POST_IDS_MUST_CONTAIN_POSITIVE_IDS")
 			return
 		}
 		if _, exists := seen[postID]; exists {
@@ -125,7 +125,7 @@ func GetPostLikeStates(ctx *gin.Context) {
 
 	userID, ok := userIDFromContext(ctx)
 	if !ok {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Missing user"})
+		writeAPIError(ctx, "UNAUTHORIZED")
 		return
 	}
 	result, err := loadPostLikeStates(ctx.Request.Context(), userID, uniqueIDs)
@@ -162,7 +162,7 @@ func GetPostLikeStates(ctx *gin.Context) {
 func postIDFromContext(ctx *gin.Context) (uint, bool) {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil || id == 0 || uint64(uint(id)) != id {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid post id"})
+		writeAPIError(ctx, "INVALID_POST_ID")
 		return 0, false
 	}
 	return uint(id), true
@@ -173,7 +173,7 @@ func writePostLikeError(ctx *gin.Context, err error) {
 		return
 	}
 	if errors.Is(err, likes.ErrPostLikeUnavailable) {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": "post not found"})
+		writeAPIError(ctx, "POST_NOT_FOUND")
 		return
 	}
 	if errors.Is(err, likes.ErrUserLikeRecoveryUnsafe) || errors.Is(err, likes.ErrUserLikeRecoveryBusy) ||
@@ -181,22 +181,22 @@ func writePostLikeError(ctx *gin.Context, err error) {
 		errors.Is(err, likes.ErrUserLikeRecoveryDisabled) || errors.Is(err, likes.ErrUserLikeRecoveryUnavailable) ||
 		errors.Is(err, likes.ErrUserLikeRecoveryLockLost) || errors.Is(err, likes.ErrUserLikeRecoveryIncomplete) ||
 		errors.Is(err, likes.ErrUserLikeRestoreLockType) || errors.Is(err, likes.ErrLikeRedisType) {
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "user like state is temporarily unavailable"})
+		writeInternalAPIErrorAs(ctx, err, "SERVICE_UNAVAILABLE")
 		return
 	}
 	if errors.Is(err, likes.ErrNotReady) {
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "post like state is not ready"})
+		writeInternalAPIErrorAs(ctx, err, "SERVICE_UNAVAILABLE")
 		return
 	}
 	if errors.Is(err, likes.ErrLikeProjectionNotReady) {
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "post like projection is not ready"})
+		writeInternalAPIErrorAs(ctx, err, "SERVICE_UNAVAILABLE")
 		return
 	}
 	if errors.Is(err, likes.ErrLikeRecoveryUnsafe) || errors.Is(err, likes.ErrLikeRecoveryFenceLost) {
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "post like state cannot be safely recovered"})
+		writeInternalAPIErrorAs(ctx, err, "SERVICE_UNAVAILABLE")
 		return
 	}
-	ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	writeInternalAPIError(ctx, err)
 }
 
 var setPostLikedStateWithRedis = func(ctx context.Context, userID uint, postID uint, liked bool) (postLikeMutationResult, error) {
@@ -206,7 +206,7 @@ var setPostLikedStateWithRedis = func(ctx context.Context, userID uint, postID u
 	}
 	if state.Changed {
 		if err := invalidatePostLikeDetailCache(postID); err != nil {
-			log.Printf("[Like] invalidate post %d cache: %v", postID, err)
+			apierrors.LogInternalContextError(ctx, http.StatusOK, apierrors.CodeInternalError, err)
 		}
 	}
 	return postLikeMutationResult{

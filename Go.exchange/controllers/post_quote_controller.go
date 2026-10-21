@@ -34,16 +34,16 @@ func GetPostQuotes(ctx *gin.Context) {
 	}
 	limit, err := parsePostRelationLimit(ctx)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 	cursor, err := parsePostRelationCursor(ctx)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 	if global.APIDb == nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "database is not initialized"})
+		writeInternalAPIErrorCode(ctx, "INTERNAL_ERROR")
 		return
 	}
 
@@ -69,7 +69,7 @@ func GetPostQuotes(ctx *gin.Context) {
 		if handleRequestDBError(ctx, err) {
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 
@@ -82,28 +82,28 @@ func GetPostQuotes(ctx *gin.Context) {
 		if handleRequestDBError(ctx, err) {
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	if err := hydratePostResponsesMediaFromDB(db, items); err != nil {
 		if handleRequestDBError(ctx, err) {
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	if err := hydratePostResponseRepostCountsFromDB(db, items); err != nil {
 		if handleRequestDBError(ctx, err) {
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	if err := hydratePostResponsesReferencesFromDB(db, items, now); err != nil {
 		if handleRequestDBError(ctx, err) {
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 
@@ -112,7 +112,7 @@ func GetPostQuotes(ctx *gin.Context) {
 		last := posts[len(posts)-1]
 		encoded, err := encodePostRelationCursor(postRelationCursor{CreatedAt: last.CreatedAt, ID: last.ID})
 		if err != nil {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			writeInternalAPIError(ctx, err)
 			return
 		}
 		nextCursor = &encoded

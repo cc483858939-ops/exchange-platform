@@ -215,9 +215,10 @@ func TestSearchUsersAuthenticationAndStoreErrors(t *testing.T) {
 	}
 	ctx, recorder = newUserSearchUnitContext("?q=alice", uint(9))
 	SearchUsers(ctx)
-	if recorder.Code != http.StatusInternalServerError || !strings.Contains(recorder.Body.String(), "internal server error") || strings.Contains(recorder.Body.String(), "exploded") {
+	if recorder.Code != http.StatusInternalServerError || strings.Contains(recorder.Body.String(), "exploded") {
 		t.Fatalf("store error status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
+	requireAPIError(t, recorder, "INTERNAL_ERROR")
 
 	searchUsers = func(context.Context, uint, string, int, int) (userConnectionPageResponse, error) {
 		return userConnectionPageResponse{}, nil

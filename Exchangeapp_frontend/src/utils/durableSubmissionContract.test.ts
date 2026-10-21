@@ -79,18 +79,18 @@ describe('durable submission contract', () => {
 
   it('recognizes only the explicit mention-limit 400 response', () => {
     expect(isPostMentionLimitValidationError({
-      response: { status: 400, data: { error: 'a post can mention at most 5 different users' } },
+      response: { status: 400, data: { code: 'POST_MENTION_LIMIT_EXCEEDED' } },
     })).toBe(true);
     expect(isPostMentionLimitValidationError({
-      response: { status: 400, data: { error: 'invalid post content' } },
+      response: { status: 400, data: { code: 'INVALID_REQUEST' } },
     })).toBe(false);
     expect(isPostMentionLimitValidationError({
-      response: { status: 422, data: { error: 'a post can mention at most 5 different users' } },
+      response: { status: 422, data: { code: 'POST_MENTION_LIMIT_EXCEEDED' } },
     })).toBe(false);
     expect(isPostMentionLimitValidationError({
       response: {
         status: 400,
-        data: { error: 'a post can mention at most 5 different users', code: 'POST_IDEMPOTENCY_CONFLICT' },
+        data: { code: 'POST_IDEMPOTENCY_CONFLICT' },
       },
     })).toBe(false);
   });

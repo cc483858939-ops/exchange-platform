@@ -48,16 +48,13 @@ func GetSuggestedUsers(ctx *gin.Context) {
 
 	limit, err := parseSuggestedUserLimit(ctx)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 
 	page, err := loadSuggestedUsers(ctx.Request.Context(), viewerID, limit)
 	if err != nil {
-		if handleRequestDBError(ctx, err) {
-			return
-		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load user suggestions"})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	if page.Items == nil {

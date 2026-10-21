@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"strings"
 	"time"
 
@@ -71,8 +70,8 @@ func decodeLikedHistoryCursor(raw string) (likedHistoryCursor, error) {
 
 func writeLikedHistoryQueryError(ctx *gin.Context, err error) {
 	if err == nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid query"})
+		writeAPIError(ctx, "INVALID_QUERY")
 		return
 	}
-	ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	writeAPIError(ctx, "INVALID_REQUEST")
 }

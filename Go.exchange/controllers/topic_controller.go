@@ -49,7 +49,7 @@ var loadTopicPostsPage = loadTopicPostsPageFromDB
 func GetTopics(ctx *gin.Context) {
 	catalog, err := loadTopicConfiguration()
 	if err != nil {
-		writeTopicInternalError(ctx)
+		writeTopicInternalError(ctx, err)
 		return
 	}
 	items := make([]topicSummaryResponse, 0, len(catalog.Topics))
@@ -64,28 +64,26 @@ func GetTopics(ctx *gin.Context) {
 func GetTopicPosts(ctx *gin.Context) {
 	catalog, err := loadTopicConfiguration()
 	if err != nil {
-		writeTopicInternalError(ctx)
+		writeTopicInternalError(ctx, err)
 		return
 	}
 	topic, found := enabledTopicBySlug(catalog, ctx.Param("slug"))
 	if !found {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": "topic not found"})
+		writeAPIError(ctx, "TOPIC_NOT_FOUND")
 		return
 	}
 	limit, cursor, err := parseTopicPostPageQuery(ctx, topic)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 	if global.APIDb == nil {
-		writeTopicInternalError(ctx)
+		writeInternalAPIErrorCode(ctx, "INTERNAL_ERROR")
 		return
 	}
 	page, err := loadTopicPostsPage(ctx.Request.Context(), topic, limit, cursor)
 	if err != nil {
-		if !handleRequestDBError(ctx, err) {
-			writeTopicInternalError(ctx)
-		}
+		writeTopicInternalError(ctx, err)
 		return
 	}
 	if page.Items == nil {
@@ -351,6 +349,6 @@ WHERE mirror_accounts.registry_key IN ?
 	return query, []interface{}{topic.SourceKeys, models.DevDataMirrorPostStateActive, anchorAt, bucketStart}, nil
 }
 
-func writeTopicInternalError(ctx *gin.Context) {
-	ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+func writeTopicInternalError(ctx *gin.Context, err error) {
+	writeInternalAPIError(ctx, err)
 }

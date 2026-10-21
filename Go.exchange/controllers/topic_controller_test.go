@@ -138,9 +138,10 @@ func TestGetTopicPostsRejectsBadQueriesAndUnknownTopics(t *testing.T) {
 	for _, slug := range []string{"unknown", "hidden"} {
 		ctx, recorder := newTopicControllerContext("/api/topics/"+slug+"/posts", slug)
 		GetTopicPosts(ctx)
-		if recorder.Code != http.StatusNotFound || !strings.Contains(recorder.Body.String(), "topic not found") {
+		if recorder.Code != http.StatusNotFound {
 			t.Fatalf("slug=%q status=%d body=%s", slug, recorder.Code, recorder.Body.String())
 		}
+		requireAPIError(t, recorder, "TOPIC_NOT_FOUND")
 	}
 }
 

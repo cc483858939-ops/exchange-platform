@@ -101,12 +101,11 @@ func TestDeletePostMapsMissingAndForbiddenTransactions(t *testing.T) {
 			if recorder.Code != testCase.want {
 				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 			}
-			if testCase.want == http.StatusNotFound && recorder.Body.String() != "{\"error\":\"post not found\"}" {
-				t.Fatalf("body=%s", recorder.Body.String())
+			wantCode := "POST_NOT_FOUND"
+			if testCase.want == http.StatusForbidden {
+				wantCode = "FORBIDDEN"
 			}
-			if testCase.want == http.StatusForbidden && recorder.Body.String() != "{\"error\":\"forbidden\"}" {
-				t.Fatalf("body=%s", recorder.Body.String())
-			}
+			requireAPIError(t, recorder, wantCode)
 		})
 	}
 }

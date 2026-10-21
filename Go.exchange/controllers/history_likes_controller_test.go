@@ -84,9 +84,10 @@ func TestGetMyLikedHistoryRejectsInvalidLimitAndCursor(t *testing.T) {
 	for _, raw := range []string{"0", "-1", "not-a-number"} {
 		ctx, recorder := newLikedHistoryTestContext("/api/me/history/likes?limit="+raw, viewerID)
 		GetMyLikedHistory(ctx)
-		if recorder.Code != http.StatusBadRequest || strings.TrimSpace(recorder.Body.String()) != `{"error":"invalid limit"}` {
+		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("limit=%q status=%d body=%s", raw, recorder.Code, recorder.Body.String())
 		}
+		requireAPIError(t, recorder, "INVALID_REQUEST")
 	}
 
 	zeroTime, err := json.Marshal(likedHistoryCursor{Version: likedHistoryCursorVersion, PostID: 1})
@@ -110,9 +111,10 @@ func TestGetMyLikedHistoryRejectsInvalidLimitAndCursor(t *testing.T) {
 	} {
 		ctx, recorder := newLikedHistoryTestContext("/api/me/history/likes?cursor="+raw, viewerID)
 		GetMyLikedHistory(ctx)
-		if recorder.Code != http.StatusBadRequest || strings.TrimSpace(recorder.Body.String()) != `{"error":"invalid cursor"}` {
+		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("cursor=%q status=%d body=%s", raw, recorder.Code, recorder.Body.String())
 		}
+		requireAPIError(t, recorder, "INVALID_REQUEST")
 	}
 }
 

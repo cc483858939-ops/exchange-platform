@@ -1803,7 +1803,7 @@ describe('postPublish store', () => {
 
   it('persists the exact mention-limit validation failure without retrying and preserves the draft for safe recovery', async () => {
     mocks.createPost.mockRejectedValueOnce({
-      response: { status: 400, data: { error: 'a post can mention at most 5 different users' } },
+      response: { status: 400, data: { code: 'POST_MENTION_LIMIT_EXCEEDED', error: 'TEST_A2_INTERNAL_ERROR' } },
     });
     const draft = usePostDraftStore();
     draft.setContent('@alice @bob @carol @dana @erin @frank');

@@ -1,10 +1,6 @@
 package controllers
 
-import (
-	"net/http"
-
-	"github.com/gin-gonic/gin"
-)
+import "github.com/gin-gonic/gin"
 
 type postPageResponse struct {
 	Items      []postResponse `json:"items"`
@@ -12,8 +8,5 @@ type postPageResponse struct {
 }
 
 func writePostTimelineStoreError(ctx *gin.Context, err error) {
-	if handleRequestDBError(ctx, err) {
-		return
-	}
-	ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+	writeInternalAPIError(ctx, err)
 }

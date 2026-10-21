@@ -42,7 +42,7 @@ type postSearchCandidate struct {
 func SearchPosts(ctx *gin.Context) {
 	criteria, err := parsePostSearchCriteria(ctx)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAPIError(ctx, "INVALID_REQUEST")
 		return
 	}
 
@@ -56,7 +56,7 @@ func SearchPosts(ctx *gin.Context) {
 	if raw, present := ctx.GetQuery("cursor"); present {
 		parsed, err := decodePostSearchCursor(raw)
 		if err != nil || parsed.CriteriaHash != criteriaHash {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid cursor"})
+			writeAPIError(ctx, "INVALID_CURSOR")
 			return
 		}
 		cursor = &parsed
@@ -66,12 +66,12 @@ func SearchPosts(ctx *gin.Context) {
 	if cursor != nil {
 		anchorAt = cursor.AnchorAt.UTC()
 		if cursor.CreatedAt.After(anchorAt) {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid cursor"})
+			writeAPIError(ctx, "INVALID_CURSOR")
 			return
 		}
 	}
 	if global.APIDb == nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "database is not initialized"})
+		writeInternalAPIErrorCode(ctx, "INTERNAL_ERROR")
 		return
 	}
 

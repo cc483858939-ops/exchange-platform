@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"mime/multipart"
 	"net/http"
 	"strconv"
@@ -119,7 +118,7 @@ var statProfileCoverObject = func(ctx context.Context, objectKey string) (stored
 func uploadImageFile(ctx *gin.Context, maxImageBytes int64) (*multipart.FileHeader, bool) {
 	maxRequestBytes := maxImageBytes + uploadMultipartOverhead
 	if ctx.Request.ContentLength > maxRequestBytes {
-		ctx.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "upload request is too large"})
+		writeAPIError(ctx, "PAYLOAD_TOO_LARGE")
 		return nil, false
 	}
 	ctx.Request.Body = http.MaxBytesReader(ctx.Writer, ctx.Request.Body, maxRequestBytes)
@@ -132,15 +131,15 @@ func uploadImageFile(ctx *gin.Context, maxImageBytes int64) (*multipart.FileHead
 	if err != nil {
 		var sizeError *http.MaxBytesError
 		if errors.As(err, &sizeError) {
-			ctx.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "upload request is too large"})
+			writeAPIError(ctx, "PAYLOAD_TOO_LARGE")
 		} else {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file is required"})
+			writeAPIError(ctx, "IMAGE_FILE_IS_REQUIRED")
 		}
 		return nil, false
 	}
 	files := form.File["image"]
 	if len(files) == 0 {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file is required"})
+		writeAPIError(ctx, "IMAGE_FILE_IS_REQUIRED")
 		return nil, false
 	}
 	return files[0], true
@@ -159,36 +158,36 @@ func UploadPostMedia(ctx *gin.Context) {
 		return
 	}
 	if fileHeader.Size > maxPostMediaImageSize {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file must be between 1 byte and 5MB"})
+		writeAPIError(ctx, "IMAGE_FILE_MUST_BE_BETWEEN_1_BYTE_AND_5MB")
 		return
 	}
 
 	file, err := fileHeader.Open()
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "failed to open image file"})
+		writeAPIError(ctx, "FAILED_TO_OPEN_IMAGE_FILE")
 		return
 	}
 	defer file.Close()
 
 	body, err := io.ReadAll(io.LimitReader(file, int64(postmediaimage.MaxSourceBytes)+1))
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "failed to read image file"})
+		writeAPIError(ctx, "FAILED_TO_READ_IMAGE_FILE")
 		return
 	}
 	if len(body) == 0 || len(body) > postmediaimage.MaxSourceBytes {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file must be between 1 byte and 5MB"})
+		writeAPIError(ctx, "IMAGE_FILE_MUST_BE_BETWEEN_1_BYTE_AND_5MB")
 		return
 	}
 	processed, err := processUploadedImage(ctx.Request.Context(), body, postmediaimage.MaxPixels, postmediaimage.ProcessContext)
 	if err != nil {
-		writeUploadImageError(ctx, err, "only jpeg, png, or webp images are supported")
+		writeUploadImageError(ctx, err)
 		return
 	}
 
 	mediaID := uuid.NewString()
 	paths, err := postmedia.BuildUserV1ObjectPaths(viewerID, mediaID, processed.OriginalExtension, processed.Medium.Extension)
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build media object key"})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	manifestBody, err := json.Marshal(postmedia.Manifest{
@@ -206,7 +205,7 @@ func UploadPostMedia(ctx *gin.Context) {
 		},
 	})
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build media manifest"})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	now := time.Now().UTC()
@@ -221,39 +220,39 @@ func UploadPostMedia(ctx *gin.Context) {
 		if handleRequestDBError(ctx, err) {
 			return
 		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media upload registry is unavailable"})
+		writeInternalAPIError(ctx, err)
 		return
 	}
-	cleanupAfterFailure := func(cause error) {
+	cleanupAfterFailure := func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), postMediaUploadCleanupTimeout)
 		defer cancel()
 		if cleanupErr := cleanupPostMediaObjects(cleanupCtx, paths); cleanupErr != nil {
-			log.Printf("[PostMediaUpload] best-effort object cleanup failed after %v: %v", cause, cleanupErr)
+			logAPIInternalError(ctx, http.StatusInternalServerError, cleanupErr)
 			return
 		}
 		if err := deletePendingPostMediaUpload(cleanupCtx, mediaID, viewerID); err != nil {
-			log.Printf("[PostMediaUpload] failed to remove cleaned upload registry row %s: %v", mediaID, err)
+			logAPIInternalError(ctx, http.StatusInternalServerError, err)
 		}
 	}
 	requestContext := ctx.Request.Context()
 	if err := putStoredObject(requestContext, paths.OriginalObjectKey, bytes.NewReader(body), int64(len(body)), processed.OriginalContentType); err != nil {
-		cleanupAfterFailure(err)
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media storage is unavailable"})
+		cleanupAfterFailure()
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	if err := putStoredObject(requestContext, paths.MediumObjectKey, bytes.NewReader(processed.Medium.Body), int64(len(processed.Medium.Body)), processed.Medium.ContentType); err != nil {
-		cleanupAfterFailure(err)
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media storage is unavailable"})
+		cleanupAfterFailure()
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	if err := putStoredObject(requestContext, paths.LargeObjectKey, bytes.NewReader(processed.Large.Body), int64(len(processed.Large.Body)), processed.Large.ContentType); err != nil {
-		cleanupAfterFailure(err)
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media storage is unavailable"})
+		cleanupAfterFailure()
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	if err := putStoredObject(requestContext, paths.ManifestObjectKey, bytes.NewReader(manifestBody), int64(len(manifestBody)), "application/json"); err != nil {
-		cleanupAfterFailure(err)
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media storage is unavailable"})
+		cleanupAfterFailure()
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	uploadedAt := time.Now().UTC()
@@ -261,34 +260,13 @@ func UploadPostMedia(ctx *gin.Context) {
 		requestContext, mediaID, viewerID, uploadedAt,
 		uploadedAt.Add(postmediaupload.DefaultGracePeriod),
 	); err != nil {
-		log.Printf(
-			"[PostMediaUpload] upload payload retained after lifecycle finalization failure media_id=%s error_category=%s",
-			mediaID,
-			postMediaUploadFinalizationErrorCategory(err),
-		)
-		if handleRequestDBError(ctx, err) {
-			return
-		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "media upload registry is unavailable"})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 
 	ctx.JSON(http.StatusOK, postMediaUploadResponse{
 		MediaURL: postmedia.PublicURL(paths.MediumObjectKey),
 	})
-}
-
-func postMediaUploadFinalizationErrorCategory(err error) string {
-	switch {
-	case errors.Is(err, context.Canceled):
-		return "request_cancelled"
-	case errors.Is(err, context.DeadlineExceeded), isPostgresTimeoutError(err):
-		return "database_timeout"
-	case errors.Is(err, postmediaupload.ErrUploadUnavailable):
-		return "lease_unavailable"
-	default:
-		return "database_error"
-	}
 }
 
 func cleanupPostMediaObjects(ctx context.Context, paths postmedia.UserV1ObjectPaths) error {
@@ -313,45 +291,45 @@ func UploadProfileAvatar(ctx *gin.Context) {
 		return
 	}
 	if fileHeader.Size <= 0 || fileHeader.Size > maxProfileAvatarImageSize {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file must be between 1 byte and 2MB"})
+		writeAPIError(ctx, "IMAGE_FILE_MUST_BE_BETWEEN_1_BYTE_AND_2MB")
 		return
 	}
 
 	file, err := fileHeader.Open()
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "failed to open image file"})
+		writeAPIError(ctx, "FAILED_TO_OPEN_IMAGE_FILE")
 		return
 	}
 	defer file.Close()
 
 	body, err := io.ReadAll(io.LimitReader(file, int64(avatarimage.MaxSourceBytes)+1))
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "failed to read image file"})
+		writeAPIError(ctx, "FAILED_TO_READ_IMAGE_FILE")
 		return
 	}
 	if len(body) == 0 || len(body) > avatarimage.MaxSourceBytes {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file must be between 1 byte and 2MB"})
+		writeAPIError(ctx, "IMAGE_FILE_MUST_BE_BETWEEN_1_BYTE_AND_2MB")
 		return
 	}
 
 	derivative, err := processUploadedImage(ctx.Request.Context(), body, avatarimage.MaxPixels, avatarimage.OptimizeContext)
 	if err != nil {
-		writeUploadImageError(ctx, err, "only jpeg, png, or webp images are supported")
+		writeUploadImageError(ctx, err)
 		return
 	}
 	objectKey, err := profileavatar.BuildUserV1ObjectKey(viewerID, derivative.ContentHash, derivative.Extension)
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build avatar object key"})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	info, exists, err := statProfileAvatarObject(ctx.Request.Context(), objectKey)
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "avatar storage is unavailable"})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	if !exists || info.Size != int64(len(derivative.Body)) || info.ContentType != derivative.ContentType {
 		if err := putStoredObject(ctx.Request.Context(), objectKey, bytes.NewReader(derivative.Body), int64(len(derivative.Body)), derivative.ContentType); err != nil {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			writeInternalAPIError(ctx, err)
 			return
 		}
 	}
@@ -370,45 +348,45 @@ func UploadProfileCover(ctx *gin.Context) {
 		return
 	}
 	if fileHeader.Size <= 0 || fileHeader.Size > profilecoverimage.MaxSourceBytes {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file must be between 1 byte and 5MB"})
+		writeAPIError(ctx, "IMAGE_FILE_MUST_BE_BETWEEN_1_BYTE_AND_5MB")
 		return
 	}
 
 	file, err := fileHeader.Open()
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "failed to open image file"})
+		writeAPIError(ctx, "FAILED_TO_OPEN_IMAGE_FILE")
 		return
 	}
 	defer file.Close()
 
 	body, err := io.ReadAll(io.LimitReader(file, int64(profilecoverimage.MaxSourceBytes)+1))
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "failed to read image file"})
+		writeAPIError(ctx, "FAILED_TO_READ_IMAGE_FILE")
 		return
 	}
 	if len(body) == 0 || len(body) > profilecoverimage.MaxSourceBytes {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "image file must be between 1 byte and 5MB"})
+		writeAPIError(ctx, "IMAGE_FILE_MUST_BE_BETWEEN_1_BYTE_AND_5MB")
 		return
 	}
 
 	derivative, err := processUploadedImage(ctx.Request.Context(), body, profilecoverimage.MaxPixels, profilecoverimage.OptimizeContext)
 	if err != nil {
-		writeUploadImageError(ctx, err, "only jpeg, png, or webp images are supported")
+		writeUploadImageError(ctx, err)
 		return
 	}
 	objectKey, err := profilecover.BuildUserV1ObjectKey(viewerID, derivative.ContentHash, derivative.Extension)
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build cover object key"})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	info, exists, err := statProfileCoverObject(ctx.Request.Context(), objectKey)
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "cover storage is unavailable"})
+		writeInternalAPIError(ctx, err)
 		return
 	}
 	if !exists || info.Size != int64(len(derivative.Body)) || info.ContentType != derivative.ContentType {
 		if err := putStoredObject(ctx.Request.Context(), objectKey, bytes.NewReader(derivative.Body), int64(len(derivative.Body)), derivative.ContentType); err != nil {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "cover storage is unavailable"})
+			writeInternalAPIError(ctx, err)
 			return
 		}
 	}
@@ -419,34 +397,32 @@ func UploadProfileCover(ctx *gin.Context) {
 func GetFile(ctx *gin.Context) {
 	objectKey := strings.TrimPrefix(ctx.Param("objectKey"), "/")
 	if !isAllowedObjectKey(objectKey) {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid file path"})
+		writeAPIError(ctx, "INVALID_FILE_PATH")
 		return
 	}
 	if postmedia.IsPublicObjectKey(objectKey) {
 		ctx.Header("Cache-Control", fileCacheControl(objectKey))
 		allowed, err := publicPostMediaReadable(ctx.Request.Context(), objectKey)
 		if err != nil {
-			if !handleRequestDBError(ctx, err) {
-				ctx.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
-			}
+			writeInternalAPIError(ctx, err)
 			return
 		}
 		if !allowed {
-			ctx.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+			writeAPIError(ctx, "FILE_NOT_FOUND")
 			return
 		}
 	}
 
 	object, err := getStoredObject(ctx.Request.Context(), objectKey)
 	if err != nil {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+		writeAPIError(ctx, "FILE_NOT_FOUND")
 		return
 	}
 	defer object.Close()
 
 	info, err := object.Stat()
 	if err != nil {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+		writeAPIError(ctx, "FILE_NOT_FOUND")
 		return
 	}
 

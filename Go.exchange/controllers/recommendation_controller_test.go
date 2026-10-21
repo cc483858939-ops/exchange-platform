@@ -968,9 +968,10 @@ func TestRecommendationHandlerMapsServiceFailureToHTTP500(t *testing.T) {
 	ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/recommendations/posts")
 	ctx.Set("user_id", uint(42))
 	handler.GetPostRecommendations(ctx)
-	if recorder.Code != http.StatusInternalServerError || !strings.Contains(recorder.Body.String(), "service unavailable") {
+	if recorder.Code != http.StatusInternalServerError || strings.Contains(recorder.Body.String(), "service unavailable") {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
+	requireAPIError(t, recorder, "INTERNAL_ERROR")
 	if len(service.requests) != 1 {
 		t.Fatalf("service calls=%d, want one", len(service.requests))
 	}
@@ -1015,9 +1016,10 @@ func TestRecommendationHandlerMapsResponseMapperFailureToHTTP500(t *testing.T) {
 	ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/recommendations/posts")
 	ctx.Set("user_id", uint(42))
 	handler.GetPostRecommendations(ctx)
-	if recorder.Code != http.StatusInternalServerError || !strings.Contains(recorder.Body.String(), "hydrate failed") {
+	if recorder.Code != http.StatusInternalServerError || strings.Contains(recorder.Body.String(), "hydrate failed") {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
+	requireAPIError(t, recorder, "INTERNAL_ERROR")
 	if len(mapper.contexts) != 1 {
 		t.Fatalf("mapper calls=%d, want one", len(mapper.contexts))
 	}
@@ -1131,8 +1133,11 @@ func TestRecommendationHTTPSpanLinksRequestIDForSuccessAndFailures(t *testing.T)
 			if recorder.Code != test.wantStatus {
 				t.Fatalf("status=%d want=%d body=%s", recorder.Code, test.wantStatus, recorder.Body.String())
 			}
-			if test.serviceErr != nil && !strings.Contains(recorder.Body.String(), test.serviceErr.Error()) {
-				t.Fatalf("service error response changed: %s", recorder.Body.String())
+			if test.serviceErr != nil && strings.Contains(recorder.Body.String(), test.serviceErr.Error()) {
+				t.Fatalf("service error leaked into response: %s", recorder.Body.String())
+			}
+			if test.serviceErr != nil || test.mapperErr != nil {
+				requireAPIError(t, recorder, "INTERNAL_ERROR")
 			}
 			if test.mapperErr != nil {
 				if mapperSpan.Status.Code != codes.Error {

@@ -186,9 +186,10 @@ func TestFollowingTimelineRejectsInvalidCursor(t *testing.T) {
 		GetFollowingTimeline(ctx)
 		loadActiveFollowingViewer = originalActive
 		loadFollowingTimelinePage = originalLoader
-		if recorder.Code != http.StatusBadRequest || strings.TrimSpace(recorder.Body.String()) != `{"error":"invalid cursor"}` {
+		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("cursor=%q status=%d body=%s", raw, recorder.Code, recorder.Body.String())
 		}
+		requireAPIError(t, recorder, "INVALID_REQUEST")
 	}
 }
 
