@@ -1,7 +1,12 @@
-import { isAxiosError } from 'axios';
 import axiosClient from '../axios';
 import { createTelemetryPersistence } from './telemetryPersistence';
 import type { RecommendationTracking } from '../types/Recommendation';
+import {
+  TelemetryRetryGate,
+  type TelemetrySnapshot,
+  getTelemetryHTTPFailure,
+  readTelemetryHeader,
+} from './telemetryRetryGate';
 
 export type RecommendationEventType = 'impression' | 'click' | 'read_end' | 'feed_dwell' | 'not_interested';
 
@@ -38,6 +43,12 @@ type RecommendationEventBatchResponse = {
   rejected: number;
   results: RecommendationEventResult[];
 };
+type RecommendationSnapshot = TelemetrySnapshot<QueuedRecommendationEvent>;
+type RecommendationResponse = {
+  status: number;
+  data: RecommendationEventBatchResponse | undefined;
+  headers?: unknown;
+};
 
 type ObservedRecommendation = {
   postID: number;
@@ -55,19 +66,38 @@ type FeedDwellState = {
   finalized: boolean;
 };
 
-const storageKey = 'recommendation_telemetry_queue_v2';
+const storageKey = 'recommendation_telemetry_snapshot_v3';
 const maxBufferedEvents = 200;
 const maxBatchEvents = 50;
+const maxRequestBodyBytes = 60 * 1024;
 const flushThreshold = 10;
 const flushDelayMs = 1000;
 const impressionDelayMs = 1000;
-const maxRetryDelayMs = 30_000;
 const maxFeedVisibleTimeMS = 6 * 60 * 60 * 1000;
 
 let sharedClient: RecommendationTelemetryClient | null = null;
 
 const clamp = (value: number, minimum: number, maximum: number) =>
   Math.min(maximum, Math.max(minimum, value));
+const isValidUserID = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+const isValidRecommendationEventType = (value: unknown): value is RecommendationEventType =>
+  value === 'impression'
+  || value === 'click'
+  || value === 'read_end'
+  || value === 'feed_dwell'
+  || value === 'not_interested';
+const isValidQueuedRecommendationEvent = (value: unknown): value is QueuedRecommendationEvent => {
+  if (!value || typeof value !== 'object') return false;
+  const event = value as Partial<QueuedRecommendationEvent>;
+  return typeof event.event_id === 'string'
+    && event.event_id.trim().length > 0
+    && isValidRecommendationEventType(event.event_type)
+    && typeof event.tracking_token === 'string'
+    && event.tracking_token.trim().length > 0
+    && typeof event.occurred_at === 'string'
+    && event.occurred_at.trim().length > 0;
+};
 
 export function calculateRectVisibility(rect: DOMRect): number {
   const viewportWidth = window.innerWidth;
@@ -114,9 +144,12 @@ export function calculateRectVisibility(rect: DOMRect): number {
 
   return clamp((visibleWidth * visibleHeight) / denominator, 0, 1);
 }
-export const getRecommendationTelemetry = (getAccessToken: () => string | null) => {
+export const getRecommendationTelemetry = (
+  getAccessToken: () => string | null,
+  getCurrentUserID: () => number | null,
+) => {
   if (!sharedClient) {
-    sharedClient = new RecommendationTelemetryClient(getAccessToken);
+    sharedClient = new RecommendationTelemetryClient(getAccessToken, getCurrentUserID);
     sharedClient.start();
   }
   return sharedClient;
@@ -137,19 +170,35 @@ export class RecommendationTelemetryClient {
   private seenReadEnds = new Set<string>();
   private seenNotInterested = new Set<string>();
   private seenFeedDwells = new Set<string>();
-  private flushTimer: number | null = null;
-  private retryTimer: number | null = null;
-  private retryDelayMs = 1000;
   private inFlight = false;
   private keepaliveInFlight = false;
-  private pendingFlush = false;
   private reconciliationFrame: number | null = null;
   private reconciliationFrameUsesRAF = false;
   private stopped = true;
+  private sessionGeneration = 0;
+  private ownerUserId: number | null = null;
+  private ownerInitialized = false;
+  private ownerUnavailable = false;
+  private authPausedFingerprint: string | null = null;
   private queuePersistence = createTelemetryPersistence(() => this.saveQueue());
+  private retryGate: TelemetryRetryGate;
 
-  constructor(private readonly getAccessToken: () => string | null) {
-    this.queue = this.loadQueue();
+  constructor(
+    private readonly getAccessToken: () => string | null,
+    private readonly getCurrentUserID: () => number | null,
+  ) {
+    this.retryGate = new TelemetryRetryGate(
+      () => { if (!this.stopped) void this.flush(false); },
+      () => this.persistQueue(),
+    );
+    const snapshot = this.loadSnapshot();
+    this.queue = snapshot.events;
+    this.retryGate.restore(snapshot.retry);
+    if (isValidUserID(snapshot.ownerUserId)) {
+      this.ownerUserId = snapshot.ownerUserId;
+      this.ownerInitialized = true;
+    }
+    this.syncOwner();
   }
 
   start() {
@@ -161,9 +210,7 @@ export class RecommendationTelemetryClient {
     window.addEventListener('pagehide', this.handlePageHide);
     window.addEventListener('scroll', this.handleViewportChange, { passive: true });
     window.addEventListener('resize', this.handleViewportChange);
-    if (this.queue.length > 0) {
-      this.scheduleFlush(0);
-    }
+    if (this.queue.length > 0) void this.flush(false);
   }
 
   stop() {
@@ -178,8 +225,7 @@ export class RecommendationTelemetryClient {
     window.removeEventListener('pagehide', this.handlePageHide);
     window.removeEventListener('scroll', this.handleViewportChange);
     window.removeEventListener('resize', this.handleViewportChange);
-    this.clearScheduledFlush();
-    this.clearRetry();
+    this.retryGate.cancelScheduled();
     this.cancelReconciliation();
     this.stopped = true;
   }
@@ -206,6 +252,7 @@ export class RecommendationTelemetryClient {
   }
 
   clearSession() {
+    this.sessionGeneration += 1;
     this.resetObservedCards(false);
     this.queue = [];
     this.seenImpressions.clear();
@@ -213,10 +260,21 @@ export class RecommendationTelemetryClient {
     this.seenReadEnds.clear();
     this.seenNotInterested.clear();
     this.seenFeedDwells.clear();
+    this.retryGate.reset();
+    this.authPausedFingerprint = null;
+    const currentOwnerID = this.getCurrentUserID();
+    if (isValidUserID(currentOwnerID)) {
+      this.ownerUserId = currentOwnerID;
+      this.ownerInitialized = true;
+      this.ownerUnavailable = false;
+    }
     this.persistQueue();
     this.queuePersistence.flush();
-    this.clearScheduledFlush();
-    this.clearRetry();
+  }
+
+  refreshOwner() {
+    const ownerID = this.syncOwner();
+    if (isValidUserID(ownerID)) this.scheduleFlush(0);
   }
 
   observeCard(element: HTMLElement, postID: number, tracking?: RecommendationTracking) {
@@ -365,47 +423,51 @@ export class RecommendationTelemetryClient {
   }
 
   async flush(keepalive = false): Promise<void> {
+    if (this.stopped) return;
     if (keepalive) {
       this.queuePersistence.flush();
       await this.flushKeepalive();
       return;
     }
 
-    this.clearScheduledFlush();
-    if (this.inFlight) {
-      this.pendingFlush = true;
-      return;
-    }
-    if (this.queue.length === 0) {
-      return;
-    }
-    const accessToken = this.getAccessToken();
-    if (!accessToken) {
-      return;
-    }
-
-    const batch = this.queue.slice(0, maxBatchEvents);
+    const context = this.getSendContext();
+    if (!context || this.inFlight) return;
+    const batch = this.selectRequestBatch(this.queue);
+    if (batch.length === 0) return;
+    this.retryGate.cancelScheduled();
+    const capturedGeneration = this.sessionGeneration;
+    const capturedRetryEpoch = this.retryGate.captureEpoch();
     this.inFlight = true;
+    let shouldDrain = false;
     try {
-      const response = await axiosClient.post<RecommendationEventBatchResponse>('/recommendation-events', { events: batch });
-      this.applyBatchResponse(response.data);
-      this.retryDelayMs = 1000;
-      this.clearRetry();
+      const response = await axiosClient.post<RecommendationEventBatchResponse>(
+        '/recommendation-events',
+        { events: batch },
+      );
+      this.syncOwner();
+      if (capturedGeneration !== this.sessionGeneration) return;
+      shouldDrain = this.handleResponse({
+        status: typeof response.status === 'number' ? response.status : 200,
+        data: response.data,
+        headers: response.headers,
+      }, batch, context.ownerID, capturedRetryEpoch);
     } catch (error) {
-      if (isAxiosError<RecommendationEventBatchResponse>(error) && error.response?.data?.results) {
-        this.applyBatchResponse(error.response.data);
-      } else if (isAxiosError(error) && [400, 404, 413].includes(error.response?.status ?? 0)) {
-        this.dropBatch(batch);
-      } else {
-        this.scheduleRetry();
-      }
+      this.syncOwner();
+      if (capturedGeneration !== this.sessionGeneration) return;
+      const failure = getTelemetryHTTPFailure(error);
+      shouldDrain = this.handleResponse({
+        status: failure.status ?? 0,
+        data: failure.data as RecommendationEventBatchResponse | undefined,
+        headers: (error as { response?: { headers?: unknown } } | null)?.response?.headers,
+      }, batch, context.ownerID, capturedRetryEpoch);
     } finally {
       this.inFlight = false;
-      if (this.pendingFlush || this.queue.length >= flushThreshold) {
-        this.pendingFlush = false;
-        this.scheduleFlush(0);
-      } else if (this.queue.length > 0 && this.retryTimer === null) {
-        this.scheduleFlush(flushDelayMs);
+      if (this.stopped) {
+        this.retryGate.cancelScheduled();
+      } else if (this.queue.length > 0) {
+        if (capturedGeneration !== this.sessionGeneration || shouldDrain) {
+          this.scheduleFlush(0);
+        }
       }
     }
   }
@@ -415,31 +477,35 @@ export class RecommendationTelemetryClient {
       return;
     }
 
-    const accessToken = this.getAccessToken();
-    if (!accessToken) {
-      return;
-    }
-
-    this.clearScheduledFlush();
-    const batch = this.queue.slice(0, maxBatchEvents);
+    const context = this.getSendContext();
+    if (!context) return;
+    const batch = this.selectRequestBatch(this.queue);
+    if (batch.length === 0) return;
+    this.retryGate.cancelScheduled();
+    const capturedGeneration = this.sessionGeneration;
+    const capturedRetryEpoch = this.retryGate.captureEpoch();
     this.keepaliveInFlight = true;
+    let shouldDrain = false;
     try {
-      const response = await this.sendKeepalive(batch, accessToken);
-      this.applyBatchResponse(response.data);
-      this.retryDelayMs = 1000;
-      this.clearRetry();
+      const response = await this.sendKeepalive(batch, context.accessToken);
+      this.syncOwner();
+      if (capturedGeneration !== this.sessionGeneration) return;
+      shouldDrain = this.handleResponse(response, batch, context.ownerID, capturedRetryEpoch);
     } catch (error) {
-      if (isAxiosError<RecommendationEventBatchResponse>(error) && error.response?.data?.results) {
-        this.applyBatchResponse(error.response.data);
-      } else if (isAxiosError(error) && [400, 404, 413].includes(error.response?.status ?? 0)) {
-        this.dropBatch(batch);
-      } else {
-        this.scheduleRetry();
-      }
+      this.syncOwner();
+      if (capturedGeneration !== this.sessionGeneration) return;
+      const failure = getTelemetryHTTPFailure(error);
+      shouldDrain = this.handleResponse({
+        status: failure.status ?? 0,
+        data: failure.data as RecommendationEventBatchResponse | undefined,
+        headers: (error as { response?: { headers?: unknown } } | null)?.response?.headers,
+      }, batch, context.ownerID, capturedRetryEpoch);
     } finally {
       this.keepaliveInFlight = false;
-      if (this.queue.length > 0 && this.retryTimer === null) {
-        this.scheduleFlush(flushDelayMs);
+      if (this.stopped) {
+        this.retryGate.cancelScheduled();
+      } else if (this.queue.length > 0 && (capturedGeneration !== this.sessionGeneration || shouldDrain)) {
+        this.scheduleFlush(0);
       }
     }
   }
@@ -672,6 +738,7 @@ export class RecommendationTelemetryClient {
     tracking: RecommendationTracking,
     payload?: RecommendationReadEndPayload | RecommendationFeedDwellPayload,
   ) {
+    this.syncOwner();
     const queued: QueuedRecommendationEvent = {
       event_id: crypto.randomUUID(),
       event_type: eventType,
@@ -703,21 +770,90 @@ export class RecommendationTelemetryClient {
       credentials: 'same-origin',
       keepalive: true,
     });
-    const data = (await response.json()) as RecommendationEventBatchResponse;
-    if (!response.ok && response.status !== 422) {
-      throw new Error('recommendation telemetry request failed: ' + response.status);
+    let data: RecommendationEventBatchResponse | undefined;
+    try {
+      data = await response.json() as RecommendationEventBatchResponse;
+    } catch {
+      data = undefined;
     }
-    return { data };
+    return { status: response.status, data, headers: response.headers } satisfies RecommendationResponse;
   }
 
-  private applyBatchResponse(response: RecommendationEventBatchResponse) {
-    const terminalIDs = new Set(response.results.map(result => result.event_id));
-    if (terminalIDs.size === 0) {
-      return;
+  private handleResponse(
+    response: RecommendationResponse,
+    batch: QueuedRecommendationEvent[],
+    ownerID: number,
+    retryEpoch: number,
+  ): boolean {
+    const { status, data, headers } = response;
+    const retryAfter = readTelemetryHeader(headers, 'Retry-After');
+    const serverDate = readTelemetryHeader(headers, 'Date');
+
+    if (status >= 200 && status < 300 || status === 422) {
+      const outcome = this.applyBatchResponse(batch, data);
+      if (status === 422 && !outcome.progressed) {
+        this.dropBatch(batch);
+        this.retryGate.clearAfterSuccess(retryEpoch);
+        return true;
+      }
+      if (outcome.complete) {
+        this.retryGate.clearAfterSuccess(retryEpoch);
+      } else {
+        this.recordRetryFailure(retryAfter, serverDate);
+      }
+      return outcome.progressed;
     }
-    this.queue = this.queue.filter(event => !terminalIDs.has(event.event_id));
-    this.persistQueue();
-    this.queuePersistence.flush();
+
+    if (status === 401 || status === 403) {
+      this.pauseForAuth(ownerID);
+      return false;
+    }
+    if (
+      status === 0
+      || status === 408
+      || status === 425
+      || status === 429
+      || status >= 500 && status <= 599
+      || status >= 300 && status < 400
+    ) {
+      this.recordRetryFailure(retryAfter, serverDate);
+      return false;
+    }
+    if (status >= 400 && status < 500) {
+      this.dropBatch(batch);
+      this.retryGate.clearAfterSuccess(retryEpoch);
+      return true;
+    }
+    this.recordRetryFailure(retryAfter, serverDate);
+    return false;
+  }
+
+  private applyBatchResponse(
+    batch: QueuedRecommendationEvent[],
+    response: RecommendationEventBatchResponse | undefined,
+  ): { progressed: boolean; complete: boolean } {
+    const batchIDs = new Set(batch.map(event => event.event_id));
+    const terminalIDs = new Set<string>();
+    if (Array.isArray(response?.results)) {
+      for (const result of response.results) {
+        if (
+          typeof result?.event_id === 'string'
+          && batchIDs.has(result.event_id)
+          && (result.status === 'accepted' || result.status === 'duplicate' || result.status === 'rejected')
+        ) {
+          terminalIDs.add(result.event_id);
+        }
+      }
+    }
+    if (terminalIDs.size > 0) {
+      this.queue = this.queue.filter(event => !terminalIDs.has(event.event_id));
+      this.persistQueue();
+      this.queuePersistence.flush();
+    }
+    return {
+      progressed: terminalIDs.size > 0,
+      complete: batch.every(event => terminalIDs.has(event.event_id)),
+    };
   }
 
   private dropBatch(batch: QueuedRecommendationEvent[]) {
@@ -727,56 +863,123 @@ export class RecommendationTelemetryClient {
     this.queuePersistence.flush();
   }
 
-  private scheduleFlush(delayMs: number) {
-    if (this.stopped || this.flushTimer !== null) {
-      return;
-    }
-    this.flushTimer = window.setTimeout(() => {
-      this.flushTimer = null;
-      void this.flush(false);
-    }, delayMs);
+  private scheduleFlush(delayMS: number) {
+    if (this.stopped || this.queue.length === 0) return;
+    const context = this.getSendContext();
+    if (!context) return;
+    this.retryGate.request(delayMS);
   }
 
-  private scheduleRetry() {
-    if (this.stopped || this.retryTimer !== null) {
-      return;
+  private getSendContext(): { ownerID: number; accessToken: string } | null {
+    const ownerID = this.syncOwner();
+    if (!isValidUserID(ownerID) || this.queue.length === 0) return null;
+    const accessToken = this.getAccessToken();
+    if (!accessToken) return null;
+    const fingerprint = `${ownerID}:${accessToken}`;
+    if (this.authPausedFingerprint !== null) {
+      if (this.authPausedFingerprint === fingerprint) return null;
+      this.authPausedFingerprint = null;
     }
-    const jitter = Math.floor(Math.random() * 250);
-    this.retryTimer = window.setTimeout(() => {
-      this.retryTimer = null;
-      void this.flush(false);
-    }, this.retryDelayMs + jitter);
-    this.retryDelayMs = Math.min(this.retryDelayMs * 2, maxRetryDelayMs);
+    if (!this.retryGate.canSend()) {
+      if (!this.stopped) this.retryGate.request(0);
+      return null;
+    }
+    return { ownerID, accessToken };
   }
 
-  private clearScheduledFlush() {
-    if (this.flushTimer !== null) {
-      window.clearTimeout(this.flushTimer);
-      this.flushTimer = null;
-    }
+  private recordRetryFailure(retryAfter?: string | null, serverDate?: string | null) {
+    this.retryGate.recordFailure(retryAfter, serverDate);
+    this.queuePersistence.flush();
   }
 
-  private clearRetry() {
-    if (this.retryTimer !== null) {
-      window.clearTimeout(this.retryTimer);
-      this.retryTimer = null;
+  private pauseForAuth(ownerID: number) {
+    const token = this.getAccessToken();
+    this.authPausedFingerprint = token ? `${ownerID}:${token}` : null;
+    this.retryGate.cancelScheduled();
+    this.persistQueue();
+    this.queuePersistence.flush();
+  }
+
+  private syncOwner(): number | null {
+    const nextOwnerID = this.getCurrentUserID();
+    if (!isValidUserID(nextOwnerID)) {
+      if (this.ownerInitialized && !this.ownerUnavailable) {
+        this.sessionGeneration += 1;
+        this.ownerUnavailable = true;
+      }
+      return null;
     }
+
+    if (!this.ownerInitialized) {
+      this.ownerInitialized = true;
+      this.ownerUserId = nextOwnerID;
+      this.persistQueue();
+    } else if (this.ownerUserId !== nextOwnerID) {
+      this.sessionGeneration += 1;
+      this.ownerUserId = nextOwnerID;
+      this.authPausedFingerprint = null;
+      this.resetObservedCards(false);
+      this.clearSeenEvents();
+      this.queue = [];
+      this.persistQueue();
+    } else if (this.ownerUnavailable) {
+      this.sessionGeneration += 1;
+    }
+    this.ownerUnavailable = false;
+    return nextOwnerID;
+  }
+
+  private clearSeenEvents() {
+    this.seenImpressions.clear();
+    this.seenClicks.clear();
+    this.seenReadEnds.clear();
+    this.seenNotInterested.clear();
+    this.seenFeedDwells.clear();
+  }
+
+  private selectRequestBatch(events: QueuedRecommendationEvent[]): QueuedRecommendationEvent[] {
+    const batch: QueuedRecommendationEvent[] = [];
+    const encoder = new TextEncoder();
+    for (const event of events) {
+      if (batch.length >= maxBatchEvents) break;
+      const candidate = [...batch, event];
+      const bytes = encoder.encode(JSON.stringify({ events: candidate })).byteLength;
+      if (bytes > maxRequestBodyBytes) {
+        if (batch.length === 0) {
+          this.dropBatch([event]);
+          continue;
+        }
+        break;
+      }
+      batch.push(event);
+    }
+    return batch;
   }
 
   private businessKey(postID: number, tracking: RecommendationTracking) {
     return tracking.request_id + ':' + postID;
   }
 
-  private loadQueue(): QueuedRecommendationEvent[] {
+  private loadSnapshot(): RecommendationSnapshot {
     try {
       const value = sessionStorage.getItem(storageKey);
       if (!value) {
-        return [];
+        return { events: [], retry: { retryNotBeforeEpochMs: 0, retryAttempt: 0 }, ownerUserId: null };
       }
       const parsed = JSON.parse(value) as unknown;
-      return Array.isArray(parsed) ? (parsed as QueuedRecommendationEvent[]).slice(-maxBufferedEvents) : [];
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { events: [], retry: { retryNotBeforeEpochMs: 0, retryAttempt: 0 }, ownerUserId: null };
+      }
+      const snapshot = parsed as Partial<RecommendationSnapshot>;
+      return {
+        events: Array.isArray(snapshot.events)
+          ? snapshot.events.filter(isValidQueuedRecommendationEvent).slice(-maxBufferedEvents)
+          : [],
+        retry: snapshot.retry ?? { retryNotBeforeEpochMs: 0, retryAttempt: 0 },
+        ownerUserId: isValidUserID(snapshot.ownerUserId) ? snapshot.ownerUserId : null,
+      };
     } catch {
-      return [];
+      return { events: [], retry: { retryNotBeforeEpochMs: 0, retryAttempt: 0 }, ownerUserId: null };
     }
   }
 
@@ -786,7 +989,12 @@ export class RecommendationTelemetryClient {
 
   private saveQueue() {
     try {
-      sessionStorage.setItem(storageKey, JSON.stringify(this.queue));
+      const snapshot: RecommendationSnapshot = {
+        events: this.queue,
+        retry: this.retryGate.snapshot(),
+        ownerUserId: this.ownerUserId,
+      };
+      sessionStorage.setItem(storageKey, JSON.stringify(snapshot));
     } catch {
       // Storage can be unavailable in privacy modes; server-side idempotency
       // still protects any events that are delivered.

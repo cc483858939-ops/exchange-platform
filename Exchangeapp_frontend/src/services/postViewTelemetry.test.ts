@@ -32,6 +32,14 @@ const successResponse = (events: Array<{ event_id: string }>) => ({
     results: events.map(item => ({ event_id: item.event_id, status: 'accepted' })),
   },
 });
+const postViewStorageKey = 'post_view_telemetry_snapshot_v2';
+const savedPostViewSnapshot = () => JSON.parse(sessionStorage.getItem(postViewStorageKey) || '{"events":[]}');
+const savedPostViewEvents = () => savedPostViewSnapshot().events;
+const writePostViewSnapshot = (
+  events: unknown[],
+  ownerUserId: number | null = 7,
+  retry = { retryNotBeforeEpochMs: 0, retryAttempt: 0 },
+) => sessionStorage.setItem(postViewStorageKey, JSON.stringify({ events, retry, ownerUserId }));
 
 const settle = async () => {
   await Promise.resolve();
@@ -41,14 +49,17 @@ const settle = async () => {
 describe('PostViewTelemetryClient', () => {
   let client: PostViewTelemetryClient;
   let currentUserID: number | null = 7;
+  let authStateKey: string | null = 'token-v1';
 
   beforeEach(() => {
     currentUserID = 7;
+    authStateKey = 'token-v1';
     vi.useFakeTimers();
     vi.clearAllTimers();
     vi.resetAllMocks();
+    vi.spyOn(Math, 'random').mockReturnValue(0);
     sessionStorage.clear();
-    client = new PostViewTelemetryClient(() => currentUserID);
+    client = new PostViewTelemetryClient(() => currentUserID, () => authStateKey);
     client.start();
   });
 
@@ -72,7 +83,7 @@ describe('PostViewTelemetryClient', () => {
     currentUserID = null;
     expect(client.enqueue(42, event(3).event_id, 'post_detail')).toBe(false);
     currentUserID = 7;
-    expect(JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]')).toHaveLength(1);
+    expect(savedPostViewEvents()).toHaveLength(1);
   });
 
   it('deduplicates compatible event IDs and rejects conflicting identities', async () => {
@@ -81,7 +92,7 @@ describe('PostViewTelemetryClient', () => {
 
     expect(client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at)).toBe(true);
     await settle();
-    const saved = JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]');
+    const saved = savedPostViewEvents();
 
     expect(client.enqueue(first.post_id, first.event_id, 'post_detail', '2026-08-17T00:00:00.000Z')).toBe(true);
     expect(client.enqueue(first.post_id + 1, first.event_id, 'post_detail')).toBe(false);
@@ -89,7 +100,7 @@ describe('PostViewTelemetryClient', () => {
     currentUserID = 8;
     expect(client.enqueue(first.post_id, first.event_id, 'post_detail')).toBe(false);
 
-    expect(JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]')).toEqual(saved);
+    expect(savedPostViewEvents()).toEqual(saved);
   });
 
   it('retains network failures and schedules the first retry', async () => {
@@ -99,7 +110,7 @@ describe('PostViewTelemetryClient', () => {
     await settle();
 
     expect(mocks.post).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]')).toHaveLength(1);
+    expect(savedPostViewEvents()).toHaveLength(1);
   });
 
   it('preserves event identity and occurred_at on retry', async () => {
@@ -123,13 +134,14 @@ describe('PostViewTelemetryClient', () => {
     });
   });
 
-  it('follows 1s, 2s, 5s, 10s, 30s, then 60s retry delays', async () => {
+  it('uses bounded equal-jitter exponential retry windows', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
     const first = event(1);
     mocks.post.mockRejectedValueOnce(new Error('offline'));
     client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
     await settle();
 
-    const delays = [1000, 2000, 5000, 10000, 30000, 60000];
+    const delays = [1000, 2000, 4000, 8000, 16000, 32000];
     for (const delay of delays) {
       mocks.post.mockRejectedValueOnce(new Error('offline'));
       await vi.advanceTimersByTimeAsync(delay);
@@ -137,7 +149,7 @@ describe('PostViewTelemetryClient', () => {
     }
 
     expect(mocks.post).toHaveBeenCalledTimes(7);
-    await vi.advanceTimersByTimeAsync(60000);
+    await vi.advanceTimersByTimeAsync(64000);
     await settle();
     expect(mocks.post).toHaveBeenCalledTimes(8);
   });
@@ -152,7 +164,7 @@ describe('PostViewTelemetryClient', () => {
     await vi.advanceTimersByTimeAsync(1000);
     await settle();
 
-    expect(JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]')).toEqual([]);
+    expect(savedPostViewEvents()).toEqual([]);
 
     const second = event(2);
     mocks.post.mockRejectedValueOnce(new Error('offline'));
@@ -164,11 +176,27 @@ describe('PostViewTelemetryClient', () => {
 
   it('does not retry a 429 before Retry-After seconds', async () => {
     const first = event(1);
+    const second = event(2);
     mocks.post.mockRejectedValueOnce({
       response: { status: 429, headers: { 'retry-after': '60' } },
     });
     client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
     await settle();
+
+    mocks.post.mockResolvedValueOnce(successResponse([first, second]));
+    expect(client.enqueue(second.post_id, second.event_id, 'post_detail', second.occurred_at)).toBe(true);
+    window.dispatchEvent(new Event('online'));
+    await settle();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    window.dispatchEvent(new Event('pagehide'));
+    expect(savedPostViewSnapshot().events).toHaveLength(2);
+    expect(savedPostViewSnapshot().retry.retryNotBeforeEpochMs).toBeGreaterThan(Date.now());
+
+    client.stop();
+    client = new PostViewTelemetryClient(() => currentUserID, () => authStateKey);
+    client.start();
+    await settle();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(59999);
     expect(mocks.post).toHaveBeenCalledTimes(1);
@@ -179,19 +207,44 @@ describe('PostViewTelemetryClient', () => {
 
   it('uses normal retry for 503 and drops permanent 4xx batches', async () => {
     const first = event(1);
-    mocks.post.mockRejectedValueOnce({ response: { status: 503 } });
+    mocks.post.mockRejectedValueOnce({
+      response: { status: 503, headers: { 'retry-after': '60' } },
+    });
     client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
     await settle();
 
     const second = event(2);
     mocks.post.mockRejectedValueOnce({ response: { status: 400 } });
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(59999);
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
     await settle();
     mocks.post.mockRejectedValueOnce({ response: { status: 400 } });
     client.enqueue(second.post_id, second.event_id, 'post_detail', second.occurred_at);
     await settle();
 
-    expect(JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]')).toEqual([]);
+    expect(savedPostViewEvents()).toEqual([]);
+  });
+
+  it('does not let 100 queued events or a 2xx response without progress bypass cooldown', async () => {
+    const first = event(1);
+    mocks.post.mockResolvedValueOnce({
+      status: 202,
+      data: { accepted: 0, rejected: 0, results: [{ event_id: 'not-in-batch', status: 'accepted' }] },
+    });
+    client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
+    await settle();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(savedPostViewSnapshot().retry.retryNotBeforeEpochMs).toBeGreaterThan(Date.now());
+
+    for (let index = 2; index <= 101; index += 1) {
+      const next = event(index);
+      client.enqueue(next.post_id, next.event_id, 'post_detail', next.occurred_at);
+    }
+    window.dispatchEvent(new Event('online'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(savedPostViewEvents()).toHaveLength(101);
   });
 
   it('removes 422 result IDs without retrying rejected events', async () => {
@@ -209,7 +262,7 @@ describe('PostViewTelemetryClient', () => {
     client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
     await settle();
 
-    expect(JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]')).toEqual([]);
+    expect(savedPostViewEvents()).toEqual([]);
   });
 
   it('drops a 422 batch with no usable results', async () => {
@@ -220,26 +273,54 @@ describe('PostViewTelemetryClient', () => {
     client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
     await settle();
 
-    expect(JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]')).toEqual([]);
+    expect(savedPostViewEvents()).toEqual([]);
   });
 
   it('drops permanent 4xx responses without retrying forever', async () => {
-    for (const status of [400, 401, 403, 404, 413, 499]) {
+    for (const status of [400, 404, 413, 499]) {
       const item = event(status);
       mocks.post.mockRejectedValueOnce({ response: { status } });
       client.enqueue(item.post_id, item.event_id, 'post_detail', item.occurred_at);
       await settle();
-      expect(JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]')).toEqual([]);
+      expect(savedPostViewEvents()).toEqual([]);
     }
   });
-  it('cancels a retry timer and flushes immediately when online', async () => {
+
+  it.each([401, 403])('pauses a %i response until the authentication state changes', async status => {
+    const first = event(status);
+    mocks.post.mockRejectedValueOnce({ response: { status } });
+    client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
+    await settle();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(savedPostViewEvents()).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+
+    authStateKey = 'token-after-auth-change';
+    const second = event(status + 1);
+    mocks.post.mockResolvedValueOnce(successResponse([first, second]));
+    client.enqueue(second.post_id, second.event_id, 'post_detail', second.occurred_at);
+    await settle();
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(savedPostViewEvents()).toEqual([]);
+  });
+  it('does not let online bypass a Retry-After cooldown', async () => {
     const first = event(1);
-    mocks.post.mockRejectedValueOnce(new Error('offline'));
+    mocks.post.mockRejectedValueOnce({
+      response: { status: 429, headers: { 'retry-after': '60' } },
+    });
     client.enqueue(first.post_id, first.event_id, 'post_detail', first.occurred_at);
     await settle();
 
     mocks.post.mockResolvedValueOnce(successResponse([first]));
     window.dispatchEvent(new Event('online'));
+    await settle();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(59999);
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
     await settle();
 
     expect(mocks.post).toHaveBeenCalledTimes(2);
@@ -265,11 +346,13 @@ describe('PostViewTelemetryClient', () => {
 
   it('splits more than 50 current-user events without mixing owners', async () => {
     const pending = Array.from({ length: 51 }, (_, index) => event(index + 1));
-    sessionStorage.setItem('post_view_telemetry_queue_v1', JSON.stringify(pending));
+    writePostViewSnapshot(pending);
     const restored = new PostViewTelemetryClient(() => currentUserID);
     mocks.post.mockImplementation(async (_url: string, body: { events: Array<{ event_id: string }> }) =>
       successResponse(body.events));
     restored.start();
+    await settle();
+    await vi.advanceTimersByTimeAsync(0);
     await settle();
 
     expect(mocks.post).toHaveBeenCalledTimes(2);
@@ -281,7 +364,7 @@ describe('PostViewTelemetryClient', () => {
   });
   it('never sends a queued event under another authenticated user', async () => {
     const queued = event(1, 7);
-    sessionStorage.setItem('post_view_telemetry_queue_v1', JSON.stringify([queued]));
+    writePostViewSnapshot([queued]);
     currentUserID = 8;
     const otherClient = new PostViewTelemetryClient(() => currentUserID);
     otherClient.start();
@@ -311,12 +394,12 @@ describe('PostViewTelemetryClient', () => {
       { bad: true },
       ...Array.from({ length: 205 }, (_, index) => event(index + 1)),
     ];
-    sessionStorage.setItem('post_view_telemetry_queue_v1', JSON.stringify(persisted));
+    writePostViewSnapshot(persisted);
     const restored = new PostViewTelemetryClient(() => null);
     restored.start();
     await settle();
 
-    const saved = JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]');
+    const saved = savedPostViewEvents();
     expect(saved).toHaveLength(200);
     expect(saved.filter((item: { owner_user_id?: number }) => item.owner_user_id === 7)).toHaveLength(200);
     restored.stop();
@@ -564,7 +647,7 @@ describe('PostViewTelemetryClient', () => {
       await settle();
 
       expect(mocks.post).not.toHaveBeenCalled();
-      expect(JSON.parse(sessionStorage.getItem('post_view_telemetry_queue_v1') || '[]')).toEqual([]);
+      expect(savedPostViewEvents()).toEqual([]);
 
       currentUserID = 7;
       observers[0].emit(card, 0.49);

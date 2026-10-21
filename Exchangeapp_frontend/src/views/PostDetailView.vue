@@ -682,7 +682,15 @@ const replySubmissionStore = useReplySubmissionStore();
 const currentIdentity = computed(() => (
   authStore.isAuthenticated ? authStore.currentIdentity : null
 ));
-const recommendationTelemetry = getRecommendationTelemetry(() => authStore.token);
+const recommendationTelemetry = getRecommendationTelemetry(
+  () => authStore.token,
+  () => authStore.isAuthenticated ? authStore.currentIdentity?.id ?? null : null,
+);
+watch(
+  [() => authStore.isAuthenticated, () => authStore.currentIdentity?.id, () => authStore.token],
+  () => recommendationTelemetry.refreshOwner?.(),
+  { immediate: true },
+);
 
 const postId = computed(() => String(route.params.id ?? '').trim());
 const currentDetailPostID = computed<number | null>(() => {

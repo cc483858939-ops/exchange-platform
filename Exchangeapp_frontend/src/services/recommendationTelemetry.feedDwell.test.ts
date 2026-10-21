@@ -163,7 +163,7 @@ describe('RecommendationTelemetryClient Feed dwell', () => {
   };
 
   const createClient = () => {
-    client = new RecommendationTelemetryClient(() => 'Bearer test-token');
+    client = new RecommendationTelemetryClient(() => 'Bearer test-token', () => 7);
     client.start();
     return client;
   };
@@ -512,7 +512,7 @@ describe('RecommendationTelemetryClient Feed dwell', () => {
     telemetry.clearSession();
 
     expect(await flushKeepaliveEvents()).toEqual([]);
-    expect(JSON.parse(sessionStorage.getItem('recommendation_telemetry_queue_v2') ?? '[]')).toEqual([]);
+    expect(JSON.parse(sessionStorage.getItem('recommendation_telemetry_snapshot_v3') ?? '{"events":[]}').events).toEqual([]);
   });
 
   it('stop finalizes dwell before keepalive flush', async () => {

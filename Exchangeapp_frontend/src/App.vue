@@ -61,7 +61,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import AppShell from './components/layout/AppShell.vue';
 import PostPublishStatus from './components/composer/PostPublishStatus.vue';
@@ -101,8 +101,9 @@ const preserveExternalProfileCache = computed(() => (
 const preserveHistoryReturnCache = computed(() => shouldPreserveHistoryReturnCache(route));
 const preserveTopicReturnCache = computed(() => shouldPreserveTopicReturnCache(route));
 
-initializePostViewTelemetry(() => {
+const postViewTelemetry = initializePostViewTelemetry(() => {
   const id = authStore.currentIdentity?.id;
   return typeof id === 'number' && id > 0 ? id : null;
-});
+}, () => authStore.token);
+watch(() => authStore.token, () => postViewTelemetry?.refreshAuthState?.());
 </script>

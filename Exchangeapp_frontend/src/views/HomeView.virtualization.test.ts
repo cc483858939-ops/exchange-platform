@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
     resetObservedCards: vi.fn(),
     flush: vi.fn().mockResolvedValue(undefined),
     clearSession: vi.fn(),
+    refreshOwner: vi.fn(),
     observeFeedCard: vi.fn(),
     detachFeedCard: vi.fn(),
     unobserveFeedCard: vi.fn(),
@@ -1410,28 +1411,28 @@ describe('HomeView virtualization', () => {
     expect(mountedPostSessionKey(wrapper, 1)).toBe('home:anonymous:for-you:2');
   });
 
-  it('clears recommendation telemetry once per real auth identity boundary', async () => {
+  it('refreshes recommendation owner state once per real auth identity boundary', async () => {
     wrapper = mountHome();
     await settle();
-    expect(mocks.telemetry.clearSession).not.toHaveBeenCalled();
+    expect(mocks.telemetry.refreshOwner).not.toHaveBeenCalled();
 
     mocks.authStore.isAuthenticated = false;
     mocks.authStore.currentIdentity = null;
     await settle();
-    expect(mocks.telemetry.clearSession).toHaveBeenCalledTimes(1);
+    expect(mocks.telemetry.refreshOwner).toHaveBeenCalledTimes(1);
 
     mocks.authStore.isAuthenticated = true;
     mocks.authStore.currentIdentity = { ...viewer, id: 8, username: 'viewer-8' };
     await settle();
-    expect(mocks.telemetry.clearSession).toHaveBeenCalledTimes(2);
+    expect(mocks.telemetry.refreshOwner).toHaveBeenCalledTimes(2);
 
     mocks.authStore.currentIdentity = { ...viewer, id: 9, username: 'viewer-9' };
     await settle();
-    expect(mocks.telemetry.clearSession).toHaveBeenCalledTimes(3);
+    expect(mocks.telemetry.refreshOwner).toHaveBeenCalledTimes(3);
 
     mocks.homeTimeline.activeTab = 'following';
     await settle();
-    expect(mocks.telemetry.clearSession).toHaveBeenCalledTimes(3);
+    expect(mocks.telemetry.refreshOwner).toHaveBeenCalledTimes(3);
   });
 
   it('renders guest For You in the virtualized feed without recommendation telemetry', async () => {

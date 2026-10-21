@@ -1,7 +1,11 @@
-import { isAxiosError } from 'axios';
 import apiClient from '../axios';
 import { createTelemetryPersistence } from './telemetryPersistence';
 import { createClientOperationID } from '../utils/clientOperationId';
+import {
+  TelemetryRetryGate,
+  type TelemetrySnapshot,
+  getTelemetryHTTPFailure,
+} from './telemetryRetryGate';
 
 export type PostViewSource = 'post_detail' | 'feed';
 
@@ -29,6 +33,8 @@ type PostViewBatchResponse = {
 };
 
 type CurrentUserIDGetter = () => number | null;
+type AuthStateGetter = () => string | number | null;
+type PostViewSnapshot = TelemetrySnapshot<QueuedPostViewEvent>;
 
 type FeedObservation = {
   postID: number;
@@ -38,12 +44,11 @@ type FeedObservation = {
   viewSessionKey?: string;
 };
 
-const storageKey = 'post_view_telemetry_queue_v1';
+const storageKey = 'post_view_telemetry_snapshot_v2';
 const maxBufferedEvents = 200;
 const maxBatchEvents = 50;
 const feedQualificationThreshold = 0.5;
 const feedQualificationDurationMS = 1000;
-const retryDelaysMS = [1000, 2000, 5000, 10000, 30000, 60000];
 
 let sharedClient: PostViewTelemetryClient | null = null;
 
@@ -69,48 +74,22 @@ const isValidQueuedEvent = (value: unknown): value is QueuedPostViewEvent => {
     && isValidSource(event.source);
 };
 
-const getErrorStatus = (error: unknown): number | null => {
-  if (isAxiosError(error)) {
-    return error.response?.status ?? null;
-  }
-  const response = (error as { response?: { status?: unknown } } | null)?.response;
-  return typeof response?.status === 'number' ? response.status : null;
-};
-
-const getRetryAfterMS = (error: unknown): number => {
-  const response = (error as {
-    response?: {
-      headers?: {
-        get?: (name: string) => unknown;
-        [key: string]: unknown;
-      };
-    };
-  } | null)?.response;
-  const headers = response?.headers;
-  const raw = typeof headers?.get === 'function'
-    ? headers.get('Retry-After')
-    : headers?.['retry-after'] ?? headers?.['Retry-After'];
-  const seconds = typeof raw === 'number'
-    ? raw
-    : typeof raw === 'string' && /^\d+$/.test(raw.trim())
-      ? Number(raw.trim())
-      : Number.NaN;
-  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0;
-};
-
 export const createPostViewEventID = createClientOperationID;
 
 export class PostViewTelemetryClient {
   private queue: QueuedPostViewEvent[] = [];
   private inFlight = false;
-  private pendingFlush = false;
-  private retryTimer: number | null = null;
-  private retryAttempt = 0;
   private stopped = true;
+  private sessionGeneration = 0;
+  private activeOwnerID: number | null = null;
+  private ownerInitialized = false;
+  private ownerUnavailable = false;
+  private authPausedFingerprint: string | null = null;
   private feedObserver: IntersectionObserver | null = null;
   private feedObservations = new Map<HTMLElement, FeedObservation>();
   private emittedFeedPostsBySession = new Map<string, Set<number>>();
   private queuePersistence = createTelemetryPersistence(() => this.saveQueue());
+  private retryGate: TelemetryRetryGate;
 
   private readonly handlePageHide = () => {
     this.queuePersistence.flush();
@@ -119,8 +98,7 @@ export class PostViewTelemetryClient {
   };
 
   private readonly handleOnline = () => {
-    this.clearRetryTimer();
-    void this.flush();
+    this.scheduleFlush(0);
   };
 
   private readonly handleVisibilityChange = () => {
@@ -132,8 +110,22 @@ export class PostViewTelemetryClient {
     this.resumeVisibleFeedObservations();
   };
 
-  constructor(private readonly getCurrentUserID: CurrentUserIDGetter) {
-    this.queue = this.loadQueue();
+  constructor(
+    private readonly getCurrentUserID: CurrentUserIDGetter,
+    private readonly getAuthStateKey: AuthStateGetter = () => 'authenticated',
+  ) {
+    this.retryGate = new TelemetryRetryGate(
+      () => { if (!this.stopped) void this.flush(); },
+      () => this.persistQueue(),
+    );
+    const snapshot = this.loadSnapshot();
+    this.queue = snapshot.events;
+    this.retryGate.restore(snapshot.retry);
+    if (isValidUserID(snapshot.ownerUserId)) {
+      this.activeOwnerID = snapshot.ownerUserId;
+      this.ownerInitialized = true;
+    }
+    this.syncOwner();
     this.persistQueue();
     this.queuePersistence.flush();
   }
@@ -147,9 +139,7 @@ export class PostViewTelemetryClient {
     window.addEventListener('pagehide', this.handlePageHide);
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
     this.startFeedObserver();
-    if (this.hasCurrentUserEvents()) {
-      void this.flush();
-    }
+    void this.flush();
   }
 
   stop(): void {
@@ -158,12 +148,15 @@ export class PostViewTelemetryClient {
       window.removeEventListener('online', this.handleOnline);
       window.removeEventListener('pagehide', this.handlePageHide);
       document.removeEventListener('visibilitychange', this.handleVisibilityChange);
-      this.clearRetryTimer();
-      this.pendingFlush = false;
+      this.retryGate.cancelScheduled();
       this.teardownFeedObserver();
       this.stopped = true;
     }
     this.emittedFeedPostsBySession.clear();
+  }
+
+  refreshAuthState(): void {
+    this.scheduleFlush(0);
   }
 
   enqueue(
@@ -172,7 +165,7 @@ export class PostViewTelemetryClient {
     source: PostViewSource,
     occurredAt = new Date().toISOString(),
   ): boolean {
-    const ownerUserID = this.getCurrentUserID();
+    const ownerUserID = this.syncOwner();
     const normalizedEventID = eventID.trim();
     if (
       !isValidUserID(ownerUserID)
@@ -253,12 +246,12 @@ export class PostViewTelemetryClient {
 
   async flush(): Promise<void> {
     if (this.inFlight) {
-      this.pendingFlush = true;
       return;
     }
-
-    const currentUserID = this.getCurrentUserID();
-    if (!isValidUserID(currentUserID)) {
+    const currentUserID = this.syncOwner();
+    if (!isValidUserID(currentUserID) || !this.canSendForAuth(currentUserID)) return;
+    if (!this.retryGate.canSend()) {
+      this.scheduleFlush(0);
       return;
     }
 
@@ -269,8 +262,11 @@ export class PostViewTelemetryClient {
       return;
     }
 
+    const capturedGeneration = this.sessionGeneration;
+    const capturedRetryEpoch = this.retryGate.captureEpoch();
+    this.retryGate.cancelScheduled();
     this.inFlight = true;
-    let terminal = false;
+    let shouldDrain = false;
     try {
       const response = await apiClient.post<PostViewBatchResponse>('/post-view-events', {
         events: batch.map(({ event_id, post_id, occurred_at, source }) => ({
@@ -280,43 +276,119 @@ export class PostViewTelemetryClient {
           source,
         })),
       });
-      this.removeTerminalResults(batch, response.data, response.status);
-      this.resetRetryState();
-      terminal = true;
+      this.syncOwner();
+      if (capturedGeneration !== this.sessionGeneration) return;
+      const outcome = this.removeTerminalResults(batch, response.data);
+      if (outcome.complete) {
+        this.retryGate.clearAfterSuccess(capturedRetryEpoch);
+      } else {
+        this.recordRetryFailure();
+      }
+      shouldDrain = outcome.progressed;
     } catch (error) {
-      const status = getErrorStatus(error);
+      this.syncOwner();
+      if (capturedGeneration !== this.sessionGeneration) return;
+      const failure = getTelemetryHTTPFailure(error);
+      const status = failure.status;
       if (status === 422) {
-        const responseData = (error as { response?: { data?: PostViewBatchResponse } } | null)?.response?.data;
-        const resultIDs = this.resultIDs(responseData);
-        if (resultIDs.size > 0) {
-          this.removeEventIDs(resultIDs);
+        const responseData = failure.data as PostViewBatchResponse | undefined;
+        const outcome = this.removeTerminalResults(batch, responseData);
+        if (outcome.progressed) {
+          if (outcome.complete) {
+            this.retryGate.clearAfterSuccess(capturedRetryEpoch);
+          } else {
+            this.recordRetryFailure(failure.retryAfter, failure.date);
+          }
+          shouldDrain = true;
         } else {
           this.dropBatch(batch);
+          this.retryGate.clearAfterSuccess(capturedRetryEpoch);
+          shouldDrain = true;
         }
-        this.resetRetryState();
-        terminal = true;
+      } else if (status === 401 || status === 403) {
+        this.pauseForAuth(currentUserID);
       } else if (status !== 408 && status !== 425 && status !== 429 && !(status !== null && status >= 500 && status <= 599)) {
         if (status !== null && status >= 400 && status <= 499) {
           this.dropBatch(batch);
-          this.resetRetryState();
-          terminal = true;
+          this.retryGate.clearAfterSuccess(capturedRetryEpoch);
+          shouldDrain = true;
         } else {
-          this.scheduleRetry();
+          this.recordRetryFailure(failure.retryAfter, failure.date);
         }
       } else {
-        this.scheduleRetry(getRetryAfterMS(error));
+        this.recordRetryFailure(failure.retryAfter, failure.date);
       }
     } finally {
       this.inFlight = false;
-      if (this.pendingFlush) {
-        this.pendingFlush = false;
-        if (!this.stopped && terminal) {
-          void this.flush();
+      if (this.stopped) {
+        this.retryGate.cancelScheduled();
+      } else if (this.hasCurrentUserEvents()) {
+        if (capturedGeneration !== this.sessionGeneration || shouldDrain) {
+          this.scheduleFlush(0);
         }
-      } else if (!this.stopped && terminal && this.hasCurrentUserEvents()) {
-        void this.flush();
       }
     }
+  }
+
+  private scheduleFlush(delayMS: number): void {
+    if (this.stopped || !this.hasCurrentUserEvents()) return;
+    const ownerID = this.syncOwner();
+    if (!isValidUserID(ownerID) || !this.canSendForAuth(ownerID)) return;
+    this.retryGate.request(delayMS);
+  }
+
+  private syncOwner(): number | null {
+    const ownerID = this.getCurrentUserID();
+    if (!isValidUserID(ownerID)) {
+      if (this.ownerInitialized && !this.ownerUnavailable) {
+        this.sessionGeneration += 1;
+        this.ownerUnavailable = true;
+      }
+      return null;
+    }
+
+    if (!this.ownerInitialized) {
+      this.ownerInitialized = true;
+      this.activeOwnerID = ownerID;
+      this.persistQueue();
+    } else if (this.activeOwnerID !== ownerID) {
+      this.activeOwnerID = ownerID;
+      this.sessionGeneration += 1;
+      this.authPausedFingerprint = null;
+      this.persistQueue();
+    } else if (this.ownerUnavailable) {
+      this.sessionGeneration += 1;
+    }
+    this.ownerUnavailable = false;
+    return ownerID;
+  }
+
+  private authFingerprint(ownerID: number): string | null {
+    const authState = this.getAuthStateKey();
+    if (authState === null || authState === '') return null;
+    return `${ownerID}:${String(authState)}`;
+  }
+
+  private canSendForAuth(ownerID: number): boolean {
+    const fingerprint = this.authFingerprint(ownerID);
+    if (fingerprint === null) return false;
+    if (this.authPausedFingerprint !== null) {
+      if (this.authPausedFingerprint === fingerprint) return false;
+      this.authPausedFingerprint = null;
+    }
+    return true;
+  }
+
+  private pauseForAuth(ownerID: number): void {
+    this.authPausedFingerprint = this.authFingerprint(ownerID);
+    this.retryGate.cancelScheduled();
+    this.persistQueue();
+    this.queuePersistence.flush();
+  }
+
+  private recordRetryFailure(retryAfter?: string | null, serverDate?: string | null): void {
+    this.retryGate.recordFailure(retryAfter, serverDate);
+    this.queuePersistence.flush();
   }
 
   private startFeedObserver(): void {
@@ -413,26 +485,30 @@ export class PostViewTelemetryClient {
 
   private removeTerminalResults(
     batch: QueuedPostViewEvent[],
-    response: PostViewBatchResponse,
-    status: number,
-  ): void {
-    const resultIDs = this.resultIDs(response);
+    response: PostViewBatchResponse | undefined,
+  ): { progressed: boolean; complete: boolean } {
+    const batchIDs = new Set(batch.map(event => event.event_id));
+    const resultIDs = this.resultIDs(response, batchIDs);
     if (resultIDs.size > 0) {
       this.removeEventIDs(resultIDs);
-      return;
     }
-    if (status >= 200 && status < 300) {
-      this.dropBatch(batch);
-    }
+    return {
+      progressed: resultIDs.size > 0,
+      complete: batch.every(event => resultIDs.has(event.event_id)),
+    };
   }
 
-  private resultIDs(response: PostViewBatchResponse | undefined): Set<string> {
+  private resultIDs(response: PostViewBatchResponse | undefined, batchIDs: Set<string>): Set<string> {
     const resultIDs = new Set<string>();
     if (!Array.isArray(response?.results)) {
       return resultIDs;
     }
     for (const result of response.results) {
-      if (typeof result?.event_id === 'string' && result.event_id.trim()) {
+      if (
+        typeof result?.event_id === 'string'
+        && batchIDs.has(result.event_id)
+        && (result.status === 'accepted' || result.status === 'rejected')
+      ) {
         resultIDs.add(result.event_id);
       }
     }
@@ -450,52 +526,35 @@ export class PostViewTelemetryClient {
     this.removeEventIDs(eventIDs);
   }
 
-  private scheduleRetry(minimumDelayMS = 0): void {
-    if (this.stopped || this.retryTimer !== null) {
-      return;
-    }
-    const delay = Math.max(
-      retryDelaysMS[Math.min(this.retryAttempt, retryDelaysMS.length - 1)],
-      minimumDelayMS,
-    );
-    this.retryAttempt = Math.min(this.retryAttempt + 1, retryDelaysMS.length - 1);
-    this.retryTimer = window.setTimeout(() => {
-      this.retryTimer = null;
-      void this.flush();
-    }, delay);
-  }
-
-  private resetRetryState(): void {
-    this.clearRetryTimer();
-    this.retryAttempt = 0;
-  }
-
-  private clearRetryTimer(): void {
-    if (this.retryTimer !== null) {
-      window.clearTimeout(this.retryTimer);
-      this.retryTimer = null;
-    }
-  }
-
   private hasCurrentUserEvents(): boolean {
-    const currentUserID = this.getCurrentUserID();
+    const currentUserID = this.syncOwner();
     return isValidUserID(currentUserID)
       && this.queue.some(event => event.owner_user_id === currentUserID);
   }
 
-  private loadQueue(): QueuedPostViewEvent[] {
+  private loadSnapshot(): PostViewSnapshot {
     try {
       const raw = sessionStorage.getItem(storageKey);
       if (!raw) {
-        return [];
+        return { events: [], retry: { retryNotBeforeEpochMs: 0, retryAttempt: 0 }, ownerUserId: null };
       }
       const parsed: unknown = JSON.parse(raw);
-      if (!Array.isArray(parsed)) {
-        return [];
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { events: [], retry: { retryNotBeforeEpochMs: 0, retryAttempt: 0 }, ownerUserId: null };
       }
-      return parsed.filter(isValidQueuedEvent).slice(-maxBufferedEvents);
+      const snapshot = parsed as Partial<PostViewSnapshot>;
+      const retry = snapshot.retry && typeof snapshot.retry === 'object'
+        ? snapshot.retry
+        : { retryNotBeforeEpochMs: 0, retryAttempt: 0 };
+      return {
+        events: Array.isArray(snapshot.events)
+          ? snapshot.events.filter(isValidQueuedEvent).slice(-maxBufferedEvents)
+          : [],
+        retry,
+        ownerUserId: isValidUserID(snapshot.ownerUserId) ? snapshot.ownerUserId : null,
+      };
     } catch {
-      return [];
+      return { events: [], retry: { retryNotBeforeEpochMs: 0, retryAttempt: 0 }, ownerUserId: null };
     }
   }
 
@@ -505,7 +564,12 @@ export class PostViewTelemetryClient {
 
   private saveQueue(): void {
     try {
-      sessionStorage.setItem(storageKey, JSON.stringify(this.queue));
+      const snapshot: PostViewSnapshot = {
+        events: this.queue,
+        retry: this.retryGate.snapshot(),
+        ownerUserId: this.activeOwnerID,
+      };
+      sessionStorage.setItem(storageKey, JSON.stringify(snapshot));
     } catch {
       // Storage can be unavailable in privacy-restricted browser contexts.
     }
@@ -514,9 +578,10 @@ export class PostViewTelemetryClient {
 
 export function initializePostViewTelemetry(
   getCurrentUserID: CurrentUserIDGetter,
+  getAuthStateKey?: AuthStateGetter,
 ): PostViewTelemetryClient {
   if (!sharedClient) {
-    sharedClient = new PostViewTelemetryClient(getCurrentUserID);
+    sharedClient = new PostViewTelemetryClient(getCurrentUserID, getAuthStateKey);
     sharedClient.start();
   }
   return sharedClient;

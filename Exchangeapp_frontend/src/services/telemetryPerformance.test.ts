@@ -13,9 +13,9 @@ const tracking = (id: number) => ({
   token: 'token-' + id, expires_at: '2099-01-01T00:00:00Z',
 });
 const payload = { foreground_time_ms: 1000, scroll_progress_percent: 50, exit_type: 'route_leave' };
-const recommendationKey = 'recommendation_telemetry_queue_v2';
-const viewKey = 'post_view_telemetry_queue_v1';
-const saved = (key: string) => JSON.parse(sessionStorage.getItem(key) ?? '[]');
+const recommendationKey = 'recommendation_telemetry_snapshot_v3';
+const viewKey = 'post_view_telemetry_snapshot_v2';
+const saved = (key: string) => JSON.parse(sessionStorage.getItem(key) ?? '{"events":[]}').events;
 
 class Observer {
   static current: Observer;
@@ -47,7 +47,7 @@ describe('telemetry hot-path budgets', () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1000 });
     Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
-    recommendation = new RecommendationTelemetryClient(() => null);
+    recommendation = new RecommendationTelemetryClient(() => null, () => 7);
     recommendation.start();
   });
 

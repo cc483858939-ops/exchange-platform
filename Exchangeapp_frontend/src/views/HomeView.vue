@@ -296,7 +296,10 @@ const initialHomeDocumentEntryTab: FeedTab = route.query.tab === 'following'
 if (initialHomeDocumentEntry) {
   homeTimeline.setScrollTop(initialHomeDocumentEntryTab, 0);
 }
-const recommendationTelemetry = getRecommendationTelemetry(() => authStore.token);
+const recommendationTelemetry = getRecommendationTelemetry(
+  () => authStore.token,
+  () => authStore.isAuthenticated ? authStore.currentIdentity?.id ?? null : null,
+);
 const getHomePostViewTelemetry = () => getPostViewTelemetry();
 
 const skeletonPosts = [0, 1, 2];
@@ -382,6 +385,7 @@ const releaseHomeViewSessionsForViewer = (viewerID: number | null) => {
 
 let lastHomeViewerID = currentViewerID();
 let lastHomeAuthenticated = authStore.isAuthenticated;
+let lastHomeToken = authStore.token;
 
 const activeTab = computed<FeedTab>(() => homeTimeline.activeTab);
 const feedTopPinned = reactive<Record<FeedTab, boolean>>({
@@ -1534,17 +1538,22 @@ watch(
 );
 
 watch(
-  [() => currentViewerID(), () => authStore.isAuthenticated],
-  ([viewerID, isAuthenticated]) => {
-    if (viewerID === lastHomeViewerID && isAuthenticated === lastHomeAuthenticated) {
+  [() => currentViewerID(), () => authStore.isAuthenticated, () => authStore.token],
+  ([viewerID, isAuthenticated, token]) => {
+    const identityChanged = viewerID !== lastHomeViewerID || isAuthenticated !== lastHomeAuthenticated;
+    const tokenChanged = token !== lastHomeToken;
+    if (!identityChanged && !tokenChanged) {
       return;
     }
-    recommendationTelemetry.clearSession();
-    releaseHomeViewSessionsForViewer(lastHomeViewerID);
-    homeViewSessionVersion['for-you'] += 1;
-    homeViewSessionVersion.following += 1;
+    recommendationTelemetry.refreshOwner?.();
+    if (identityChanged) {
+      releaseHomeViewSessionsForViewer(lastHomeViewerID);
+      homeViewSessionVersion['for-you'] += 1;
+      homeViewSessionVersion.following += 1;
+    }
     lastHomeViewerID = viewerID;
     lastHomeAuthenticated = isAuthenticated;
+    lastHomeToken = token;
   },
 );
 
