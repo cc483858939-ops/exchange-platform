@@ -64,6 +64,8 @@ const toAuthRequestError = (error: unknown, fallback: string): AuthRequestError 
   return new AuthRequestError(message ?? fallback, message ? code : null);
 };
 
+type AuthReconcileMode = 'best-effort' | 'require-readable';
+
 const authErrorMessages: Record<string, string> = {
   AUTH_TOKEN_MISSING: 'Authentication required.',
   AUTH_TOKEN_INVALID: 'Authentication failed.',
@@ -288,9 +290,15 @@ export const useAuthStore = defineStore('auth', () => {
       : readStoredIdentity(next.userId) ?? minimalIdentity(next.userId);
   };
 
-  const reconcilePersistedAuthState = (changedStorageKey?: string | null) => {
+  const reconcilePersistedAuthState = (
+    changedStorageKey?: string | null,
+    mode: AuthReconcileMode = 'best-effort',
+  ) => {
     const result = readPersistedAuthSession();
-    if (result.status === 'unavailable') return;
+    if (result.status === 'unavailable') {
+      if (mode === 'require-readable') throw new AuthStorageUnavailableError();
+      return;
+    }
 
     const next = result.status === 'valid' ? result.session : null;
     if (pendingLocalLogoutSessionId && next?.sessionId === pendingLocalLogoutSessionId) {
@@ -325,7 +333,7 @@ export const useAuthStore = defineStore('auth', () => {
   ) => {
     if (sessionVersion.value !== operationVersion) throw new AuthSessionChangedError();
     await runWithSessionMutationLock(() => {
-      reconcilePersistedAuthState();
+      reconcilePersistedAuthState(undefined, 'require-readable');
       if (sessionVersion.value !== operationVersion) {
         throw new AuthSessionChangedError();
       }

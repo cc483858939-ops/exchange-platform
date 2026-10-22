@@ -124,6 +124,7 @@ const deferred = <T>() => {
 
 const originalLocksDescriptor = Object.getOwnPropertyDescriptor(navigator, 'locks');
 const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(window, 'localStorage');
+const originalStorageGetItem = Storage.prototype.getItem;
 const originalStorageSetItem = Storage.prototype.setItem;
 const originalStorageRemoveItem = Storage.prototype.removeItem;
 let stores: Array<ReturnType<typeof useAuthStore>> = [];
@@ -242,6 +243,142 @@ describe('auth store cross-tab session coordination', () => {
     expect(store.isAuthenticated).toBe(false);
     expect(store.currentIdentity).toBeNull();
     expect(readStoredSession()).toBeNull();
+  });
+
+  it.each(['login', 'register'] as const)(
+    '%s does not overwrite a persisted session when credential reads fail but writes remain available',
+    async method => {
+      seedV2Auth(otherIdentity, 'bob-access', 'bob-refresh', 'sid-8', 'revision-bob');
+      const sessionBefore = localStorage.getItem(AUTH_SESSION_STORAGE_KEY);
+      const profileBefore = localStorage.getItem(AUTH_USER_STORAGE_KEY);
+      const store = createAuthStore();
+      mocks.post.mockResolvedValueOnce({
+        data: authResponse(fullIdentity, 'alice-access', 'alice-refresh'),
+      });
+      const credentialWrites = vi.spyOn(Storage.prototype, 'setItem');
+      const credentialReads = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (
+        this: Storage,
+        key: string,
+      ) {
+        if (key === AUTH_SESSION_STORAGE_KEY) {
+          throw new DOMException('Blocked', 'SecurityError');
+        }
+        return originalStorageGetItem.call(this, key);
+      });
+
+      await expect(store[method]('alice', 'secret123')).rejects.toMatchObject({
+        code: 'AUTH_STORAGE_UNAVAILABLE',
+      });
+
+      credentialReads.mockRestore();
+      expect(credentialWrites).not.toHaveBeenCalledWith(AUTH_SESSION_STORAGE_KEY, expect.any(String));
+      expect(localStorage.getItem(AUTH_SESSION_STORAGE_KEY)).toBe(sessionBefore);
+      expect(localStorage.getItem(AUTH_USER_STORAGE_KEY)).toBe(profileBefore);
+      expect(store.isAuthenticated).toBe(true);
+      expect(store.currentIdentity).toEqual(otherIdentity);
+      expect(store.token).toBe(bearerFor('bob-access', otherIdentity, 'sid-8'));
+    },
+  );
+
+  it('does not let an in-flight login overwrite another tab session when its final snapshot read is unavailable', async () => {
+    const loginResponse = deferred<{ data: ReturnType<typeof authResponse> }>();
+    mocks.post.mockReturnValueOnce(loginResponse.promise);
+    const store = createAuthStore();
+    const login = store.login('alice', 'secret123');
+    await vi.waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(1));
+
+    const otherSession = persistedSession(otherIdentity, 'bob-access', 'bob-refresh', 'sid-8', 'revision-bob');
+    writePersistedAuthSession(otherSession);
+    localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(otherIdentity));
+    const sessionBefore = localStorage.getItem(AUTH_SESSION_STORAGE_KEY);
+    const profileBefore = localStorage.getItem(AUTH_USER_STORAGE_KEY);
+    const credentialWrites = vi.spyOn(Storage.prototype, 'setItem');
+    const credentialReads = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (
+      this: Storage,
+      key: string,
+    ) {
+      if (key === AUTH_SESSION_STORAGE_KEY) {
+        throw new DOMException('Blocked', 'SecurityError');
+      }
+      return originalStorageGetItem.call(this, key);
+    });
+
+    loginResponse.resolve({
+      data: authResponse(fullIdentity, 'alice-access', 'alice-refresh'),
+    });
+    await expect(login).rejects.toMatchObject({ code: 'AUTH_STORAGE_UNAVAILABLE' });
+
+    credentialReads.mockRestore();
+    expect(credentialWrites).not.toHaveBeenCalledWith(AUTH_SESSION_STORAGE_KEY, expect.any(String));
+    expect(localStorage.getItem(AUTH_SESSION_STORAGE_KEY)).toBe(sessionBefore);
+    expect(localStorage.getItem(AUTH_USER_STORAGE_KEY)).toBe(profileBefore);
+    expect(store.isAuthenticated).toBe(false);
+    expect(store.currentIdentity).toBeNull();
+    expect(store.token).toBeNull();
+  });
+
+  it('rejects an in-flight login after a readable other-tab session is discovered', async () => {
+    const loginResponse = deferred<{ data: ReturnType<typeof authResponse> }>();
+    mocks.post.mockReturnValueOnce(loginResponse.promise);
+    const store = createAuthStore();
+    const login = store.login('alice', 'secret123');
+    await vi.waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(1));
+
+    const otherSession = persistedSession(otherIdentity, 'bob-access', 'bob-refresh', 'sid-8', 'revision-bob');
+    writePersistedAuthSession(otherSession);
+    localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(otherIdentity));
+    const sessionBefore = localStorage.getItem(AUTH_SESSION_STORAGE_KEY);
+    loginResponse.resolve({
+      data: authResponse(fullIdentity, 'alice-access', 'alice-refresh'),
+    });
+
+    await expect(login).rejects.toBeInstanceOf(AuthSessionChangedError);
+    expect(localStorage.getItem(AUTH_SESSION_STORAGE_KEY)).toBe(sessionBefore);
+    expect(readStoredSession()).toEqual(otherSession);
+    expect(store.isAuthenticated).toBe(true);
+    expect(store.currentIdentity).toEqual(otherIdentity);
+    expect(store.token).toBe(bearerFor('bob-access', otherIdentity, 'sid-8'));
+  });
+
+  it('rejects a login when the localStorage getter becomes unavailable at commit time', async () => {
+    const store = createAuthStore();
+    mocks.post.mockResolvedValueOnce({ data: authResponse() });
+    const credentialWrites = vi.spyOn(Storage.prototype, 'setItem');
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get: () => { throw new DOMException('Blocked', 'SecurityError'); },
+    });
+
+    await expect(store.login('alice', 'secret123')).rejects.toMatchObject({
+      code: 'AUTH_STORAGE_UNAVAILABLE',
+    });
+
+    Object.defineProperty(window, 'localStorage', originalLocalStorageDescriptor!);
+    expect(credentialWrites).not.toHaveBeenCalledWith(AUTH_SESSION_STORAGE_KEY, expect.any(String));
+    expect(store.isAuthenticated).toBe(false);
+    expect(store.currentIdentity).toBeNull();
+    expect(readStoredSession()).toBeNull();
+  });
+
+  it('allows login retry after credential reads recover without restarting the store', async () => {
+    const store = createAuthStore();
+    mocks.post
+      .mockResolvedValueOnce({ data: authResponse() })
+      .mockResolvedValueOnce({ data: authResponse(fullIdentity, 'retry-access', 'retry-refresh') });
+    const credentialReads = vi.spyOn(Storage.prototype, 'getItem').mockImplementationOnce(() => {
+      throw new DOMException('Blocked', 'SecurityError');
+    });
+
+    await expect(store.login('alice', 'secret123')).rejects.toMatchObject({
+      code: 'AUTH_STORAGE_UNAVAILABLE',
+    });
+    credentialReads.mockRestore();
+    expect(store.isAuthenticated).toBe(false);
+
+    await expect(store.login('alice', 'secret123')).resolves.toBeUndefined();
+    expect(store.isAuthenticated).toBe(true);
+    expect(store.currentIdentity).toEqual(fullIdentity);
+    expect(readStoredSession()?.refreshToken).toBe('retry-refresh');
   });
 
   it('finishes login when only the profile cache write fails and uses the new identity', async () => {
