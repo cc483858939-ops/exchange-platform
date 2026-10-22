@@ -34,11 +34,21 @@ type CandidateSetSummary struct {
 	SemanticCount                    int
 	FollowingCount                   int
 	RecentCount                      int
+	HistoricalCount                  int
+	SoftCount                        int
 	RecentPostIDs                    []uint
 	TrendingCount                    int
 	OnboardingInterestActive         bool
 	OnboardingInterestCandidateCount int
 }
+
+type ContinuationStatus string
+
+const (
+	ContinuationAvailable     ContinuationStatus = "available"
+	ContinuationBudgetLimited ContinuationStatus = "budget_limited"
+	ContinuationExhausted     ContinuationStatus = "exhausted"
+)
 
 type ServeResult struct {
 	Viewer                           Viewer
@@ -59,6 +69,7 @@ type ServeResult struct {
 	OnboardingInterestActive         bool
 	OnboardingInterestCandidateCount int
 	Depleted                         bool
+	ContinuationStatus               ContinuationStatus
 	NextCursor                       string
 	PoolID                           string
 	CacheHit                         bool
@@ -69,6 +80,15 @@ type ServeResult struct {
 	softRankedCandidates             []RankedCandidate
 	snapshotPrepared                 bool
 	traceGenerationDuration          time.Duration
+	historicalCursor                 *HistoricalCursor
+	historicalExhausted              bool
+	historicalBudgetLimited          bool
+	historicalScanned                int
+	historicalBatches                int
+	oldestHistoricalCreatedAt        time.Time
+	softCursor                       *HistoricalCursor
+	softExhausted                    bool
+	softBudgetLimited                bool
 }
 
 type Service interface {
@@ -133,22 +153,33 @@ type Metrics interface {
 	ObserveProfileAge(age time.Duration)
 }
 
+// RecommendationDiagnosticsMetrics exposes bounded tier and continuation
+// telemetry without widening the base metrics contract used by adapters.
+type RecommendationDiagnosticsMetrics interface {
+	RecordHistoricalScan(tier, status string, scanned, batches int, oldestAge, duration time.Duration)
+	RecordUnderfilled(status string)
+	AddMapperRejected(count int)
+}
+
 type NoopMetrics struct{}
 
-func (NoopMetrics) RecordRequest(string, string)                          {}
-func (NoopMetrics) ObserveCandidateCount(int)                             {}
-func (NoopMetrics) ObserveResultCount(int)                                {}
-func (NoopMetrics) ObserveGenerationDuration(string, time.Duration)       {}
-func (NoopMetrics) AddRecallCandidates(string, int)                       {}
-func (NoopMetrics) AddResultsBySource(string, int)                        {}
-func (NoopMetrics) AddResultsByClass(string, int)                         {}
-func (NoopMetrics) AddResultsBySelection(string, string, int)             {}
-func (NoopMetrics) AddTrackingResults(string, int)                        {}
-func (NoopMetrics) RecordHistoryLoadFailure(ViewerKind)                   {}
-func (NoopMetrics) RecordSnapshotOutcome(string)                          {}
-func (NoopMetrics) RecordTracePersistFailure()                            {}
-func (NoopMetrics) RecordTraceEnqueue(TraceEnqueueResult)                 {}
-func (NoopMetrics) SetTraceQueueDepth(int)                                {}
-func (NoopMetrics) RecordTracePersist(TracePersistOutcome, time.Duration) {}
-func (NoopMetrics) RecordProfileLoad(string)                              {}
-func (NoopMetrics) ObserveProfileAge(time.Duration)                       {}
+func (NoopMetrics) RecordRequest(string, string)                                                {}
+func (NoopMetrics) ObserveCandidateCount(int)                                                   {}
+func (NoopMetrics) ObserveResultCount(int)                                                      {}
+func (NoopMetrics) ObserveGenerationDuration(string, time.Duration)                             {}
+func (NoopMetrics) AddRecallCandidates(string, int)                                             {}
+func (NoopMetrics) AddResultsBySource(string, int)                                              {}
+func (NoopMetrics) AddResultsByClass(string, int)                                               {}
+func (NoopMetrics) AddResultsBySelection(string, string, int)                                   {}
+func (NoopMetrics) AddTrackingResults(string, int)                                              {}
+func (NoopMetrics) RecordHistoryLoadFailure(ViewerKind)                                         {}
+func (NoopMetrics) RecordSnapshotOutcome(string)                                                {}
+func (NoopMetrics) RecordTracePersistFailure()                                                  {}
+func (NoopMetrics) RecordTraceEnqueue(TraceEnqueueResult)                                       {}
+func (NoopMetrics) SetTraceQueueDepth(int)                                                      {}
+func (NoopMetrics) RecordTracePersist(TracePersistOutcome, time.Duration)                       {}
+func (NoopMetrics) RecordProfileLoad(string)                                                    {}
+func (NoopMetrics) ObserveProfileAge(time.Duration)                                             {}
+func (NoopMetrics) RecordHistoricalScan(string, string, int, int, time.Duration, time.Duration) {}
+func (NoopMetrics) RecordUnderfilled(string)                                                    {}
+func (NoopMetrics) AddMapperRejected(int)                                                       {}

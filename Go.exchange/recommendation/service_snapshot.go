@@ -9,16 +9,18 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
+	"Go.exchange/config"
 	"Go.exchange/models"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
 	"gorm.io/gorm"
 )
 
-const candidateSnapshotStrategyVersion = "select-next-page-v1"
+const candidateSnapshotStrategyVersion = "tiered-history-keyset-v2"
 
 var traceDropLogCount uint64
 
@@ -45,7 +47,8 @@ func (service *RecommendationService) createInitialSnapshot(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	if request.Viewer.Kind != ViewerAuthenticated || len(result.Selected) == 0 {
+	if (request.Viewer.Kind != ViewerAuthenticated && request.Viewer.Kind != ViewerGuest) ||
+		(request.Viewer.Kind == ViewerGuest && request.Viewer.GuestSessionID == "") {
 		return nil
 	}
 	maxCandidates := service.config.Recommendation.Snapshot.MaxCandidates
@@ -68,19 +71,26 @@ func (service *RecommendationService) createInitialSnapshot(ctx context.Context,
 	}
 	appendRanked(result.freshRankedCandidates, SelectionPhaseFresh)
 	appendRanked(result.softRankedCandidates, SelectionPhaseSoft)
-	if len(candidates) == 0 {
-		return nil
-	}
 	now := request.Now.UTC()
+	recentCutoff, _ := config.RecommendationPrimaryWindowBounds(now, service.config.Recommendation.PrimaryWindowDays)
 	snapshot := CandidatePoolSnapshot{
 		Version: candidatePoolSnapshotVersion, ID: uuid.NewString(),
 		OwnerDigest: codec.OwnerDigest(request.Viewer), CreatedAt: now,
-		ExpiresAt: now.Add(time.Duration(service.config.Recommendation.Snapshot.TTLSeconds) * time.Second),
-		PageSize:  request.Limit, EmbeddingVersion: servingVersion,
+		RecentCutoff: recentCutoff,
+		ExpiresAt:    now.Add(time.Duration(service.config.Recommendation.Snapshot.TTLSeconds) * time.Second),
+		PageSize:     request.Limit, EmbeddingVersion: servingVersion,
 		RankerConfigHash:  RankerConfigHash(service.config.Recommendation, servingVersion),
 		ProfileComputedAt: result.Profile.ComputedAt.UTC(), LanguageKey: recommendationLanguageKey(request.BrowserLanguage, result.LanguageContext),
-		StrategyVersion: SelectionPolicyVersion + ":" + candidateSnapshotStrategyVersion,
-		Candidates:      candidates,
+		StrategyVersion:             SelectionPolicyVersion + ":" + candidateSnapshotStrategyVersion,
+		Candidates:                  candidates,
+		HistoricalCursor:            cloneHistoricalCursor(result.historicalCursor),
+		HistoricalExhausted:         result.historicalExhausted,
+		HistoricalBudgetLimited:     result.historicalBudgetLimited,
+		HistoricalCandidatesScanned: result.historicalScanned,
+		HistoricalBatches:           result.historicalBatches,
+		OldestHistoricalCreatedAt:   result.oldestHistoricalCreatedAt,
+		SoftCursor:                  cloneHistoricalCursor(result.softCursor),
+		SoftExhausted:               result.softExhausted,
 	}
 	pageZero := cachedPageFromSelected(0, request.RequestID, now, generationDuration, result.Selected)
 	snapshot.Pages = append(snapshot.Pages, pageZero)
@@ -115,6 +125,8 @@ func (service *RecommendationService) createInitialSnapshot(ctx context.Context,
 		snapshot.Pages = append(snapshot.Pages, page)
 		snapshot.UsedPostIDs = appendUniqueIDs(snapshot.UsedPostIDs, cachedPagePostIDs(page)...)
 	}
+	snapshot.UsedPostIDs = snapshotUsedPostIDs(snapshot.Pages)
+	snapshot.Exhausted = snapshotCanDeclareExhaustedAfterPage(snapshot, 0)
 	if err := service.dependencies.Snapshots.Create(
 		ctx, snapshot, time.Duration(service.config.Recommendation.Snapshot.TTLSeconds)*time.Second, defaultSnapshotMaxBytes,
 	); err != nil {
@@ -124,9 +136,19 @@ func (service *RecommendationService) createInitialSnapshot(ctx context.Context,
 	result.snapshotPrepared = true
 	result.traceGenerationDuration = generationDuration
 	result.finalization = &servingFinalization{snapshotID: snapshot.ID, pageIndex: 0, request: request, generationDuration: generationDuration}
-	result.NextCursor, err = codec.Encode(snapshot.ID, 1, snapshot.PageSize, request.Viewer, snapshot.ExpiresAt)
-	if err != nil {
-		return err
+	result.Depleted = snapshot.Exhausted
+	if result.Depleted {
+		result.ContinuationStatus = ContinuationExhausted
+	} else if result.historicalBudgetLimited || result.softBudgetLimited {
+		result.ContinuationStatus = ContinuationBudgetLimited
+	} else {
+		result.ContinuationStatus = ContinuationAvailable
+	}
+	if !result.Depleted {
+		result.NextCursor, err = codec.Encode(snapshot.ID, 1, snapshot.PageSize, request.Viewer, snapshot.ExpiresAt)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -134,7 +156,7 @@ func (service *RecommendationService) createInitialSnapshot(ctx context.Context,
 func (service *RecommendationService) serveSnapshotCursor(ctx context.Context, request ServeRequest, servingVersion string, served ServedHistory) (ServeResult, ServeRequest, error) {
 	codec, err := service.cursorCodec()
 	if err != nil {
-		return ServeResult{}, request, ErrInvalidCursor
+		return ServeResult{}, request, ErrSnapshotUnavailable
 	}
 	payload, err := codec.Decode(request.Cursor, request.Viewer, request.Limit, request.Now)
 	if err != nil {
@@ -144,7 +166,7 @@ func (service *RecommendationService) serveSnapshotCursor(ctx context.Context, r
 	if err != nil {
 		return ServeResult{}, request, err
 	}
-	if snapshot.OwnerDigest != payload.OwnerDigest || snapshot.PageSize != request.Limit || snapshot.ID != payload.SnapshotID || snapshot.ExpiresAt.UTC().Unix() != payload.ExpiresAt {
+	if snapshot.Version != candidatePoolSnapshotVersion || snapshot.OwnerDigest != payload.OwnerDigest || snapshot.PageSize != request.Limit || snapshot.ID != payload.SnapshotID || snapshot.ExpiresAt.UTC().Unix() != payload.ExpiresAt {
 		return ServeResult{}, request, ErrInvalidCursor
 	}
 	if !snapshot.ExpiresAt.After(request.Now) {
@@ -154,9 +176,12 @@ func (service *RecommendationService) serveSnapshotCursor(ctx context.Context, r
 		snapshot.StrategyVersion != SelectionPolicyVersion+":"+candidateSnapshotStrategyVersion {
 		return ServeResult{}, request, ErrCursorExpired
 	}
-	profile, err := service.loadProfile(ctx, request.Viewer.UserID, servingVersion, request.Now, true)
-	if err != nil {
-		return ServeResult{}, request, err
+	profile := Profile{}
+	if request.Viewer.Kind == ViewerAuthenticated {
+		profile, err = service.loadProfile(ctx, request.Viewer.UserID, servingVersion, request.Now, true)
+		if err != nil {
+			return ServeResult{}, request, err
+		}
 	}
 	language := BuildLanguageContext(
 		request.BrowserLanguage,
@@ -164,7 +189,8 @@ func (service *RecommendationService) serveSnapshotCursor(ctx context.Context, r
 		profile.LanguageEvidence,
 		languageConfig(service.config.Recommendation),
 	)
-	if !profile.ComputedAt.UTC().Equal(snapshot.ProfileComputedAt.UTC()) || recommendationLanguageKey(request.BrowserLanguage, language) != snapshot.LanguageKey {
+	if (request.Viewer.Kind == ViewerAuthenticated && !profile.ComputedAt.UTC().Equal(snapshot.ProfileComputedAt.UTC())) ||
+		recommendationLanguageKey(request.BrowserLanguage, language) != snapshot.LanguageKey {
 		return ServeResult{}, request, ErrCursorExpired
 	}
 	if _, ok := service.dependencies.Candidates.(SnapshotCandidateRepository); !ok {
@@ -191,6 +217,7 @@ func (service *RecommendationService) serveSnapshotCursor(ctx context.Context, r
 		}
 		updated.Pages = append(updated.Pages, page)
 		updated.UsedPostIDs = appendUniqueIDs(updated.UsedPostIDs, cachedPagePostIDs(page)...)
+		updated.Exhausted = snapshotCanDeclareExhaustedAfterPage(updated, page.Index)
 		updated.Revision = snapshot.Revision + 1
 		committed, err := service.dependencies.Snapshots.CompareAndSwap(ctx, snapshot.ID, snapshot.Revision, updated, defaultSnapshotMaxBytes)
 		if err != nil {
@@ -215,32 +242,18 @@ func (service *RecommendationService) buildSnapshotPage(ctx context.Context, req
 	}
 	requestID := uuid.NewString()
 	start := time.Now()
-	page, err := service.selectSnapshotPage(ctx, request, servingVersion, profile, snapshot, pageIndex, requestID)
+	page, err := service.selectSnapshotPage(ctx, request, servingVersion, profile, snapshot, pageIndex, requestID, served)
 	if err != nil {
 		return CachedPage{}, err
 	}
-	if len(page.Items) == 0 && !snapshot.Exhausted {
-		// A depleted candidate pool is refreshed at most once per cursor request.
-		fresh, err := service.rebuildSnapshotCandidates(ctx, request, servingVersion, *snapshot, served)
-		if err != nil {
-			return CachedPage{}, err
-		}
-		*snapshot = fresh
-		if !snapshot.Exhausted {
-			page, err = service.selectSnapshotPage(ctx, request, servingVersion, profile, snapshot, pageIndex, requestID)
-			if err != nil {
-				return CachedPage{}, err
-			}
-		}
-		if len(page.Items) == 0 {
-			snapshot.Exhausted = true
-		}
+	if len(page.Items) == 0 && snapshotCanDeclareExhaustedAfterPage(*snapshot, page.Index) {
+		snapshot.Exhausted = true
 	}
 	page.GenerationLatencyMS = time.Since(start).Milliseconds()
 	return page, nil
 }
 
-func (service *RecommendationService) selectSnapshotPage(ctx context.Context, request ServeRequest, servingVersion string, profile Profile, snapshot *CandidatePoolSnapshot, pageIndex int, requestID string) (CachedPage, error) {
+func (service *RecommendationService) selectSnapshotPage(ctx context.Context, request ServeRequest, servingVersion string, profile Profile, snapshot *CandidatePoolSnapshot, pageIndex int, requestID string, served ServedHistory) (CachedPage, error) {
 	used := make(map[uint]struct{}, len(snapshot.UsedPostIDs))
 	for _, id := range snapshot.UsedPostIDs {
 		used[id] = struct{}{}
@@ -254,10 +267,6 @@ func (service *RecommendationService) selectSnapshotPage(ctx context.Context, re
 			remaining = append(remaining, candidate)
 		}
 	}
-	if len(remaining) == 0 {
-		snapshot.Candidates = nil
-		return CachedPage{Index: pageIndex, RequestID: requestID, ServedAt: request.Now}, nil
-	}
 	cacheByID := make(map[uint]CachedCandidate, len(remaining))
 	candidates := make([]Candidate, 0, len(remaining))
 	for _, cached := range remaining {
@@ -269,7 +278,7 @@ func (service *RecommendationService) selectSnapshotPage(ctx context.Context, re
 	var err error
 	if repository, ok := service.dependencies.Candidates.(SnapshotPageRepository); ok {
 		contextIDs := selectedSnapshotContextIDs(*snapshot, pageIndex)
-		query := recommendationCandidateQuery(servingVersion, request.Viewer.UserID, profile, nil, request.Now, service.config.Recommendation, false)
+		query := recommendationSnapshotCandidateQuery(servingVersion, request.Viewer.UserID, profile, request.Now, service.config.Recommendation)
 		var contextEmbeddings map[uint][]float32
 		eligible, contextEmbeddings, err = repository.LoadSnapshotPage(ctx, query, candidates, contextIDs)
 		if err != nil {
@@ -304,7 +313,7 @@ func (service *RecommendationService) selectSnapshotPage(ctx context.Context, re
 	}
 	// Drop posts that have become ineligible so later pages do not keep
 	// checking the same stale IDs from this pool.
-	remainingCandidates := snapshot.Candidates[:0]
+	remainingCandidates := make([]CachedCandidate, 0, len(remaining))
 	for _, cached := range remaining {
 		if _, exists := eligibleIDs[cached.PostID]; exists {
 			remainingCandidates = append(remainingCandidates, cached)
@@ -320,56 +329,147 @@ func (service *RecommendationService) selectSnapshotPage(ctx context.Context, re
 			fresh = append(fresh, item)
 		}
 	}
-	selected := selectRankedPage(fresh, soft, prior, snapshot.PageSize, request.Now, requestID, selectionConfig(service.config.Recommendation))
+	selected := selectRankedPage(fresh, nil, prior, snapshot.PageSize, request.Now, requestID, selectionConfig(service.config.Recommendation))
+	maxPool := candidatePoolLimit(service.config.Recommendation.Snapshot.MaxCandidates)
+	maxScan := service.config.Recommendation.HistoricalBackfill.Normalized().MaxScanPerRequest
+	snapshot.HistoricalBudgetLimited = false
+	usedCandidateIDs := snapshotCandidateIDSet(snapshot, true)
+	historicalState := historicalScanState{cursor: cloneHistoricalCursor(snapshot.HistoricalCursor), exhausted: snapshot.HistoricalExhausted}
+	if len(selected) < snapshot.PageSize && !snapshot.HistoricalExhausted {
+		remainingCapacity := maxPool - len(snapshot.Candidates)
+		if remainingCapacity > 0 {
+			initialRankedCount := len(fresh)
+			extended, nextSelected, _, state, supplementErr := service.supplementRecallTier(
+				ctx, request, servingVersion, profilePointer(profile, request.Viewer.Kind),
+				BuildLanguageContext(request.BrowserLanguage, LanguagePrior{ZH: profile.LanguageZHWeight, JA: profile.LanguageJAWeight, EN: profile.LanguageENWeight}, profile.LanguageEvidence, languageConfig(service.config.Recommendation)),
+				served, nil, CandidateRangeHistorical, snapshot.RecentCutoff, false,
+				snapshot.HistoricalCursor, maxScan, remainingCapacity, prior, usedCandidateIDs, fresh, selected,
+			)
+			if supplementErr != nil {
+				return CachedPage{}, supplementErr
+			}
+			fresh = extended
+			selected = nextSelected
+			historicalState = state
+			snapshot.HistoricalCursor = cloneHistoricalCursor(state.cursor)
+			snapshot.HistoricalExhausted = state.exhausted
+			snapshot.HistoricalBudgetLimited = state.budgetLimited
+			snapshot.HistoricalCandidatesScanned += state.scanned
+			snapshot.HistoricalBatches += state.batches
+			if !state.oldestCreatedAt.IsZero() && (snapshot.OldestHistoricalCreatedAt.IsZero() || state.oldestCreatedAt.Before(snapshot.OldestHistoricalCreatedAt)) {
+				snapshot.OldestHistoricalCreatedAt = state.oldestCreatedAt
+			}
+			for _, item := range fresh[initialRankedCount:] {
+				if item.Post.ID == 0 {
+					continue
+				}
+				cached := cachedRankedCandidate(item, SelectionPhaseFresh)
+				cacheByID[cached.PostID] = cached
+				snapshot.Candidates = append(snapshot.Candidates, cached)
+			}
+		} else {
+			snapshot.HistoricalBudgetLimited = true
+		}
+	}
+	if len(selected) < snapshot.PageSize && snapshot.HistoricalExhausted {
+		selected = selectRankedPage(fresh, soft, prior, snapshot.PageSize, request.Now, requestID, selectionConfig(service.config.Recommendation))
+		if len(selected) < snapshot.PageSize && !snapshot.SoftExhausted {
+			remainingCapacity := maxPool - len(snapshot.Candidates)
+			softBudget := maxScan - historicalState.scanned
+			if softBudget < 0 {
+				softBudget = 0
+			}
+			if remainingCapacity > 0 {
+				extended, nextSelected, _, state, supplementErr := service.supplementRecallTier(
+					ctx, request, servingVersion, profilePointer(profile, request.Viewer.Kind),
+					BuildLanguageContext(request.BrowserLanguage, LanguagePrior{ZH: profile.LanguageZHWeight, JA: profile.LanguageJAWeight, EN: profile.LanguageENWeight}, profile.LanguageEvidence, languageConfig(service.config.Recommendation)),
+					served, nil, CandidateRangeAny, snapshot.RecentCutoff, true,
+					snapshot.SoftCursor, softBudget, remainingCapacity, prior, snapshotCandidateIDSet(snapshot, true), nil, selected,
+				)
+				if supplementErr != nil {
+					return CachedPage{}, supplementErr
+				}
+				soft = append(soft, extended...)
+				selected = nextSelected
+				snapshot.SoftCursor = cloneHistoricalCursor(state.cursor)
+				snapshot.SoftExhausted = state.exhausted
+				snapshot.HistoricalBudgetLimited = snapshot.HistoricalBudgetLimited || state.budgetLimited
+				for _, item := range extended {
+					if item.Post.ID == 0 {
+						continue
+					}
+					cached := cachedRankedCandidate(item, SelectionPhaseSoft)
+					cacheByID[cached.PostID] = cached
+					snapshot.Candidates = append(snapshot.Candidates, cached)
+				}
+			} else {
+				snapshot.HistoricalBudgetLimited = true
+			}
+		}
+	}
+	if snapshot.HistoricalExhausted {
+		selected = selectRankedPage(fresh, soft, prior, snapshot.PageSize, request.Now, requestID, selectionConfig(service.config.Recommendation))
+	}
 	return cachedPageFromSelected(pageIndex, requestID, request.Now, 0, selected), nil
 }
 
-func (service *RecommendationService) rebuildSnapshotCandidates(ctx context.Context, request ServeRequest, servingVersion string, snapshot CandidatePoolSnapshot, served ServedHistory) (CandidatePoolSnapshot, error) {
-	if served == nil {
-		served = make(ServedHistory)
+func profilePointer(profile Profile, kind ViewerKind) *Profile {
+	if kind != ViewerAuthenticated {
+		return nil
 	}
-	for _, id := range append(append([]uint(nil), snapshot.UsedPostIDs...), snapshot.MapperRejectedPostIDs...) {
-		served[id] = ServedItem{PostID: id, LastServedAt: snapshot.CreatedAt, Hard: true}
-	}
-	result, err := service.executeUser(ctx, request, servingVersion, served, false)
-	if err != nil {
-		return snapshot, err
-	}
-	if !result.Profile.ComputedAt.UTC().Equal(snapshot.ProfileComputedAt.UTC()) ||
-		recommendationLanguageKey(request.BrowserLanguage, result.LanguageContext) != snapshot.LanguageKey ||
-		RankerConfigHash(service.config.Recommendation, servingVersion) != snapshot.RankerConfigHash {
-		return snapshot, ErrCursorExpired
-	}
-	limit := service.config.Recommendation.Snapshot.MaxCandidates
+	copy := profile
+	return &copy
+}
+
+func candidatePoolLimit(limit int) int {
 	if limit <= 0 || limit > 500 {
-		limit = 500
+		return 500
 	}
-	seen := make(map[uint]struct{}, limit)
-	rejected := make(map[uint]struct{}, len(snapshot.MapperRejectedPostIDs))
-	for _, id := range snapshot.MapperRejectedPostIDs {
-		rejected[id] = struct{}{}
+	return limit
+}
+
+func snapshotCandidateIDSet(snapshot *CandidatePoolSnapshot, includeAll bool) map[uint]struct{} {
+	ids := make(map[uint]struct{}, len(snapshot.Candidates)+len(snapshot.UsedPostIDs)+len(snapshot.MapperRejectedPostIDs))
+	for _, item := range snapshot.UsedPostIDs {
+		ids[item] = struct{}{}
 	}
-	candidates := make([]CachedCandidate, 0, limit)
-	appendRanked := func(items []RankedCandidate, phase SelectionPhase) {
-		for _, item := range items {
-			if len(candidates) >= limit || item.Post.ID == 0 {
-				return
-			}
-			if _, isRejected := rejected[item.Post.ID]; isRejected {
-				continue
-			}
-			if _, exists := seen[item.Post.ID]; exists {
-				continue
-			}
-			seen[item.Post.ID] = struct{}{}
-			candidates = append(candidates, cachedRankedCandidate(item, phase))
+	for _, item := range snapshot.MapperRejectedPostIDs {
+		ids[item] = struct{}{}
+	}
+	if includeAll {
+		for _, item := range snapshot.Candidates {
+			ids[item.PostID] = struct{}{}
 		}
 	}
-	appendRanked(result.freshRankedCandidates, SelectionPhaseFresh)
-	appendRanked(result.softRankedCandidates, SelectionPhaseSoft)
-	snapshot.Candidates = candidates
-	snapshot.Exhausted = len(candidates) == 0
-	return snapshot, nil
+	return ids
+}
+
+func snapshotCanDeclareExhausted(snapshot CandidatePoolSnapshot) bool {
+	pageIndex := -1
+	for _, page := range snapshot.Pages {
+		if page.Index > pageIndex {
+			pageIndex = page.Index
+		}
+	}
+	return snapshotCanDeclareExhaustedAfterPage(snapshot, pageIndex)
+}
+
+func snapshotCanDeclareExhaustedAfterPage(snapshot CandidatePoolSnapshot, pageIndex int) bool {
+	if !snapshot.HistoricalExhausted || !snapshot.SoftExhausted {
+		return false
+	}
+	for _, page := range snapshot.Pages {
+		if page.Index > pageIndex && len(page.Items) > 0 {
+			return false
+		}
+	}
+	used := snapshotCandidateIDSet(&snapshot, false)
+	for _, candidate := range snapshot.Candidates {
+		if _, exists := used[candidate.PostID]; !exists {
+			return false
+		}
+	}
+	return true
 }
 
 func (service *RecommendationService) materializeSnapshotPage(ctx context.Context, request ServeRequest, snapshot CandidatePoolSnapshot, page CachedPage, profile Profile, language LanguageContext, servingVersion string) (ServeResult, ServeRequest, error) {
@@ -423,6 +523,7 @@ func (service *RecommendationService) materializeSnapshotPage(ctx context.Contex
 			ExplorationReason: cached.ExplorationReason, ExplorationSemantic: item.ExplorationSemantic,
 		})
 	}
+	pageDepleted := snapshot.Exhausted || snapshotCanDeclareExhaustedAfterPage(snapshot, page.Index)
 	result := ServeResult{
 		Viewer: request.Viewer, RequestID: request.RequestID, Now: request.Now, Limit: request.Limit,
 		EmbeddingVersion: servingVersion, Profile: profile, LanguageContext: language,
@@ -431,12 +532,19 @@ func (service *RecommendationService) materializeSnapshotPage(ctx context.Contex
 		Selected:              selected, StrategyID: serviceStrategyFor(request.Viewer, profile),
 		RankerConfigHash:    snapshot.RankerConfigHash,
 		PersonalizationMode: personalizationMode(profile, 0),
-		Depleted:            snapshot.Exhausted && len(selected) == 0,
+		Depleted:            pageDepleted,
 		PoolID:              snapshot.ID, CacheHit: true, snapshotPrepared: true,
 		traceGenerationDuration: time.Duration(page.GenerationLatencyMS) * time.Millisecond,
 		finalization:            &servingFinalization{snapshotID: snapshot.ID, pageIndex: page.Index, request: request, generationDuration: time.Duration(page.GenerationLatencyMS) * time.Millisecond},
 	}
-	result.FallbackReason = fallbackReason(profile.PositiveSignalCount, len(selected), request.Limit)
+	if result.Depleted {
+		result.ContinuationStatus = ContinuationExhausted
+	} else if snapshot.HistoricalBudgetLimited {
+		result.ContinuationStatus = ContinuationBudgetLimited
+	} else {
+		result.ContinuationStatus = ContinuationAvailable
+	}
+	result.FallbackReason = fallbackReason(profile.PositiveSignalCount, selected, request.Limit, result.ContinuationStatus)
 	result.OnboardingInterestActive = result.CandidateSummary.OnboardingInterestActive
 	result.OnboardingInterestCandidateCount = result.CandidateSummary.OnboardingInterestCandidateCount
 	codec, codecErr := service.cursorCodec()
@@ -453,7 +561,7 @@ func (service *RecommendationService) loadEligibleSnapshotCandidates(ctx context
 	if !ok {
 		return nil, ErrSnapshotUnavailable
 	}
-	query := recommendationCandidateQuery(servingVersion, request.Viewer.UserID, profile, nil, request.Now, service.config.Recommendation, false)
+	query := recommendationSnapshotCandidateQuery(servingVersion, request.Viewer.UserID, profile, request.Now, service.config.Recommendation)
 	return repository.LoadEligibleSnapshotCandidates(ctx, query, candidates)
 }
 
@@ -597,6 +705,7 @@ func (service *RecommendationService) commitMappedPage(ctx context.Context, snap
 			pages = append(pages, updated.Pages[index])
 		}
 		updated.Pages = pages
+		newlyRejectedCount := 0
 		if changed {
 			preparedSet := make(map[uint]struct{}, len(preparedIDs))
 			returnedSet := make(map[uint]struct{}, len(returnedIDs))
@@ -613,16 +722,26 @@ func (service *RecommendationService) commitMappedPage(ctx context.Context, snap
 				if _, returned := returnedSet[id]; returned {
 					continue
 				}
+				before := len(updated.MapperRejectedPostIDs)
 				updated.MapperRejectedPostIDs = appendUniqueIDs(updated.MapperRejectedPostIDs, id)
+				if len(updated.MapperRejectedPostIDs) != before {
+					newlyRejectedCount++
+				}
 			}
 		}
 		updated.UsedPostIDs = snapshotUsedPostIDs(updated.Pages)
+		updated.Exhausted = snapshotCanDeclareExhaustedAfterPage(updated, pageIndex)
 		updated.Revision = snapshot.Revision + 1
 		committed, err := service.dependencies.Snapshots.CompareAndSwap(ctx, snapshotID, snapshot.Revision, updated, defaultSnapshotMaxBytes)
 		if err != nil {
 			return CachedPage{}, err
 		}
 		if committed {
+			if newlyRejectedCount > 0 {
+				if diagnostics, ok := service.metrics.(RecommendationDiagnosticsMetrics); ok {
+					diagnostics.AddMapperRejected(newlyRejectedCount)
+				}
+			}
 			return page, nil
 		}
 	}
@@ -701,16 +820,31 @@ func (service *RecommendationService) updateSnapshotPage(ctx context.Context, sn
 }
 
 func (service *RecommendationService) recordCommittedPageHistory(ctx context.Context, request ServeRequest, snapshotID string, page CachedPage) error {
-	if request.Viewer.Kind != ViewerAuthenticated || request.Viewer.UserID == 0 || len(page.ReturnedPostIDs) == 0 || service.dependencies.History == nil {
+	if len(page.ReturnedPostIDs) == 0 || service.dependencies.History == nil {
 		return nil
 	}
-	window := userHistoryWindow(request.Now, service.config.Recommendation)
-	if history, ok := service.dependencies.History.(PageHistoryStore); ok {
-		return history.RecordUserServedForPage(ctx, request.Viewer.UserID, fmt.Sprintf("%s:%d", snapshotID, page.Index), page.ReturnedPostIDs, window)
+	pageKey := fmt.Sprintf("%s:%d", snapshotID, page.Index)
+	switch request.Viewer.Kind {
+	case ViewerAuthenticated:
+		if request.Viewer.UserID == 0 {
+			return nil
+		}
+		window := userHistoryWindow(request.Now, service.config.Recommendation)
+		if history, ok := service.dependencies.History.(PageHistoryStore); ok {
+			return history.RecordUserServedForPage(ctx, request.Viewer.UserID, pageKey, page.ReturnedPostIDs, window)
+		}
+		return service.dependencies.History.RecordUserServed(ctx, request.Viewer.UserID, page.ReturnedPostIDs, window)
+	case ViewerGuest:
+		if strings.TrimSpace(request.Viewer.GuestSessionID) == "" {
+			return nil
+		}
+		window := guestHistoryWindow(request.Now, service.config.Recommendation)
+		if history, ok := service.dependencies.History.(GuestPageHistoryStore); ok {
+			return history.RecordGuestServedForPage(ctx, request.Viewer.GuestSessionID, pageKey, page.ReturnedPostIDs, window)
+		}
+		return service.dependencies.History.RecordGuestServed(ctx, request.Viewer.GuestSessionID, page.ReturnedPostIDs, window)
 	}
-	// Production Redis history uses the page-keyed atomic receipt. This fallback
-	// keeps alternate stores usable but does not promise cross-process deduplication.
-	return service.dependencies.History.RecordUserServed(ctx, request.Viewer.UserID, page.ReturnedPostIDs, window)
+	return nil
 }
 
 func (service *RecommendationService) recoverCommittedSnapshotHistory(ctx context.Context, request ServeRequest, snapshot CandidatePoolSnapshot) (CandidatePoolSnapshot, error) {
@@ -869,7 +1003,8 @@ func selectRankedPage(fresh, soft []RankedCandidate, prior []SelectedCandidate, 
 func cachedRankedCandidate(item RankedCandidate, phase SelectionPhase) CachedCandidate {
 	return CachedCandidate{
 		Candidate: item.Candidate, PostID: item.Post.ID, AuthorID: item.Post.AuthorID, CreatedAt: item.Post.CreatedAt.UTC(),
-		Breakdown: item.Breakdown, ExplorationSemantic: item.ExplorationSemantic,
+		RecallTier: item.Candidate.RecallTier,
+		Breakdown:  item.Breakdown, ExplorationSemantic: item.ExplorationSemantic,
 		IsInNetwork: item.IsInNetwork, IsNovelAuthor: item.IsNovelAuthor, Phase: phase,
 	}
 }
@@ -966,6 +1101,12 @@ func candidateSummaryFromSnapshot(candidates []CachedCandidate, freshOnly bool) 
 		}
 		candidate := item.Candidate
 		summary.Candidates = append(summary.Candidates, candidate)
+		switch candidate.RecallTier {
+		case RecallTierHistoricalUnseen:
+			summary.HistoricalCount++
+		case RecallTierSoftRevisit:
+			summary.SoftCount++
+		}
 		if candidate.FromSemantic {
 			summary.SemanticCount++
 		}

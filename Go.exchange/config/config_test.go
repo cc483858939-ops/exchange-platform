@@ -43,21 +43,32 @@ func TestConfigLoadingDoesNotInitializeExternalResources(t *testing.T) {
 	}
 }
 
-func TestRecommendationCandidateWindowBoundsNormalizeInUTC(t *testing.T) {
+func TestRecommendationPrimaryWindowBoundsNormalizeInUTC(t *testing.T) {
 	now := time.Date(2026, 10, 19, 9, 30, 0, 0, time.FixedZone("UTC+8", 8*60*60))
-	start, end := RecommendationCandidateWindowBounds(now, 5)
+	start, end := RecommendationPrimaryWindowBounds(now, 5)
 	wantEnd := now.UTC()
 	wantStart := wantEnd.AddDate(0, 0, -5)
 	if !start.Equal(wantStart) || !end.Equal(wantEnd) || start.Location() != time.UTC || end.Location() != time.UTC {
-		t.Fatalf("5-day candidate window=%s..%s, want UTC %s..%s", start, end, wantStart, wantEnd)
+		t.Fatalf("5-day primary window=%s..%s, want UTC %s..%s", start, end, wantStart, wantEnd)
 	}
-	defaultStart, defaultEnd := RecommendationCandidateWindowBounds(now, 0)
-	if !defaultStart.Equal(wantEnd.AddDate(0, 0, -DefaultRecommendationCandidateWindowDays)) || !defaultEnd.Equal(wantEnd) {
-		t.Fatalf("default candidate window=%s..%s, want %d days ending at %s", defaultStart, defaultEnd, DefaultRecommendationCandidateWindowDays, wantEnd)
+	defaultStart, defaultEnd := RecommendationPrimaryWindowBounds(now, 0)
+	if !defaultStart.Equal(wantEnd.AddDate(0, 0, -DefaultRecommendationPrimaryWindowDays)) || !defaultEnd.Equal(wantEnd) {
+		t.Fatalf("default primary window=%s..%s, want %d days ending at %s", defaultStart, defaultEnd, DefaultRecommendationPrimaryWindowDays, wantEnd)
 	}
-	zeroStart, zeroEnd := RecommendationCandidateWindowBounds(time.Time{}, 5)
+	zeroStart, zeroEnd := RecommendationPrimaryWindowBounds(time.Time{}, 5)
 	if !zeroStart.IsZero() || !zeroEnd.IsZero() {
-		t.Fatalf("zero request time produced candidate window=%s..%s", zeroStart, zeroEnd)
+		t.Fatalf("zero request time produced primary window=%s..%s", zeroStart, zeroEnd)
+	}
+}
+
+func TestRecommendationHistoricalBackfillConfigNormalizesBounds(t *testing.T) {
+	defaults := (RecommendationHistoricalBackfillConfig{}).Normalized()
+	if defaults.BatchSize != DefaultRecommendationHistoricalBatchSize || defaults.MaxScanPerRequest != DefaultRecommendationHistoricalMaxScanPerRequest {
+		t.Fatalf("default historical backfill=%+v", defaults)
+	}
+	bounded := (RecommendationHistoricalBackfillConfig{BatchSize: 5000, MaxScanPerRequest: 50000}).Normalized()
+	if bounded.BatchSize != 1000 || bounded.MaxScanPerRequest != 10000 {
+		t.Fatalf("bounded historical backfill=%+v", bounded)
 	}
 }
 

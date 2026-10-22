@@ -210,7 +210,7 @@ func TestOnboardingInterestLoadedOnlyForEligibleAuthenticatedColdStarts(t *testi
 			DataDependencies: DataDependencies{Candidates: &serviceTestCandidateRepository{publicRecent: []Candidate{testCandidate(1, CandidateSourceRecent)}, posts: map[uint]models.Post{1: {Model: gorm.Model{ID: 1}, AuthorID: 10}}}, OnboardingInterests: interestRepo},
 			ServingVersions:  serviceTestVersionProvider{version: "post_embedding_v1"},
 		}, ServiceConfig{Recommendation: serviceTestConfig()})
-		if _, err := service.Serve(context.Background(), ServeRequest{Viewer: Viewer{Kind: ViewerGuest}, Limit: 1}); err != nil {
+		if _, err := service.Serve(context.Background(), ServeRequest{Viewer: Viewer{Kind: ViewerGuest, GuestSessionID: "visitor-session"}, Limit: 1}); err != nil {
 			t.Fatal(err)
 		}
 		if interestRepo.calls != 0 {

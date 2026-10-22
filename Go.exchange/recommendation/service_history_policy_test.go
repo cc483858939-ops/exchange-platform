@@ -2,6 +2,7 @@ package recommendation
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -81,13 +82,11 @@ func TestRecommendationServiceUsesConfiguredHistoryPolicies(t *testing.T) {
 	before := len(calls)
 	if _, err := service.Serve(context.Background(), ServeRequest{
 		Viewer: Viewer{Kind: ViewerGuest}, Limit: 1, RequestID: "guest-without-session", Now: now,
-	}); err != nil {
-		t.Fatal(err)
+	}); !errors.Is(err, ErrInvalidViewer) {
+		t.Fatalf("guest request without a session error=%v want ErrInvalidViewer", err)
 	}
-	for _, call := range calls[before:] {
-		if call == "history_load_guest" || call == "history_record_guest" {
-			t.Fatalf("empty guest session reached history store: calls=%v", calls[before:])
-		}
+	if len(calls) != before {
+		t.Fatalf("invalid guest request touched dependencies: calls=%v", calls[before:])
 	}
 	if _, err := service.Serve(context.Background(), ServeRequest{Viewer: Viewer{Kind: ViewerAuthenticated}, Now: now}); err == nil {
 		t.Fatal("zero-user authenticated request was accepted")

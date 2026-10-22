@@ -535,7 +535,7 @@ func applyRecommendationMetricsConstraints(tx *gorm.DB) error {
 func applyRecommendationTraceConstraints(tx *gorm.DB) error {
 	statements := []string{
 		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_fallback",
-		"ALTER TABLE recommendation_requests ADD CONSTRAINT chk_recommendation_request_fallback CHECK (fallback_reason IN ('', 'no_positive_profile', 'insufficient_fresh_candidates'))",
+		"ALTER TABLE recommendation_requests ADD CONSTRAINT chk_recommendation_request_fallback CHECK (fallback_reason IN ('', 'no_positive_profile', 'historical_budget_limited', 'no_eligible_candidates', 'soft_served_revisit', 'partial_results'))",
 		"ALTER TABLE recommendation_requests DROP CONSTRAINT IF EXISTS chk_recommendation_request_personalization_mode",
 		"ALTER TABLE recommendation_requests ADD CONSTRAINT chk_recommendation_request_personalization_mode CHECK (personalization_mode IN ('semantic_social', 'social_only', 'cold_start'))",
 		"CREATE UNIQUE INDEX IF NOT EXISTS uidx_recommendation_result_trace_request_post ON recommendation_result_traces (request_id, post_id)",

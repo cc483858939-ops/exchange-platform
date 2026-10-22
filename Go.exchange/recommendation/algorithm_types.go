@@ -15,8 +15,17 @@ const (
 	CandidateSourceTrending
 )
 
+type RecallTier uint8
+
+const (
+	RecallTierRecentUnseen RecallTier = iota + 1
+	RecallTierHistoricalUnseen
+	RecallTierSoftRevisit
+)
+
 type Candidate struct {
 	PostID                     uint
+	RecallTier                 RecallTier
 	PositiveSemanticSimilarity float64
 	SemanticRank               int
 	FollowingRank              int
@@ -28,6 +37,7 @@ type Candidate struct {
 	FromFollowing              bool
 	FromRecent                 bool
 	FromTrending               bool
+	FromHistorical             bool
 	FromOnboardingInterest     bool
 	WasSoftServed              bool
 	LastServedAt               time.Time
@@ -200,5 +210,5 @@ const (
 	LanguageUnd               = "und"
 	RankerVersion             = "rules_v6"
 	SelectionPolicyVersion    = "network_balance_exploration_v2"
-	CandidateRetrievalVersion = "social_semantic_materialized_profile_rrf_v6"
+	CandidateRetrievalVersion = "social_semantic_materialized_profile_tiered_history_rrf_v7"
 )

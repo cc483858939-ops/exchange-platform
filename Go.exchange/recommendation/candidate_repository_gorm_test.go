@@ -89,9 +89,9 @@ func TestAuthenticatedCandidateEligibilityFiltersMutedAuthorsBeforeLimit(t *test
 	}
 	input := CandidateQuery{
 		UserID: 73, ServingVersion: "v1", Limit: 20, SoftOnly: true,
-		CandidateWindowStart: time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC),
-		CandidateWindowEnd:   time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC),
-		Served:               map[uint]ServedItem{101: {Soft: true}},
+		Range: CandidateRangeRecent, RecentCutoff: time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC),
+		Now:    time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC),
+		Served: map[uint]ServedItem{101: {Soft: true}},
 	}
 	query := repository.eligibilityQuery(db, db.Table("posts").Select("posts.id"), input).
 		Order("posts.created_at DESC, posts.id DESC").Limit(input.Limit)
@@ -127,9 +127,9 @@ func TestCandidateEligibilityAlwaysExcludesCanonicalInteractionsAndKeepsProfileF
 	}
 	input := CandidateQuery{
 		UserID: 73, ServingVersion: "serving-v2", Limit: 20,
-		CandidateWindowStart: time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC),
-		CandidateWindowEnd:   time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC),
-		InteractedPostIDs:    map[uint]struct{}{101: {}},
+		Range: CandidateRangeRecent, RecentCutoff: time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC),
+		Now:               time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC),
+		InteractedPostIDs: map[uint]struct{}{101: {}},
 	}
 	query := repository.eligibilityQuery(db, db.Table("posts").Select("posts.id"), input).
 		Order("posts.created_at DESC, posts.id DESC").Limit(input.Limit)
@@ -159,8 +159,8 @@ func TestCandidateEligibilityDecouplesEmbeddingFromWindowBeforeLimit(t *testing.
 	}
 	input := CandidateQuery{
 		UserID: 73, ServingVersion: "serving-v2", Limit: 20,
-		CandidateWindowStart: time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC),
-		CandidateWindowEnd:   time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC),
+		Range: CandidateRangeRecent, RecentCutoff: time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC),
+		Now: time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC),
 	}
 	query := repository.eligibilityQuery(db, db.Table("posts").Select("posts.id"), input).
 		Order("posts.created_at DESC, posts.id DESC").Limit(input.Limit)
@@ -179,18 +179,60 @@ func TestCandidateEligibilityDecouplesEmbeddingFromWindowBeforeLimit(t *testing.
 	if strings.Contains(sqlText, "post_embeddings") || strings.Contains(sqlText, "vector_norm") {
 		t.Fatalf("non-semantic candidate eligibility must not require an embedding: %s", sqlText)
 	}
-	var sawServingVersion, sawWindowStart, sawWindowEnd bool
+	var sawServingVersion, sawCutoff, sawNow bool
 	for _, value := range query.Statement.Vars {
 		switch value := value.(type) {
 		case string:
 			sawServingVersion = sawServingVersion || value == input.ServingVersion
 		case time.Time:
-			sawWindowStart = sawWindowStart || value.Equal(input.CandidateWindowStart)
-			sawWindowEnd = sawWindowEnd || value.Equal(input.CandidateWindowEnd)
+			sawCutoff = sawCutoff || value.Equal(input.RecentCutoff)
+			sawNow = sawNow || value.Equal(input.Now)
 		}
 	}
-	if sawServingVersion || !sawWindowStart || !sawWindowEnd {
-		t.Fatalf("candidate query variables include serving version or omit the time window: %#v", query.Statement.Vars)
+	if sawServingVersion || !sawCutoff || !sawNow {
+		t.Fatalf("candidate query variables include serving version or omit the explicit recent range: %#v", query.Statement.Vars)
+	}
+}
+
+func TestHistoricalEligibilityUsesUnboundedKeysetRange(t *testing.T) {
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: &sql.DB{}}), &gorm.Config{
+		DryRun: true, DisableAutomaticPing: true, SkipDefaultTransaction: true,
+	})
+	if err != nil {
+		t.Fatalf("open dry-run PostgreSQL database: %v", err)
+	}
+	repository, err := NewGormCandidateRepository(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor := &HistoricalCursor{CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), PostID: 90}
+	input := CandidateQuery{
+		UserID: 73, Range: CandidateRangeHistorical, RecentCutoff: time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC),
+		HistoricalCursor: cursor, Limit: 200,
+	}
+	query := repository.eligibilityQuery(db, db.Table("posts").Select("posts.id, posts.created_at"), input).
+		Order("posts.created_at DESC, posts.id DESC").Limit(input.Limit)
+	var rows []struct {
+		ID uint
+	}
+	if err := query.Find(&rows).Error; err != nil {
+		t.Fatalf("build historical keyset query: %v", err)
+	}
+	sqlText := strings.Join(strings.Fields(query.Statement.SQL.String()), " ")
+	for _, fragment := range []string{
+		"posts.created_at <",
+		"(posts.created_at, posts.id) <",
+		"ORDER BY posts.created_at DESC, posts.id DESC",
+		"LIMIT $",
+		"user_mutes AS um",
+		"user_post_reco_states AS rs",
+	} {
+		if !strings.Contains(sqlText, fragment) {
+			t.Errorf("historical query is missing %q: %s", fragment, sqlText)
+		}
+	}
+	if strings.Contains(sqlText, "OFFSET") || strings.Contains(sqlText, "post_embeddings") {
+		t.Fatalf("historical non-semantic query must use keyset paging without vectors or OFFSET: %s", sqlText)
 	}
 }
 
@@ -204,8 +246,9 @@ func TestPublicCandidateQueriesRemainUnaffectedByMuteRelationships(t *testing.T)
 		t.Fatalf("open dry-run PostgreSQL database: %v", err)
 	}
 	input := PublicCandidateQuery{
-		ServingVersion: "serving-v2", CandidateWindowStart: time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC),
-		CandidateWindowEnd: time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC),
+		ServingVersion: "serving-v2", Range: CandidateRangeRecent,
+		RecentCutoff: time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC),
+		Now:          time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC),
 	}
 	query := publicCandidateQuery(db, input).Order("posts.created_at DESC").Limit(10)
 	var rows []uint

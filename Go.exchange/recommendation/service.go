@@ -133,16 +133,7 @@ func (service *RecommendationService) Serve(ctx context.Context, request ServeRe
 	var result ServeResult
 	if request.Cursor != "" {
 		result, request, err = service.serveSnapshotCursor(ctx, request, servingVersion, served)
-		if errors.Is(err, ErrSnapshotUnavailable) || errors.Is(err, ErrSnapshotTooLarge) {
-			log.Printf("[RecommendationSnapshot] cursor fallback: %v", err)
-			service.metrics.RecordSnapshotOutcome("fallback")
-			result, err = service.execute(ctx, request, servingVersion, served, true)
-			if err == nil {
-				result.snapshotFallback = true
-				result.NextCursor = ""
-				result.Depleted = false
-			}
-		} else if err != nil {
+		if err != nil {
 			if errors.Is(err, ErrInvalidCursor) {
 				service.metrics.RecordSnapshotOutcome("invalid_cursor")
 			} else if errors.Is(err, ErrCursorExpired) {
@@ -154,6 +145,11 @@ func (service *RecommendationService) Serve(ctx context.Context, request ServeRe
 			service.metrics.RecordSnapshotOutcome("hit")
 		}
 	} else {
+		if service.config.Recommendation.Snapshot.Enabled && !service.snapshotConfigured() {
+			err = ErrSnapshotUnavailable
+			service.recordFailedRequest(request.Viewer, err, Profile{})
+			return ServeResult{RequestID: request.RequestID, Now: request.Now, Viewer: request.Viewer}, err
+		}
 		result, err = service.execute(ctx, request, servingVersion, served, true)
 		if err != nil {
 			service.recordFailedRequest(request.Viewer, err, result.Profile)
@@ -162,17 +158,10 @@ func (service *RecommendationService) Serve(ctx context.Context, request ServeRe
 			result.Viewer = request.Viewer
 			return result, err
 		}
-		if request.Viewer.Kind == ViewerAuthenticated && service.snapshotConfigured() {
+		if (request.Viewer.Kind == ViewerAuthenticated || request.Viewer.Kind == ViewerGuest) && service.config.Recommendation.Snapshot.Enabled {
 			if snapshotErr := service.createInitialSnapshot(ctx, request, servingVersion, &result, time.Since(started)); snapshotErr != nil {
-				service.metrics.RecordSnapshotOutcome("fallback")
-				if !errors.Is(snapshotErr, ErrSnapshotUnavailable) {
-					log.Printf("[RecommendationSnapshot] create fallback: %v", snapshotErr)
-				}
-				result.NextCursor = ""
-				if errors.Is(snapshotErr, ErrSnapshotUnavailable) || errors.Is(snapshotErr, ErrSnapshotTooLarge) {
-					result.snapshotFallback = true
-					result.Depleted = false
-				}
+				service.recordFailedRequest(request.Viewer, snapshotErr, result.Profile)
+				return result, snapshotErr
 			} else if result.snapshotPrepared {
 				service.metrics.RecordSnapshotOutcome("created")
 			}
@@ -192,13 +181,23 @@ func (service *RecommendationService) Serve(ctx context.Context, request ServeRe
 	if result.PersonalizationMode == "" {
 		result.PersonalizationMode = personalizationMode(result.Profile, result.CandidateSummary.FollowingCount)
 	}
-	if result.FallbackReason == "" {
-		result.FallbackReason = fallbackReason(result.Profile.PositiveSignalCount, len(result.Selected), request.Limit)
+	if !result.snapshotPrepared {
+		result.Depleted = result.historicalExhausted && result.softExhausted &&
+			!result.historicalBudgetLimited && !result.softBudgetLimited
 	}
-	if !result.snapshotPrepared && !result.snapshotFallback {
-		result.Depleted = len(result.Selected) == 0
-		if request.Viewer.Kind == ViewerGuest {
-			result.Depleted = len(result.Selected) < request.Limit
+	if result.Depleted {
+		result.ContinuationStatus = ContinuationExhausted
+	} else if result.historicalBudgetLimited {
+		result.ContinuationStatus = ContinuationBudgetLimited
+	} else {
+		result.ContinuationStatus = ContinuationAvailable
+	}
+	if result.FallbackReason == "" {
+		result.FallbackReason = fallbackReason(result.Profile.PositiveSignalCount, result.Selected, request.Limit, result.ContinuationStatus)
+	}
+	if len(result.Selected) < request.Limit {
+		if diagnostics, ok := service.metrics.(RecommendationDiagnosticsMetrics); ok {
+			diagnostics.RecordUnderfilled(string(result.ContinuationStatus))
 		}
 	}
 
@@ -262,6 +261,9 @@ func normalizeServeRequest(request ServeRequest) (ServeRequest, error) {
 		}
 	case ViewerGuest:
 		request.Viewer.GuestSessionID = strings.TrimSpace(request.Viewer.GuestSessionID)
+		if request.Viewer.GuestSessionID == "" {
+			return ServeRequest{}, fmt.Errorf("%w: guest session ID is required", ErrInvalidViewer)
+		}
 	default:
 		return ServeRequest{}, fmt.Errorf("%w: viewer kind is required", ErrInvalidViewer)
 	}
@@ -351,45 +353,72 @@ func (service *RecommendationService) executeUser(ctx context.Context, request S
 		return result, err
 	}
 	rankedFresh := traceRankRecommendationCandidates(ctx, profileFeatures(profile), freshHydrated, request.Now, rankingConfig(service.config.Recommendation), languageContext, phaseName(false))
-	result.freshRankedCandidates = append([]RankedCandidate(nil), rankedFresh...)
 	selected := traceSelectRecommendationCandidates(ctx, SelectionInput{
 		Candidates: rankedFresh, Limit: request.Limit, Now: request.Now, Phase: SelectionPhaseFresh,
 		RequestID: request.RequestID, Config: selectionConfig(service.config.Recommendation),
 	}, phaseName(false))
 	finalSet := freshSet
+	historicalState := historicalScanState{}
 	if len(selected) < request.Limit {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		softSet, softErr := buildCandidateSet(
-			ctx, service.dependencies.Candidates, servingVersion, request.Viewer.UserID,
-			profile, served, request.Now, service.config.Recommendation, true, interestContext,
-		)
-		if softErr != nil {
-			return result, softErr
+		var historicalSet CandidateSetSummary
+		var err error
+		backfill := service.config.Recommendation.HistoricalBackfill.Normalized()
+		maxPool := candidatePoolLimit(service.config.Recommendation.Snapshot.MaxCandidates)
+		remainingPool := maxPool - len(rankedFresh)
+		if remainingPool > 0 {
+			rankedFresh, selected, historicalSet, historicalState, err = service.supplementRecallTier(
+				ctx, request, servingVersion, &profile, languageContext, served, loadedAuthors,
+				CandidateRangeHistorical, time.Time{}, false, nil,
+				backfill.MaxScanPerRequest,
+				remainingPool, nil, nil, rankedFresh, selected,
+			)
+			if err != nil {
+				return result, err
+			}
+		} else {
+			historicalState.capacityLimited = true
 		}
-		result.RecallSets = append(result.RecallSets, softSet)
-		service.recordRecallMetrics(softSet, observe)
-		softHydrated, softErr := traceHydrateRecommendationCandidates(ctx, service.dependencies.Candidates,
-			recommendationCandidateQuery(servingVersion, request.Viewer.UserID, profile, served, request.Now, service.config.Recommendation, true),
-			softSet.Candidates, phaseName(true))
-		if softErr != nil {
-			return result, softErr
+		if historicalSet.HistoricalCount > 0 || historicalState.batches > 0 {
+			result.RecallSets = append(result.RecallSets, historicalSet)
 		}
-		if err := ctx.Err(); err != nil {
-			return result, err
+		freshSet = mergeCandidateSets(freshSet, historicalSet, candidateCaps(profile, service.config.Recommendation).Merged)
+		finalSet = freshSet
+		if len(selected) < request.Limit && historicalState.exhausted {
+			softBudget := backfill.MaxScanPerRequest - historicalState.scanned
+			if softBudget < 0 {
+				softBudget = 0
+			}
+			softCapacity := maxPool - len(rankedFresh)
+			if softCapacity > 0 {
+				rankedSoft, softSelected, softSet, softState, softErr := service.supplementRecallTier(
+					ctx, request, servingVersion, &profile, languageContext, served, loadedAuthors,
+					CandidateRangeAny, time.Time{}, true, nil, softBudget, softCapacity, nil, nil, nil, selected,
+				)
+				if softErr != nil {
+					return result, softErr
+				}
+				result.softRankedCandidates = append([]RankedCandidate(nil), rankedSoft...)
+				selected = softSelected
+				result.RecallSets = append(result.RecallSets, softSet)
+				finalSet = mergeCandidateSets(freshSet, softSet, candidateCaps(profile, service.config.Recommendation).Merged)
+				result.softCursor = cloneHistoricalCursor(softState.cursor)
+				result.softExhausted = softState.exhausted
+				result.softBudgetLimited = softState.budgetLimited || softState.capacityLimited
+			} else {
+				result.softBudgetLimited = true
+			}
 		}
-		if err := loadRecommendationAuthorContext(ctx, service.dependencies.Profiles, request.Viewer.UserID, &profile, softHydrated, loadedAuthors, service.config.Recommendation, phaseName(true)); err != nil {
-			return result, err
-		}
-		rankedSoft := traceRankRecommendationCandidates(ctx, profileFeatures(profile), softHydrated, request.Now, rankingConfig(service.config.Recommendation), languageContext, phaseName(true))
-		result.softRankedCandidates = append([]RankedCandidate(nil), rankedSoft...)
-		selected = traceSelectRecommendationCandidates(ctx, SelectionInput{
-			Candidates: rankedSoft, Initial: selected, Limit: request.Limit, Now: request.Now, Phase: SelectionPhaseSoft,
-			RequestID: request.RequestID, Config: selectionConfig(service.config.Recommendation),
-		}, phaseName(true))
-		finalSet = mergeCandidateSets(freshSet, softSet, candidateCaps(profile, service.config.Recommendation).Merged)
 	}
+	result.freshRankedCandidates = append([]RankedCandidate(nil), rankedFresh...)
+	result.historicalCursor = cloneHistoricalCursor(historicalState.cursor)
+	result.historicalExhausted = historicalState.exhausted
+	result.historicalBudgetLimited = result.historicalBudgetLimited || historicalState.budgetLimited || historicalState.capacityLimited || result.softBudgetLimited
+	result.historicalScanned = historicalState.scanned
+	result.historicalBatches = historicalState.batches
+	result.oldestHistoricalCreatedAt = historicalState.oldestCreatedAt
 	result.Profile = profile
 	result.LanguageContext = languageContext
 	result.CandidateSummary = finalSet
@@ -426,6 +455,7 @@ func (service *RecommendationService) executeGuest(ctx context.Context, request 
 		return result, err
 	}
 	ranked := traceRankRecommendationCandidates(ctx, ProfileFeatures{}, hydrated, request.Now, rankingConfig(cfg), languageContext, "fresh")
+	result.freshRankedCandidates = append([]RankedCandidate(nil), ranked...)
 	selected := traceRecommendationResult(ctx, "recommendation.select", []attribute.KeyValue{
 		attribute.String("recommendation.phase", "fresh"),
 		attribute.String("recommendation.selection_phase", string(SelectionPhaseFresh)),
@@ -440,39 +470,65 @@ func (service *RecommendationService) executeGuest(ctx context.Context, request 
 		return selected
 	})
 	finalSet := freshSet
+	historicalState := historicalScanState{}
 	if len(selected) < request.Limit {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		fallbackSet, fallbackErr := buildPublicCandidateSet(ctx, service.dependencies.Candidates, servingVersion, request.Now, cfg, fallbackGuestExclusions(served, selected), "guest_fallback")
-		if fallbackErr != nil {
-			return result, fallbackErr
+		var historicalSet CandidateSetSummary
+		var err error
+		backfill := cfg.HistoricalBackfill.Normalized()
+		maxPool := candidatePoolLimit(cfg.Snapshot.MaxCandidates)
+		remainingPool := maxPool - len(result.freshRankedCandidates)
+		if remainingPool > 0 {
+			result.freshRankedCandidates, selected, historicalSet, historicalState, err = service.supplementRecallTier(
+				ctx, request, servingVersion, nil, languageContext, served, nil,
+				CandidateRangeHistorical, time.Time{}, false, nil, backfill.MaxScanPerRequest,
+				remainingPool, nil, nil, result.freshRankedCandidates, selected,
+			)
+			if err != nil {
+				return result, err
+			}
+		} else {
+			historicalState.capacityLimited = true
 		}
-		result.RecallSets = append(result.RecallSets, fallbackSet)
-		service.recordRecallMetrics(fallbackSet, observe)
-		fallbackHydrated, fallbackErr := traceHydrateRecommendationCandidates(ctx, service.dependencies.Candidates,
-			recommendationCandidateQuery(servingVersion, 0, Profile{}, nil, request.Now, cfg, false),
-			fallbackSet.Candidates, "guest_fallback")
-		if fallbackErr != nil {
-			return result, fallbackErr
+		if historicalSet.HistoricalCount > 0 || historicalState.batches > 0 {
+			result.RecallSets = append(result.RecallSets, historicalSet)
 		}
-		if err := ctx.Err(); err != nil {
-			return result, err
+		freshSet = mergeCandidateSets(freshSet, historicalSet, cfg.Candidates.ColdStart.Merged)
+		finalSet = freshSet
+		if len(selected) < request.Limit && historicalState.exhausted {
+			softBudget := backfill.MaxScanPerRequest - historicalState.scanned
+			if softBudget < 0 {
+				softBudget = 0
+			}
+			softCapacity := maxPool - len(result.freshRankedCandidates)
+			if softCapacity > 0 {
+				rankedSoft, softSelected, softSet, softState, softErr := service.supplementRecallTier(
+					ctx, request, servingVersion, nil, languageContext, served, nil,
+					CandidateRangeAny, time.Time{}, true, nil, softBudget, softCapacity, nil, nil, nil, selected,
+				)
+				if softErr != nil {
+					return result, softErr
+				}
+				result.softRankedCandidates = append([]RankedCandidate(nil), rankedSoft...)
+				selected = softSelected
+				result.RecallSets = append(result.RecallSets, softSet)
+				finalSet = mergeCandidateSets(freshSet, softSet, cfg.Candidates.ColdStart.Merged)
+				result.softCursor = cloneHistoricalCursor(softState.cursor)
+				result.softExhausted = softState.exhausted
+				result.softBudgetLimited = softState.budgetLimited || softState.capacityLimited
+			} else {
+				result.softBudgetLimited = true
+			}
 		}
-		annotateGuestFallbackServedState(fallbackHydrated, served)
-		rankedFallback := traceRankRecommendationCandidates(ctx, ProfileFeatures{}, fallbackHydrated, request.Now, rankingConfig(cfg), languageContext, "guest_fallback")
-		selected = traceSelectRecommendationCandidates(ctx, SelectionInput{
-			Candidates: rankedFallback, Initial: selected, Limit: request.Limit, Now: request.Now, Phase: SelectionPhaseFresh,
-			RequestID: request.RequestID, Config: selectionConfig(cfg),
-		}, "guest_fallback")
-		if len(selected) < request.Limit {
-			selected = traceSelectRecommendationCandidates(ctx, SelectionInput{
-				Candidates: rankedFallback, Initial: selected, Limit: request.Limit, Now: request.Now, Phase: SelectionPhaseSoft,
-				RequestID: request.RequestID, Config: selectionConfig(cfg),
-			}, "guest_fallback")
-		}
-		finalSet = mergeCandidateSets(freshSet, fallbackSet, cfg.Candidates.ColdStart.Merged)
 	}
+	result.historicalCursor = cloneHistoricalCursor(historicalState.cursor)
+	result.historicalExhausted = historicalState.exhausted
+	result.historicalBudgetLimited = result.historicalBudgetLimited || historicalState.budgetLimited || historicalState.capacityLimited || result.softBudgetLimited
+	result.historicalScanned = historicalState.scanned
+	result.historicalBatches = historicalState.batches
+	result.oldestHistoricalCreatedAt = historicalState.oldestCreatedAt
 	result.LanguageContext = languageContext
 	result.CandidateSummary = finalSet
 	result.FreshCandidateSummary = freshSet
@@ -620,6 +676,14 @@ func (service *RecommendationService) recordRecallMetrics(set CandidateSetSummar
 
 func (service *RecommendationService) recordResultMetrics(selected []SelectedCandidate) {
 	for _, item := range selected {
+		switch item.Candidate.RecallTier {
+		case RecallTierRecentUnseen:
+			service.metrics.AddResultsBySource("recent_unseen", 1)
+		case RecallTierHistoricalUnseen:
+			service.metrics.AddResultsBySource("historical_unseen", 1)
+		case RecallTierSoftRevisit:
+			service.metrics.AddResultsBySource("soft_revisit", 1)
+		}
 		if item.Candidate.FromSemantic {
 			service.metrics.AddResultsBySource("semantic", 1)
 		}
@@ -682,14 +746,28 @@ func personalizationMode(profile Profile, followingCount int) string {
 	return "cold_start"
 }
 
-func fallbackReason(signalCount, resultCount, requestedLimit int) string {
+func fallbackReason(signalCount int, selected []SelectedCandidate, requestedLimit int, status ContinuationStatus) string {
 	if signalCount == 0 {
 		return "no_positive_profile"
 	}
-	if resultCount < requestedLimit {
-		return "insufficient_fresh_candidates"
+	if len(selected) >= requestedLimit {
+		return ""
 	}
-	return ""
+	if status == ContinuationBudgetLimited {
+		return "historical_budget_limited"
+	}
+	if status == ContinuationExhausted && len(selected) == 0 {
+		return "no_eligible_candidates"
+	}
+	for _, item := range selected {
+		if item.Candidate.RecallTier == RecallTierSoftRevisit || item.Candidate.WasSoftServed {
+			return "soft_served_revisit"
+		}
+	}
+	if status == ContinuationExhausted {
+		return "partial_results"
+	}
+	return "historical_budget_limited"
 }
 
 func selectedPostIDs(selected []SelectedCandidate) []uint {

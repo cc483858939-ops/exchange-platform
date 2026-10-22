@@ -161,57 +161,55 @@ func TestRecommendationServiceTracingSeparatesFreshAndSoftRecall(t *testing.T) {
 			}
 		}
 	}
-	if len(phases) != 2 || phases[0] != "fresh" || phases[1] != "soft" {
-		t.Fatalf("recall phases=%v want [fresh soft]", phases)
+	if len(phases) != 3 || phases[0] != "fresh" || phases[1] != "historical" || phases[2] != "soft" {
+		t.Fatalf("recall phases=%v want [fresh historical soft]", phases)
 	}
-	if candidates.softQueries == 0 {
+	if candidates.softHistoricalQueries == 0 {
 		t.Fatal("soft fallback query did not run")
 	}
 }
 
-func TestRecommendationServiceTracingRecordsGuestFallback(t *testing.T) {
+func TestRecommendationServiceTracingRecordsGuestHistoricalAndSoftFallback(t *testing.T) {
 	exporter, provider := newRecommendationTracingTestProvider(t)
 	now := time.Date(2026, 10, 9, 8, 0, 0, 0, time.UTC)
 	candidates := &serviceTestCandidateRepository{
 		publicRecent: []Candidate{testCandidate(1, CandidateSourceRecent)},
 		publicTrend:  []Candidate{testCandidate(2, CandidateSourceTrending)},
+		softRecent:   []Candidate{testCandidate(3, CandidateSourceRecent)},
 		posts: map[uint]models.Post{
 			1: {Model: gorm.Model{ID: 1, CreatedAt: now.Add(-time.Hour)}, AuthorID: 1001},
 			2: {Model: gorm.Model{ID: 2, CreatedAt: now.Add(-2 * time.Hour)}, AuthorID: 1002},
+			3: {Model: gorm.Model{ID: 3, CreatedAt: now.Add(-3 * time.Hour)}, AuthorID: 1003},
 		},
 	}
 	service := newServiceTestService(t, ServiceDependencies{
-		DataDependencies: DataDependencies{Candidates: candidates},
-		ServingVersions:  serviceTestVersionProvider{version: "embedding-v1"},
+		DataDependencies: DataDependencies{Candidates: candidates, History: &serviceTestHistoryStore{guest: ServedHistory{
+			3: {PostID: 3, LastServedAt: now.Add(-48 * time.Hour), Soft: true},
+		}}},
+		ServingVersions: serviceTestVersionProvider{version: "embedding-v1"},
 	}, ServiceConfig{Recommendation: serviceTestConfig()})
 	rootCtx, root := provider.Tracer("test").Start(context.Background(), "GET /api/public/recommendations/posts")
 	_, err := service.Serve(rootCtx, ServeRequest{
-		Viewer: Viewer{Kind: ViewerGuest}, Limit: 3, RequestID: "guest-request-3", Now: now,
+		Viewer: Viewer{Kind: ViewerGuest, GuestSessionID: "guest-session-3"}, Limit: 3, RequestID: "guest-request-3", Now: now,
 	})
 	root.End()
 	if err != nil {
 		t.Fatal(err)
 	}
 	spans := exporter.GetSpans()
-	if candidates.publicCalls != 4 {
-		t.Fatalf("public recall calls=%d want=4", candidates.publicCalls)
+	if candidates.publicCalls != 2 {
+		t.Fatalf("public recall calls=%d want two recent/trending queries", candidates.publicCalls)
 	}
-	for _, source := range []string{"public_recent", "public_trending"} {
-		foundFresh, foundFallback := false, false
-		for _, span := range spans {
-			if span.Name != "recommendation.recall.recent" && span.Name != "recommendation.recall.trending" {
-				continue
+	var phases []string
+	for _, span := range spans {
+		if span.Name == "recommendation.recall" {
+			if phase, ok := recommendationSpanString(span, "recommendation.phase"); ok {
+				phases = append(phases, phase)
 			}
-			if !recommendationSpanHasString(span, "recommendation.source", source) {
-				continue
-			}
-			phase, _ := recommendationSpanString(span, "recommendation.phase")
-			foundFresh = foundFresh || phase == "fresh"
-			foundFallback = foundFallback || phase == "guest_fallback"
 		}
-		if !foundFresh || !foundFallback {
-			t.Errorf("source %q missing fresh/fallback spans: %#v", source, spans)
-		}
+	}
+	if len(phases) != 3 || phases[0] != "fresh" || phases[1] != "historical" || phases[2] != "soft" {
+		t.Fatalf("guest recall phases=%v want [fresh historical soft]", phases)
 	}
 	for _, span := range spans {
 		if span.Name == "recommendation.recall.semantic" || span.Name == "recommendation.recall.following" || span.Name == "recommendation.profile.load" {

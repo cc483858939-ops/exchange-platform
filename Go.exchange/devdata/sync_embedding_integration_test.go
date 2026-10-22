@@ -233,10 +233,10 @@ func TestDevDataBodyChangeRequiresCurrentServingEmbeddingForRecommendationIntegr
 		if err != nil {
 			t.Fatalf("load serving version: %v", err)
 		}
-		windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, config.DefaultRecommendationCandidateWindowDays)
+		cutoff, _ := config.RecommendationPrimaryWindowBounds(now, config.DefaultRecommendationPrimaryWindowDays)
 		candidates, err := repository.LoadRecentCandidates(context.Background(), recommendation.CandidateQuery{
 			UserID: viewer.ID, ServingVersion: servingVersion, Now: now,
-			CandidateWindowStart: windowStart, CandidateWindowEnd: windowEnd, Limit: 10,
+			Range: recommendation.CandidateRangeRecent, RecentCutoff: cutoff, Limit: 10,
 		})
 		if err != nil {
 			t.Fatalf("load %s recommendation candidates: %v", servingVersion, err)

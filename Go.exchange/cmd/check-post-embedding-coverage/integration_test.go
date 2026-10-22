@@ -108,11 +108,11 @@ func TestPostEmbeddingCoverageCountsOnlyEligibleRootsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if coverage.Eligible != 5 || coverage.Ready != 2 || coverage.Missing != 3 || coverage.StaleContent != 1 || coverage.Percent < 39.9999 || coverage.Percent > 40.0001 || coverage.CandidateWindowDays != 7 {
+	if coverage.Eligible != 5 || coverage.Ready != 2 || coverage.Missing != 3 || coverage.StaleContent != 1 || coverage.Percent < 39.9999 || coverage.Percent > 40.0001 || coverage.PrimaryWindowDays != 7 {
 		t.Fatalf("coverage=%+v, want eligible=5 ready=2 missing=3 stale=1 at seven-day window", coverage)
 	}
 	var pages, scannedRows int
-	windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, 7)
+	windowStart, windowEnd := config.RecommendationPrimaryWindowBounds(now, 7)
 	if err := (gormPostEmbeddingCoverageScanner{db: db}).ScanEligible(context.Background(), "post_embedding_v2", windowStart, windowEnd, 2, func(rows []postEmbeddingCoverageRow) error {
 		pages++
 		scannedRows += len(rows)
@@ -127,7 +127,7 @@ func TestPostEmbeddingCoverageCountsOnlyEligibleRootsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fiveDayCoverage.Eligible != 4 || fiveDayCoverage.Ready != 1 || fiveDayCoverage.StaleContent != 1 || fiveDayCoverage.CandidateWindowDays != 5 {
+	if fiveDayCoverage.Eligible != 4 || fiveDayCoverage.Ready != 1 || fiveDayCoverage.StaleContent != 1 || fiveDayCoverage.PrimaryWindowDays != 5 {
 		t.Fatalf("five-day coverage=%+v, want boundary five-day fixture included", fiveDayCoverage)
 	}
 	if err := db.Model(&models.PostEmbedding{}).

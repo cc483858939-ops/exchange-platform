@@ -111,7 +111,7 @@ component.
 
 Following, Recent, Trending, onboarding-interest Recent, and guest Public
 Recent/Trending admit otherwise eligible public root posts within the configured
-candidate window even when the post has no embedding for the active model.
+primary window even when the post has no embedding for the active model.
 Hydration keeps those posts with a nil embedding; semantic scores and semantic
 exploration are zero for them, while social, trending, language, and other
 non-semantic signals continue to rank them. Semantic recall remains isolated to
@@ -121,6 +121,15 @@ semantic recall and hydration or snapshot revalidation, the semantic candidate
 is dropped rather than retaining stale similarity metadata. No older-version
 vector is used as a fallback.
 
+When the primary window cannot fill a page, recommendation recall scans older
+eligible posts in bounded `(created_at, id)` keyset batches. This historical
+range has no post-age cutoff and does not require embeddings; soft-served
+revisits are considered only after unseen historical candidates are exhausted.
+The per-request scan budget preserves a continuation cursor and is reported as
+`budget_limited`, not as content exhaustion. See
+[`docs/recommendation-historical-recall.md`](docs/recommendation-historical-recall.md)
+for the index and large-fixture query-plan check.
+
 ### Embedding model-version switch
 
 `BuildVersion` selects the version written by the Post Embedding worker;
@@ -128,7 +137,7 @@ vector is used as a fallback.
 candidate hydration. To switch models, configure the worker's
 `EMBEDDING_BUILD_VERSION` for the target, allow it to fill target-version
 embeddings, and run `go run ./cmd/check-post-embedding-coverage` to review the
-target coverage for the configured candidate window. The coverage command is a
+target coverage for the configured primary window. The coverage command is a
 report only; it does not block a switch. Then update serving with
 `go run ./cmd/set-embedding-serving-version --version <target-version>`.
 

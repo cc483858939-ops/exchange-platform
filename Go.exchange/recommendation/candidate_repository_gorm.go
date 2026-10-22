@@ -88,11 +88,38 @@ AND EXISTS (
 `)
 }
 
-func recommendationCandidateWindow(query *gorm.DB, windowStart, windowEnd time.Time) *gorm.DB {
-	if windowStart.IsZero() || windowEnd.IsZero() || windowEnd.Before(windowStart) {
+func recommendationCandidateRange(query *gorm.DB, input CandidateQuery) *gorm.DB {
+	switch input.Range {
+	case CandidateRangeAny:
+		if input.HistoricalCursor != nil {
+			cursor := input.HistoricalCursor
+			if cursor.PostID == 0 || cursor.CreatedAt.IsZero() {
+				return query.Where("1 = 0")
+			}
+			query = query.Where("(posts.created_at, posts.id) < (?, ?)", cursor.CreatedAt.UTC(), cursor.PostID)
+		}
+		return query
+	case CandidateRangeRecent:
+		if input.RecentCutoff.IsZero() || input.Now.IsZero() || input.Now.Before(input.RecentCutoff) {
+			return query.Where("1 = 0")
+		}
+		return query.Where("posts.created_at >= ? AND posts.created_at <= ?", input.RecentCutoff.UTC(), input.Now.UTC())
+	case CandidateRangeHistorical:
+		if input.RecentCutoff.IsZero() {
+			return query.Where("1 = 0")
+		}
+		query = query.Where("posts.created_at < ?", input.RecentCutoff.UTC())
+		if input.HistoricalCursor != nil {
+			cursor := input.HistoricalCursor
+			if cursor.PostID == 0 || cursor.CreatedAt.IsZero() {
+				return query.Where("1 = 0")
+			}
+			query = query.Where("(posts.created_at, posts.id) < (?, ?)", cursor.CreatedAt.UTC(), cursor.PostID)
+		}
+		return query
+	default:
 		return query.Where("1 = 0")
 	}
-	return query.Where("posts.created_at >= ? AND posts.created_at <= ?", windowStart.UTC(), windowEnd.UTC())
 }
 
 func (r *GormCandidateRepository) eligibilityQuery(db *gorm.DB, query *gorm.DB, input CandidateQuery) *gorm.DB {
@@ -116,7 +143,10 @@ func (r *GormCandidateRepository) eligibilityQuery(db *gorm.DB, query *gorm.DB, 
 		Where("posts.author_id <> ?", input.UserID).
 		Where("NOT EXISTS (?)", mutedAuthor).
 		Where("NOT EXISTS (?)", negative)
-	query = recommendationCandidateWindow(query, input.CandidateWindowStart, input.CandidateWindowEnd)
+	query = recommendationCandidateRange(query, input)
+	if ids := recommendationPostIDList(input.ExcludedPostIDs); len(ids) > 0 {
+		query = query.Where("posts.id NOT IN ?", ids)
+	}
 	interacted := db.Table("user_post_reco_states AS rs").
 		Select("1").
 		Where("rs.user_id = ? AND rs.post_id = posts.id AND rs.interacted = TRUE", input.UserID)
@@ -195,6 +225,49 @@ func (r *GormCandidateRepository) LoadFollowingCandidates(ctx context.Context, i
 	query := r.eligibilityQuery(db, db.Table("posts").Select("posts.id").
 		Joins("JOIN user_follows AS uf ON uf.following_id = posts.author_id AND uf.follower_id = ?", input.UserID), input)
 	return queryCandidateIDs(query.Order("posts.created_at DESC, posts.id DESC"), input.Limit, true, false)
+}
+
+func (r *GormCandidateRepository) LoadHistoricalCandidates(ctx context.Context, input CandidateQuery) (HistoricalCandidatePage, error) {
+	if input.Limit <= 0 {
+		return HistoricalCandidatePage{Exhausted: true}, nil
+	}
+	db, err := recommendationContextDB(ctx, r.db)
+	if err != nil {
+		return HistoricalCandidatePage{}, fmt.Errorf("load historical candidates: %w", err)
+	}
+	query := db.Table("posts").Select(`posts.id, posts.created_at,
+EXISTS (
+    SELECT 1 FROM user_follows AS uf
+    WHERE uf.follower_id = ? AND uf.following_id = posts.author_id
+) AS is_following`, input.UserID)
+	query = r.eligibilityQuery(db, query, input)
+	var rows []struct {
+		ID          uint
+		CreatedAt   time.Time
+		IsFollowing bool
+	}
+	if err := query.Order("posts.created_at DESC, posts.id DESC").Limit(input.Limit).Scan(&rows).Error; err != nil {
+		return HistoricalCandidatePage{}, fmt.Errorf("load historical candidates: %w", err)
+	}
+	page := HistoricalCandidatePage{
+		Candidates: make([]Candidate, 0, len(rows)), Scanned: len(rows), Exhausted: len(rows) < input.Limit,
+	}
+	for _, row := range rows {
+		candidate := Candidate{PostID: row.ID, FromFollowing: row.IsFollowing}
+		if input.SoftOnly {
+			candidate.RecallTier = RecallTierSoftRevisit
+			if item, exists := input.Served[row.ID]; exists {
+				candidate.WasSoftServed = item.Soft && !item.Hard
+				candidate.LastServedAt = item.LastServedAt
+			}
+		} else {
+			candidate.RecallTier = RecallTierHistoricalUnseen
+			candidate.FromHistorical = true
+		}
+		page.Candidates = append(page.Candidates, candidate)
+		page.Cursor = HistoricalCursor{CreatedAt: row.CreatedAt.UTC(), PostID: row.ID}
+	}
+	return page, nil
 }
 
 func (r *GormCandidateRepository) LoadRecentCandidates(ctx context.Context, input CandidateQuery) ([]Candidate, error) {
@@ -334,7 +407,7 @@ func (r *GormCandidateRepository) LoadPublicTrendingCandidates(ctx context.Conte
 
 func publicCandidateQuery(db *gorm.DB, input PublicCandidateQuery) *gorm.DB {
 	query := recommendationPublicPostScope(db.Table("posts").Select("posts.id")).Where("posts.reply_to_post_id IS NULL")
-	query = recommendationCandidateWindow(query, input.CandidateWindowStart, input.CandidateWindowEnd)
+	query = recommendationCandidateRange(query, CandidateQuery{Range: input.Range, RecentCutoff: input.RecentCutoff, Now: input.Now})
 	if ids := recommendationPostIDList(input.ExcludedPostIDs); len(ids) > 0 {
 		query = query.Where("posts.id NOT IN ?", ids)
 	}
@@ -482,7 +555,7 @@ func (r *GormCandidateRepository) LoadSnapshotPage(ctx context.Context, input Ca
 		contextQuery := db.Table("posts").Select("posts.id").Where("posts.id IN ?", contextPostIDs)
 		contextQuery = recommendationPublicPostScope(contextQuery).
 			Where("posts.reply_to_post_id IS NULL")
-		contextQuery = recommendationCandidateWindow(contextQuery, input.CandidateWindowStart, input.CandidateWindowEnd)
+		contextQuery = recommendationCandidateRange(contextQuery, input)
 		if err := contextQuery.Pluck("posts.id", &validContextIDs).Error; err != nil {
 			return nil, nil, fmt.Errorf("load eligible snapshot context posts: %w", err)
 		}
@@ -556,3 +629,4 @@ func (r *GormCandidateRepository) String() string {
 }
 
 var _ CandidateRepository = (*GormCandidateRepository)(nil)
+var _ HistoricalCandidateRepository = (*GormCandidateRepository)(nil)

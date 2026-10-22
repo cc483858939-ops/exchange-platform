@@ -38,16 +38,16 @@ type gormPostEmbeddingCoverageScanner struct {
 }
 
 type postEmbeddingCoverage struct {
-	TargetVersion       string
-	CandidateWindowDays int
-	WindowStart         time.Time
-	WindowEnd           time.Time
-	Eligible            int64
-	Ready               int64
-	Missing             int64
-	StaleContent        int64
-	Percent             float64
-	EmptyCandidateSet   bool
+	TargetVersion     string
+	PrimaryWindowDays int
+	WindowStart       time.Time
+	WindowEnd         time.Time
+	Eligible          int64
+	Ready             int64
+	Missing           int64
+	StaleContent      int64
+	Percent           float64
+	EmptyCandidateSet bool
 }
 
 func (s gormPostEmbeddingCoverageScanner) ScanEligible(ctx context.Context, targetVersion string, windowStart, windowEnd time.Time, pageSize int, visit func([]postEmbeddingCoverageRow) error) error {
@@ -103,7 +103,7 @@ func eligiblePostCoverageQuery(db *gorm.DB, windowStart, windowEnd time.Time) *g
 		)`)
 }
 
-func calculatePostEmbeddingCoverage(ctx context.Context, scanner postEmbeddingCoverageScanner, targetVersion string, now time.Time, candidateWindowDays int) (postEmbeddingCoverage, error) {
+func calculatePostEmbeddingCoverage(ctx context.Context, scanner postEmbeddingCoverageScanner, targetVersion string, now time.Time, primaryWindowDays int) (postEmbeddingCoverage, error) {
 	targetVersion = strings.TrimSpace(targetVersion)
 	if targetVersion == "" {
 		return postEmbeddingCoverage{}, errors.New("target build embedding version is required")
@@ -117,10 +117,10 @@ func calculatePostEmbeddingCoverage(ctx context.Context, scanner postEmbeddingCo
 	if now.IsZero() {
 		return postEmbeddingCoverage{}, errors.New("post embedding coverage time is required")
 	}
-	candidateWindowDays = config.NormalizeRecommendationCandidateWindowDays(candidateWindowDays)
-	windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, candidateWindowDays)
+	primaryWindowDays = config.NormalizeRecommendationPrimaryWindowDays(primaryWindowDays)
+	windowStart, windowEnd := config.RecommendationPrimaryWindowBounds(now, primaryWindowDays)
 	coverage := postEmbeddingCoverage{
-		TargetVersion: targetVersion, CandidateWindowDays: candidateWindowDays,
+		TargetVersion: targetVersion, PrimaryWindowDays: primaryWindowDays,
 		WindowStart: windowStart, WindowEnd: windowEnd,
 	}
 	err := scanner.ScanEligible(ctx, targetVersion, windowStart, windowEnd, postEmbeddingCoveragePageSize, func(rows []postEmbeddingCoverageRow) error {
@@ -154,8 +154,8 @@ func writePostEmbeddingCoverage(w io.Writer, coverage postEmbeddingCoverage) err
 		return errors.New("coverage output writer is nil")
 	}
 	_, err := fmt.Fprintf(w,
-		"post embedding coverage:\ntarget_version=%s\ncandidate_window_days=%d\nwindow_start=%s\nwindow_end=%s\nempty_candidate_set=%t\neligible=%d\nready=%d\nmissing=%d\nstale_content=%d\ncoverage=%.4f%%\n",
-		coverage.TargetVersion, coverage.CandidateWindowDays,
+		"post embedding coverage:\ntarget_version=%s\nprimary_window_days=%d\nwindow_start=%s\nwindow_end=%s\nempty_candidate_set=%t\neligible=%d\nready=%d\nmissing=%d\nstale_content=%d\ncoverage=%.4f%%\n",
+		coverage.TargetVersion, coverage.PrimaryWindowDays,
 		coverage.WindowStart.Format(time.RFC3339Nano), coverage.WindowEnd.Format(time.RFC3339Nano), coverage.EmptyCandidateSet,
 		coverage.Eligible, coverage.Ready, coverage.Missing, coverage.StaleContent, coverage.Percent,
 	)
@@ -168,13 +168,13 @@ func run(w io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	now := time.Now().UTC()
-	candidateWindowDays := config.NormalizeRecommendationCandidateWindowDays(config.AppConfig.Recommendation.CandidateWindowDays)
+	primaryWindowDays := config.NormalizeRecommendationPrimaryWindowDays(config.AppConfig.Recommendation.PrimaryWindowDays)
 	coverage, err := calculatePostEmbeddingCoverage(
 		ctx,
 		gormPostEmbeddingCoverageScanner{db: global.WorkerDb},
 		config.BuildEmbeddingVersion(),
 		now,
-		candidateWindowDays,
+		primaryWindowDays,
 	)
 	if err != nil {
 		return err

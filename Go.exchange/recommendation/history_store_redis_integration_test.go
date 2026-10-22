@@ -170,6 +170,40 @@ func TestRedisHistoryStoreRecordsCommittedPageOnceIntegration(t *testing.T) {
 	assertHistoryMissing(t, client, historyKey, "7103")
 }
 
+func TestRedisHistoryStoreRecordsGuestPageOnceIntegration(t *testing.T) {
+	client := openHistoryIntegrationRedis(t)
+	store, err := NewRedisHistoryStore(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := uuid.NewString()
+	pageKey := uuid.NewString() + ":0"
+	historyKey := guestHistoryKey(sessionID)
+	receiptKey := guestPageHistoryReceiptKey(pageKey)
+	t.Cleanup(func() {
+		if err := client.Del(historyKey, receiptKey).Err(); err != nil {
+			t.Errorf("delete guest page history test keys: %v", err)
+		}
+	})
+
+	first := time.Now().UTC().Truncate(time.Second)
+	window := testHistoryWindow(first, 20, 24*time.Hour)
+	if err := store.RecordGuestServedForPage(context.Background(), sessionID, pageKey, []uint{8101, 8102}, window); err != nil {
+		t.Fatalf("record committed guest page: %v", err)
+	}
+	window.Now = first.Add(time.Minute)
+	if err := store.RecordGuestServedForPage(context.Background(), sessionID, pageKey, []uint{8101, 8103}, window); err != nil {
+		t.Fatalf("retry committed guest page: %v", err)
+	}
+	assertHistoryScore(t, client, historyKey, "8101", first)
+	assertHistoryScore(t, client, historyKey, "8102", first)
+	assertHistoryMissing(t, client, historyKey, "8103")
+	assertHistoryTTL(t, client, historyKey, window.TTL)
+	if strings.Contains(receiptKey, sessionID) || strings.Contains(historyKey, sessionID) {
+		t.Fatalf("guest session ID leaked into Redis key: history=%q receipt=%q", historyKey, receiptKey)
+	}
+}
+
 func TestRedisHistoryStoreGuestIntegration(t *testing.T) {
 	client := openHistoryIntegrationRedis(t)
 	store, err := NewRedisHistoryStore(client)

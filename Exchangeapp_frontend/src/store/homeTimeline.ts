@@ -162,7 +162,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
   let authGeneration = 0;
   let forYouRequestVersion = 0;
   let forYouPagingVersion = 0;
-  let forYouNoProgressPages = 0;
+  let forYouGuestSessionID: string | null = null;
   let followingRequestVersion = 0;
   let followingPagingVersion = 0;
   const resetForYou = () => {
@@ -177,7 +177,7 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     forYou.depleted = false;
     forYou.nextCursor = null;
     forYouLoadedPostIds.clear();
-    forYouNoProgressPages = 0;
+    forYouGuestSessionID = null;
   };
 
   const resetFollowing = () => {
@@ -724,17 +724,26 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     forYou.depleted = false;
 
     try {
+      const guestSessionID = capturedAudience.authenticated ? null : getGuestRecommendationSessionID();
+      if (!capturedAudience.authenticated && !guestSessionID) {
+        throw new Error('Guest recommendation session is unavailable');
+      }
+      forYouGuestSessionID = guestSessionID;
       const response = capturedAudience.authenticated
         ? await getPostRecommendations(HOME_FOR_YOU_PAGE_SIZE)
         : await getPublicPostRecommendations({
           limit: HOME_FOR_YOU_PAGE_SIZE,
-          guestSessionId: getGuestRecommendationSessionID(),
+          guestSessionId: guestSessionID,
         });
       if (!currentForYouRequest(version, generation, capturedAudience)) return;
+      if (response.depleted !== (response.continuation_status === 'exhausted')) {
+        throw new Error('Invalid recommendation continuation status');
+      }
       const newItems = appendForYouRecommendations(response.items);
       forYou.loaded = true;
       forYou.depleted = response.depleted;
       forYou.nextCursor = response.next_cursor ?? null;
+      forYou.loadMoreError = !response.depleted && !forYou.nextCursor;
       if (capturedAudience.authenticated) {
         void hydrateEngagementStates(
           newItems.map(({ post }) => post.id),
@@ -780,6 +789,20 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       return;
     }
 
+    const cursor = forYou.nextCursor;
+    if (!cursor) {
+      forYou.loadMoreError = true;
+      return;
+    }
+    const guestSessionID = capturedAudience.authenticated
+      ? null
+      : forYouGuestSessionID ?? getGuestRecommendationSessionID();
+    if (!capturedAudience.authenticated && !guestSessionID) {
+      forYou.loadMoreError = true;
+      return;
+    }
+    forYouGuestSessionID = guestSessionID;
+
     const requestVersion = forYouRequestVersion;
     const generation = authGeneration;
     const pagingVersion = ++forYouPagingVersion;
@@ -787,29 +810,25 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     forYou.loadMoreError = false;
 
     try {
-      const cursor = forYou.nextCursor;
       const response = capturedAudience.authenticated
-        ? cursor
-          ? await getPostRecommendations(HOME_FOR_YOU_PAGE_SIZE, cursor)
-          : await getPostRecommendations(HOME_FOR_YOU_PAGE_SIZE)
+        ? await getPostRecommendations(HOME_FOR_YOU_PAGE_SIZE, cursor)
         : await getPublicPostRecommendations({
           limit: HOME_FOR_YOU_PAGE_SIZE,
-          ...(cursor ? { cursor } : {}),
-          guestSessionId: getGuestRecommendationSessionID(),
+          cursor,
+          guestSessionId: guestSessionID,
         });
       if (!currentForYouPage(requestVersion, generation, pagingVersion, capturedAudience)) return;
+      if (response.depleted !== (response.continuation_status === 'exhausted')) {
+        throw new Error('Invalid recommendation continuation status');
+      }
       forYou.nextCursor = response.next_cursor ?? null;
       const newItems = appendForYouRecommendations(response.items);
       if (response.depleted) {
         forYou.depleted = true;
-        forYouNoProgressPages = 0;
-      } else if (newItems.length > 0) {
-        forYouNoProgressPages = 0;
-      } else if (response.items.length > 0) {
-        forYouNoProgressPages += 1;
-        if (forYouNoProgressPages >= 2) {
-          forYou.depleted = true;
-        }
+      } else if (newItems.length === 0 || !forYou.nextCursor || forYou.nextCursor === cursor) {
+        // Stop automatic re-entry on empty or duplicate pages while leaving the
+        // server's continuation state intact for an explicit retry.
+        forYou.loadMoreError = true;
       }
 
       if (capturedAudience.authenticated) {
@@ -820,23 +839,25 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
       }
     } catch (error) {
       if (currentForYouPage(requestVersion, generation, pagingVersion, capturedAudience)) {
-        if (capturedAudience.authenticated && forYou.nextCursor && getErrorStatus(error) === 410) {
+        if (forYou.nextCursor && getErrorStatus(error) === 410) {
           // Rebuild the cursor session once while preserving the loaded ID set.
           forYou.nextCursor = null;
           try {
-            const response = await getPostRecommendations(HOME_FOR_YOU_PAGE_SIZE);
+            const response = capturedAudience.authenticated
+              ? await getPostRecommendations(HOME_FOR_YOU_PAGE_SIZE)
+              : await getPublicPostRecommendations({
+                limit: HOME_FOR_YOU_PAGE_SIZE,
+                guestSessionId: guestSessionID,
+              });
             if (!currentForYouPage(requestVersion, generation, pagingVersion, capturedAudience)) return;
+            if (response.depleted !== (response.continuation_status === 'exhausted')) {
+              throw new Error('Invalid recommendation continuation status');
+            }
             forYou.nextCursor = response.next_cursor ?? null;
             const newItems = appendForYouRecommendations(response.items);
             forYou.depleted = response.depleted;
-            if (response.depleted) {
-              forYouNoProgressPages = 0;
-            } else if (newItems.length > 0) {
-              forYouNoProgressPages = 0;
-            } else if (response.items.length > 0) {
-              forYouNoProgressPages += 1;
-              if (forYouNoProgressPages >= 2) forYou.depleted = true;
-            }
+            forYou.loadMoreError = !response.depleted &&
+              (newItems.length === 0 || !forYou.nextCursor);
             void hydrateEngagementStates(
               newItems.map(({ post }) => post.id),
               () => currentForYouRequest(requestVersion, generation, capturedAudience),

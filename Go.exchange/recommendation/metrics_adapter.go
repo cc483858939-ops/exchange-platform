@@ -63,5 +63,15 @@ func (PrometheusMetrics) RecordProfileLoad(status string) {
 func (PrometheusMetrics) ObserveProfileAge(age time.Duration) {
 	metrics.ObserveRecommendationProfileAge(age)
 }
+func (PrometheusMetrics) RecordHistoricalScan(tier, status string, scanned, batches int, oldestAge, duration time.Duration) {
+	metrics.RecordRecommendationHistoricalScan(tier, status, scanned, batches, oldestAge, duration)
+}
+func (PrometheusMetrics) RecordUnderfilled(status string) {
+	metrics.RecordRecommendationUnderfilled(status)
+}
+func (PrometheusMetrics) AddMapperRejected(count int) {
+	metrics.AddRecommendationMapperRejected(count)
+}
 
 var _ Metrics = PrometheusMetrics{}
+var _ RecommendationDiagnosticsMetrics = PrometheusMetrics{}

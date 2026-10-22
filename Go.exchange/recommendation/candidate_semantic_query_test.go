@@ -86,8 +86,8 @@ func TestSemanticRecallBuildsOneWindowScopedCandidateQuery(t *testing.T) {
 	}
 	query := CandidateQuery{
 		UserID: 73, ServingVersion: "serving-v2", Limit: 3, PositiveVector: []float32{1, 0},
-		CandidateWindowStart: time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC),
-		CandidateWindowEnd:   time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC),
+		Range: CandidateRangeRecent, RecentCutoff: time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC),
+		Now: time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC),
 	}
 	if _, err := repository.LoadSemanticCandidates(context.Background(), query); err != nil {
 		t.Fatalf("build semantic candidate query: %v", err)

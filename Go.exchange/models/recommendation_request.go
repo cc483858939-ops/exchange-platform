@@ -42,7 +42,7 @@ type RecommendationRequest struct {
 	NovelAuthorResultCount      int       `json:"novel_author_result_count" gorm:"not null;default:0;check:chk_recommendation_request_novel_author,novel_author_result_count >= 0"`
 	SoftServedFallbackCount     int       `json:"soft_served_fallback_count" gorm:"not null;default:0;check:chk_recommendation_request_soft_served,soft_served_fallback_count >= 0"`
 	PersonalizationMode         string    `json:"personalization_mode" gorm:"size:32;not null;default:'cold_start';check:chk_recommendation_request_personalization_mode,personalization_mode IN ('semantic_social','social_only','cold_start')"`
-	FallbackReason              string    `json:"fallback_reason" gorm:"size:64;not null;default:'';check:chk_recommendation_request_fallback,fallback_reason IN ('','no_positive_profile','insufficient_fresh_candidates')"`
+	FallbackReason              string    `json:"fallback_reason" gorm:"size:64;not null;default:'';check:chk_recommendation_request_fallback,fallback_reason IN ('','no_positive_profile','historical_budget_limited','no_eligible_candidates','soft_served_revisit','partial_results')"`
 	GenerationLatencyMS         int64     `json:"generation_latency_ms" gorm:"not null;default:0;check:chk_recommendation_request_latency,generation_latency_ms >= 0"`
 	CreatedAt                   time.Time `json:"created_at" gorm:"not null;index:idx_recommendation_requests_user_created,priority:2;index:idx_recommendation_requests_created;index:idx_recommendation_requests_dimension_created,priority:5"`
 }

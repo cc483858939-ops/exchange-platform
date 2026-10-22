@@ -258,6 +258,27 @@ type RecommendationSnapshotConfig struct {
 	MaxPageSize     int  `mapstructure:"max_page_size"`
 }
 
+type RecommendationHistoricalBackfillConfig struct {
+	BatchSize         int `mapstructure:"batch_size"`
+	MaxScanPerRequest int `mapstructure:"max_scan_per_request"`
+}
+
+func (c RecommendationHistoricalBackfillConfig) Normalized() RecommendationHistoricalBackfillConfig {
+	if c.BatchSize <= 0 {
+		c.BatchSize = DefaultRecommendationHistoricalBatchSize
+	}
+	if c.BatchSize > 1000 {
+		c.BatchSize = 1000
+	}
+	if c.MaxScanPerRequest <= 0 {
+		c.MaxScanPerRequest = DefaultRecommendationHistoricalMaxScanPerRequest
+	}
+	if c.MaxScanPerRequest > 10000 {
+		c.MaxScanPerRequest = 10000
+	}
+	return c
+}
+
 // RecommendationProfileMaterializationConfig controls the nearline profile
 // projection worker. These values affect scheduling only; they are
 // deliberately excluded from the profile and ranker configuration hashes.
@@ -303,7 +324,8 @@ func (c RecommendationProfileMaterializationConfig) Normalized() RecommendationP
 
 type RecommendationConfig struct {
 	ServingTimeoutMS                  int                                        `mapstructure:"serving_timeout_ms"`
-	CandidateWindowDays               int                                        `mapstructure:"candidate_window_days"`
+	PrimaryWindowDays                 int                                        `mapstructure:"primary_window_days"`
+	HistoricalBackfill                RecommendationHistoricalBackfillConfig    `mapstructure:"historical_backfill"`
 	BehaviorWeights                   RecommendationBehaviorWeights              `mapstructure:"behavior_weights"`
 	Fusion                            RecommendationFusionConfig                 `mapstructure:"fusion"`
 	Trending                          RecommendationTrendingConfig               `mapstructure:"trending"`
@@ -333,21 +355,25 @@ type RecommendationConfig struct {
 	Snapshot                          RecommendationSnapshotConfig               `mapstructure:"snapshot"`
 }
 
-const DefaultRecommendationCandidateWindowDays = 7
+const (
+	DefaultRecommendationPrimaryWindowDays = 7
+	DefaultRecommendationHistoricalBatchSize = 200
+	DefaultRecommendationHistoricalMaxScanPerRequest = 2000
+)
 
-func NormalizeRecommendationCandidateWindowDays(days int) int {
+func NormalizeRecommendationPrimaryWindowDays(days int) int {
 	if days <= 0 {
-		return DefaultRecommendationCandidateWindowDays
+		return DefaultRecommendationPrimaryWindowDays
 	}
 	return days
 }
 
-func RecommendationCandidateWindowBounds(now time.Time, days int) (time.Time, time.Time) {
+func RecommendationPrimaryWindowBounds(now time.Time, days int) (time.Time, time.Time) {
 	end := now.UTC()
 	if end.IsZero() {
 		return time.Time{}, time.Time{}
 	}
-	start := end.AddDate(0, 0, -NormalizeRecommendationCandidateWindowDays(days))
+	start := end.AddDate(0, 0, -NormalizeRecommendationPrimaryWindowDays(days))
 	return start, end
 }
 

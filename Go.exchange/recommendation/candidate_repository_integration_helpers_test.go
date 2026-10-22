@@ -78,10 +78,14 @@ func TestDefaultRecommendationConfigIncludesTraceDispatcherDefaults(t *testing.T
 }
 
 func candidateQueryForTest(servingVersion string, userID uint, profile Profile, served ServedHistory, now time.Time, cfg config.RecommendationConfig, softOnly bool, limit int) CandidateQuery {
-	windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, cfg.CandidateWindowDays)
+	cutoff, _ := config.RecommendationPrimaryWindowBounds(now, cfg.PrimaryWindowDays)
+	rangeScope := CandidateRangeRecent
+	if softOnly {
+		rangeScope = CandidateRangeAny
+	}
 	return CandidateQuery{
 		UserID: userID, ServingVersion: servingVersion, Now: now, Limit: limit,
-		CandidateWindowStart: windowStart, CandidateWindowEnd: windowEnd,
+		Range: rangeScope, RecentCutoff: cutoff,
 		PositiveVector:      profile.PositiveVector,
 		TrendingCutoff:      now.AddDate(0, 0, -cfg.Trending.MaxAgeDays),
 		TrendingReplyFactor: cfg.Trending.ReplyFactor, TrendingHalfLifeHours: cfg.Trending.HalfLifeHours,
@@ -143,9 +147,9 @@ func loadPublicRecommendationSourceCandidates(db *gorm.DB, version string, now t
 	if err != nil {
 		return nil, err
 	}
-	windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, cfg.CandidateWindowDays)
+	cutoff, _ := config.RecommendationPrimaryWindowBounds(now, cfg.PrimaryWindowDays)
 	return repository.LoadPublicRecentCandidates(recommendationDBTestContext(db), PublicCandidateQuery{
-		ServingVersion: version, Now: now, CandidateWindowStart: windowStart, CandidateWindowEnd: windowEnd,
+		ServingVersion: version, Now: now, Range: CandidateRangeRecent, RecentCutoff: cutoff,
 		Limit: limit, ExcludedPostIDs: excluded,
 	})
 }
@@ -155,9 +159,9 @@ func loadPublicRecommendationTrendingCandidates(db *gorm.DB, version string, now
 	if err != nil {
 		return nil, err
 	}
-	windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, cfg.CandidateWindowDays)
+	cutoff, _ := config.RecommendationPrimaryWindowBounds(now, cfg.PrimaryWindowDays)
 	return repository.LoadPublicTrendingCandidates(recommendationDBTestContext(db), PublicCandidateQuery{
-		ServingVersion: version, CandidateWindowStart: windowStart, CandidateWindowEnd: windowEnd,
+		ServingVersion: version, Range: CandidateRangeRecent, RecentCutoff: cutoff,
 		Now: now, Limit: limit, TrendingCutoff: now.AddDate(0, 0, -cfg.Trending.MaxAgeDays),
 		TrendingReplyFactor: cfg.Trending.ReplyFactor, TrendingHalfLifeHours: cfg.Trending.HalfLifeHours,
 		ExcludedPostIDs: excluded,

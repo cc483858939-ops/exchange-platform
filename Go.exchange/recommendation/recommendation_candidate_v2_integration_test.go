@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -258,8 +259,7 @@ func TestRecommendationCandidateSourcesRequireServingEmbeddingAcrossAllSourcesIn
 			}
 
 			publicQuery := PublicCandidateQuery{
-				ServingVersion: tc.serving, Now: now, CandidateWindowStart: query.CandidateWindowStart,
-				CandidateWindowEnd: query.CandidateWindowEnd, Limit: 10,
+				ServingVersion: tc.serving, Now: now, Range: query.Range, RecentCutoff: query.RecentCutoff, Limit: 10,
 				TrendingCutoff: now.Add(-3 * 24 * time.Hour), TrendingReplyFactor: 1.5, TrendingHalfLifeHours: 12,
 			}
 			publicRecent, err := repository.LoadPublicRecentCandidates(context.Background(), publicQuery)
@@ -314,9 +314,9 @@ func TestRecommendationCandidateSourcesRequireServingEmbeddingAcrossAllSourcesIn
 	}
 
 	windowCfg := cfg
-	windowCfg.CandidateWindowDays = 5
+	windowCfg.PrimaryWindowDays = 5
 	windowCfg.Trending.MaxAgeDays = 10
-	windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, windowCfg.CandidateWindowDays)
+	windowStart, windowEnd := config.RecommendationPrimaryWindowBounds(now, windowCfg.PrimaryWindowDays)
 	boundaryPost := newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, author, "window-boundary", windowStart)
 	currentPost := newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, author, "window-current", windowEnd)
 	olderPost := newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, author, "window-older", windowStart.Add(-time.Second))
@@ -369,8 +369,8 @@ func TestRecommendationCandidateSourcesRequireServingEmbeddingAcrossAllSourcesIn
 			}
 
 			publicQuery := PublicCandidateQuery{
-				ServingVersion: servingVersion, Now: now, CandidateWindowStart: windowStart,
-				CandidateWindowEnd: windowEnd, Limit: 10, ExcludedPostIDs: excludedInitial,
+				ServingVersion: servingVersion, Now: now, Range: CandidateRangeRecent,
+				RecentCutoff: windowStart, Limit: 10, ExcludedPostIDs: excludedInitial,
 				TrendingCutoff: now.AddDate(0, 0, -windowCfg.Trending.MaxAgeDays), TrendingReplyFactor: 1.5, TrendingHalfLifeHours: 12,
 			}
 			publicRecent, err := repository.LoadPublicRecentCandidates(context.Background(), publicQuery)
@@ -507,8 +507,12 @@ func TestRecommendationServeKeepsEmbeddingOptionalAcrossServingVersionSwitchesIn
 	}
 	serve := func(kind ViewerKind, userID uint, label string) ServeResult {
 		t.Helper()
+		viewer := Viewer{Kind: kind, UserID: userID}
+		if kind == ViewerGuest {
+			viewer.GuestSessionID = "guest-" + label
+		}
 		result, err := service.Serve(context.Background(), ServeRequest{
-			Viewer: Viewer{Kind: kind, UserID: userID}, Limit: len(postIDs), RequestID: "candidate-version-" + label + "-" + uuid.NewString(), Now: now,
+			Viewer: viewer, Limit: len(postIDs), RequestID: "candidate-version-" + label + "-" + uuid.NewString(), Now: now,
 		})
 		if err != nil {
 			t.Fatalf("serve %s: %v", label, err)
@@ -568,8 +572,8 @@ func TestRecommendationServeExcludesCanonicalInteractionAcrossServingVersionSwit
 	viewer := newRecommendationCandidateIntegrationUser(t, db, "interaction-version-switch-viewer")
 	author := newRecommendationCandidateIntegrationUser(t, db, "interaction-version-switch-author")
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	interacted := newRecommendationCandidateIntegrationPost(t, db, author, "interacted", now.Add(-2*time.Minute))
-	withoutEmbedding := newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, author, "without-embedding", now.Add(-time.Minute))
+	interacted := newRecommendationCandidateIntegrationPost(t, db, author, "interacted", now.AddDate(0, 0, -400))
+	withoutEmbedding := newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, author, "without-embedding", now.AddDate(0, 0, -401))
 	postIDs := []uint{interacted.ID, withoutEmbedding.ID}
 	userIDs := []uint{viewer.ID, author.ID}
 	t.Cleanup(func() {
@@ -665,6 +669,139 @@ func TestRecommendationServeExcludesCanonicalInteractionAcrossServingVersionSwit
 	}
 	if persisted.EmbeddingVersion != "post_embedding_v1" {
 		t.Fatalf("profile was rebuilt during v2 serving: embedding version=%q", persisted.EmbeddingVersion)
+	}
+}
+
+func TestHistoricalSnapshotPagesRetainUnvectorizedPostsIntegration(t *testing.T) {
+	db := openRecommendationCandidateIntegrationDB(t)
+	author := newRecommendationCandidateIntegrationUser(t, db, "historical-snapshot-author")
+	now := time.Now().UTC().Truncate(time.Second)
+	posts := []models.Post{
+		newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, author, "historical-snapshot-400d", now.AddDate(0, 0, -400)),
+		newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, author, "historical-snapshot-401d", now.AddDate(0, 0, -401)),
+		newRecommendationCandidateIntegrationPostWithoutEmbedding(t, db, author, "historical-snapshot-402d", now.AddDate(0, 0, -402)),
+	}
+	cfg := testDefaultRecommendationConfig()
+	cfg.Snapshot = config.RecommendationSnapshotConfig{
+		Enabled: true, TTLSeconds: 120, MaxCandidates: 10, PreselectPages: 1,
+		DefaultPageSize: 1, MaxPageSize: 1,
+	}
+	cfg.HistoricalBackfill = config.RecommendationHistoricalBackfillConfig{BatchSize: 2, MaxScanPerRequest: 2}
+	cfg.OutOfNetworkMinRatio = 0
+	cfg.Diversity.Enabled = false
+	cfg.Exploration.Ratio = 0
+	candidates, err := NewGormCandidateRepository(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := &serviceTestHistoryStore{}
+	service, err := NewService(ServiceDependencies{
+		DataDependencies: DataDependencies{Candidates: candidates, History: history},
+		ServingVersions:  recommendationCandidateDBServingVersionProvider{db: db},
+		Snapshots:        newMemorySnapshotStore(),
+	}, ServiceConfig{
+		Recommendation: cfg, SnapshotSigningKey: []byte(strings.Repeat("historical-snapshot-signing-key-", 2)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewer := Viewer{Kind: ViewerGuest, GuestSessionID: uuid.NewString()}
+	seen := make(map[uint]struct{}, len(posts))
+	request := ServeRequest{Viewer: viewer, Limit: 1, RequestID: uuid.NewString(), Now: now}
+	for pageIndex := 0; pageIndex < len(posts)+2; pageIndex++ {
+		result, err := service.Serve(context.Background(), request)
+		if err != nil {
+			t.Fatalf("serve historical page %d: %v", pageIndex, err)
+		}
+		for _, item := range result.Selected {
+			if item.Candidate.RecallTier != RecallTierHistoricalUnseen || item.Embedding != nil {
+				t.Fatalf("page %d historical item lost tier or required an embedding: %+v", pageIndex, item)
+			}
+			if _, duplicate := seen[item.Post.ID]; duplicate {
+				t.Fatalf("page %d repeated historical post %d", pageIndex, item.Post.ID)
+			}
+			seen[item.Post.ID] = struct{}{}
+		}
+		if err := service.(ServingFinalizer).FinalizeServing(context.Background(), result, result.Selected); err != nil {
+			t.Fatalf("finalize historical page %d: %v", pageIndex, err)
+		}
+		if result.Depleted {
+			break
+		}
+		if result.NextCursor == "" {
+			t.Fatalf("non-depleted page %d omitted its continuation cursor (status=%q)", pageIndex, result.ContinuationStatus)
+		}
+		request.Cursor = result.NextCursor
+		request.RequestID = uuid.NewString()
+		request.Now = request.Now.Add(time.Second)
+	}
+	if len(seen) != len(posts) {
+		t.Fatalf("historical snapshot returned %d unique unvectorized posts, want %d: %v", len(seen), len(posts), seen)
+	}
+}
+
+func TestHistoricalKeysetPlanUsesRecommendationIndexAtScaleIntegration(t *testing.T) {
+	db := openRecommendationCandidateIntegrationDB(t)
+	author := newRecommendationCandidateIntegrationUser(t, db, "historical-plan-author")
+	now := time.Now().UTC().Truncate(time.Second)
+	createdAt := now.AddDate(0, 0, -400)
+	if err := db.Exec(`
+INSERT INTO posts (created_at, updated_at, author_id, content, visibility)
+SELECT ?, ?, ?, 'historical-plan-' || row_num::text, 'public'
+FROM generate_series(1, 30000) AS row_num`, createdAt, createdAt, author.ID).Error; err != nil {
+		t.Fatalf("insert large historical fixture: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Unscoped().Where("author_id = ? AND content LIKE ?", author.ID, "historical-plan-%").Delete(&models.Post{}).Error; err != nil {
+			t.Errorf("delete historical query-plan fixture: %v", err)
+		}
+	})
+	if err := db.Exec("ANALYZE posts").Error; err != nil {
+		t.Fatalf("analyze historical fixture: %v", err)
+	}
+	repository, err := NewGormCandidateRepository(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cutoff := now.AddDate(0, 0, -7)
+	page, err := repository.LoadHistoricalCandidates(context.Background(), CandidateQuery{
+		Now: now, Range: CandidateRangeHistorical, RecentCutoff: cutoff, Limit: 200,
+	})
+	if err != nil || len(page.Candidates) != 200 || page.Exhausted || page.Cursor.PostID == 0 {
+		t.Fatalf("large first historical batch size=%d exhausted=%t cursor=%+v err=%v", len(page.Candidates), page.Exhausted, page.Cursor, err)
+	}
+	planRows, err := db.Raw(`EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
+SELECT posts.id, posts.created_at
+FROM posts
+WHERE posts.deleted_at IS NULL
+  AND posts.visibility = 'public'
+  AND posts.reply_to_post_id IS NULL
+  AND EXISTS (SELECT 1 FROM users AS post_author WHERE post_author.id = posts.author_id AND post_author.deleted_at IS NULL)
+  AND posts.created_at < ?
+  AND (posts.created_at, posts.id) < (?, ?)
+  AND NOT EXISTS (SELECT 1 FROM user_post_reco_states AS rs WHERE rs.user_id = ? AND rs.post_id = posts.id AND rs.interacted = TRUE)
+ORDER BY posts.created_at DESC, posts.id DESC
+LIMIT 200`, cutoff, page.Cursor.CreatedAt, page.Cursor.PostID, uint(0)).Rows()
+	if err != nil {
+		t.Fatalf("explain historical keyset batch: %v", err)
+	}
+	defer planRows.Close()
+	var plan strings.Builder
+	for planRows.Next() {
+		var line string
+		if err := planRows.Scan(&line); err != nil {
+			t.Fatalf("read historical query plan: %v", err)
+		}
+		plan.WriteString(line)
+		plan.WriteByte('\n')
+	}
+	if err := planRows.Err(); err != nil {
+		t.Fatalf("read historical query plan: %v", err)
+	}
+	planText := plan.String()
+	t.Logf("historical keyset plan:\n%s", planText)
+	if !strings.Contains(planText, "idx_posts_recommendation_recent") || !strings.Contains(planText, "Index Scan") {
+		t.Fatalf("large historical keyset plan did not use the recommendation created_at/id index:\n%s", planText)
 	}
 }
 

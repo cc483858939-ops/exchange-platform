@@ -26,10 +26,11 @@ type RecommendedPostResponse struct {
 }
 
 type postRecommendationPageResponse struct {
-	Items      []RecommendedPostResponse `json:"items"`
-	RequestID  string                    `json:"request_id"`
-	NextCursor *string                   `json:"next_cursor"`
-	Depleted   bool                      `json:"depleted"`
+	Items              []RecommendedPostResponse         `json:"items"`
+	RequestID          string                            `json:"request_id"`
+	NextCursor         *string                           `json:"next_cursor"`
+	Depleted           bool                              `json:"depleted"`
+	ContinuationStatus recommendation.ContinuationStatus `json:"continuation_status"`
 }
 
 type recommendationTrackingResponse struct {
@@ -70,7 +71,11 @@ func (handler *RecommendationHandler) GetPostRecommendations(ctx *gin.Context) {
 }
 
 func (handler *RecommendationHandler) GetPublicPostRecommendations(ctx *gin.Context) {
-	guestSessionID, _ := parseGuestRecommendationSessionID(ctx.GetHeader(guestRecommendationSessionHeader))
+	guestSessionID, ok := parseGuestRecommendationSessionID(ctx.GetHeader(guestRecommendationSessionHeader))
+	if !ok {
+		writeAPIError(ctx, "INVALID_REQUEST")
+		return
+	}
 	handler.serve(ctx, recommendation.Viewer{Kind: recommendation.ViewerGuest, GuestSessionID: guestSessionID})
 }
 
@@ -149,8 +154,16 @@ func (handler *RecommendationHandler) serve(ctx *gin.Context, viewer recommendat
 		value := result.NextCursor
 		nextCursor = &value
 	}
+	continuationStatus := result.ContinuationStatus
+	if continuationStatus == "" {
+		continuationStatus = recommendation.ContinuationAvailable
+		if result.Depleted {
+			continuationStatus = recommendation.ContinuationExhausted
+		}
+	}
 	ctx.JSON(http.StatusOK, postRecommendationPageResponse{
-		Items: recommendations, RequestID: result.RequestID, NextCursor: nextCursor, Depleted: result.Depleted,
+		Items: recommendations, RequestID: result.RequestID, NextCursor: nextCursor,
+		Depleted: result.Depleted, ContinuationStatus: continuationStatus,
 	})
 }
 

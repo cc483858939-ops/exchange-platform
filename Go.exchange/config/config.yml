@@ -56,7 +56,10 @@ outbox:
 
 recommendation:
   serving_timeout_ms: 5000
-  candidate_window_days: 7
+  primary_window_days: 7
+  historical_backfill:
+    batch_size: 200
+    max_scan_per_request: 2000
   behavior_weights:
     view: 0.25
     like: 4

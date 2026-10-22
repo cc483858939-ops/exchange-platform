@@ -910,14 +910,14 @@ func TestPublicRecommendationHandlerNormalizesGuestSessionHeader(t *testing.T) {
 	}
 }
 
-func TestPublicRecommendationHandlerKeepsInvalidGuestSessionEmpty(t *testing.T) {
+func TestPublicRecommendationHandlerRequiresValidGuestSession(t *testing.T) {
 	service := &fakeRecommendationService{result: recommendation.ServeResult{RequestID: "guest-request", Now: time.Now().UTC()}}
 	mapper := &fakeRecommendationResponseMapper{}
 	handler := newRecommendationHandlerForTest(t, service, mapper, 0)
 	ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/public/recommendations/posts")
 	ctx.Request.Header.Set(guestRecommendationSessionHeader, "not-a-uuid")
 	handler.GetPublicPostRecommendations(ctx)
-	if recorder.Code != http.StatusOK || len(service.requests) != 1 || service.requests[0].Viewer != (recommendation.Viewer{Kind: recommendation.ViewerGuest}) {
+	if recorder.Code != http.StatusBadRequest || len(service.requests) != 0 {
 		t.Fatalf("status=%d requests=%#v body=%s", recorder.Code, service.requests, recorder.Body.String())
 	}
 }
@@ -1100,6 +1100,7 @@ func TestRecommendationHTTPSpanLinksRequestIDForSuccessAndFailures(t *testing.T)
 			mapper := &fakeRecommendationResponseMapper{err: test.mapperErr}
 			handler := newRecommendationHandlerForTest(t, service, mapper, 0)
 			ctx, recorder := newRecommendationHTTPContext(http.MethodGet, "/api/public/recommendations/posts")
+			ctx.Request.Header.Set(guestRecommendationSessionHeader, "4ca3706b-197e-4f63-8f51-f99176f8b61c")
 			ctx.Request = ctx.Request.WithContext(requestCtx)
 			handler.GetPublicPostRecommendations(ctx)
 			serverSpan.End()

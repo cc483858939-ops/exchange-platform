@@ -86,13 +86,23 @@ func TestRecommendationRankerConfigHashIncludesServingVersion(t *testing.T) {
 	}
 }
 
-func TestRecommendationRankerConfigHashIncludesCandidateWindow(t *testing.T) {
+func TestRecommendationRankerConfigHashIncludesRecallWindowAndHistoricalBudget(t *testing.T) {
 	cfg := serviceTestConfig()
-	cfg.CandidateWindowDays = 7
+	cfg.PrimaryWindowDays = 7
 	sevenDayHash := RankerConfigHash(cfg, "post_embedding_v1")
-	cfg.CandidateWindowDays = 5
+	cfg.PrimaryWindowDays = 5
 	if fiveDayHash := RankerConfigHash(cfg, "post_embedding_v1"); sevenDayHash == fiveDayHash {
-		t.Fatalf("candidate-window change did not change ranker hash: %q", sevenDayHash)
+		t.Fatalf("primary-window change did not change ranker hash: %q", sevenDayHash)
+	}
+	cfg = serviceTestConfig()
+	cfg.HistoricalBackfill.BatchSize++
+	if RankerConfigHash(cfg, "post_embedding_v1") == sevenDayHash {
+		t.Fatal("historical batch size change did not change ranker hash")
+	}
+	cfg = serviceTestConfig()
+	cfg.HistoricalBackfill.MaxScanPerRequest++
+	if RankerConfigHash(cfg, "post_embedding_v1") == sevenDayHash {
+		t.Fatal("historical scan budget change did not change ranker hash")
 	}
 }
 
@@ -254,7 +264,7 @@ func TestRecommendationServingVersionsRemainRRFV6Contract(t *testing.T) {
 	if RecommendationTrackingTokenVersion != "v3" || eventing.RecommendationBehaviorSchemaVersion != 3 {
 		t.Fatalf("tracking=%q behavior schema=%d", RecommendationTrackingTokenVersion, eventing.RecommendationBehaviorSchemaVersion)
 	}
-	if CandidateRetrievalVersion != "social_semantic_materialized_profile_rrf_v6" || MaterializedProfileVersion != "materialized_profile_v1" {
+	if CandidateRetrievalVersion != "social_semantic_materialized_profile_tiered_history_rrf_v7" || MaterializedProfileVersion != "materialized_profile_v1" {
 		t.Fatalf("retrieval contract changed; materialized profile=%q", MaterializedProfileVersion)
 	}
 }

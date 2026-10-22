@@ -50,14 +50,14 @@ func TestCalculatePostEmbeddingCoverage(t *testing.T) {
 		t.Fatalf("coverage=%+v", coverage)
 	}
 	if scanner.version != "post_embedding_v2" || scanner.pageSize != postEmbeddingCoveragePageSize ||
-		!scanner.start.Equal(now.AddDate(0, 0, -5)) || !scanner.end.Equal(now) || coverage.CandidateWindowDays != 5 {
+		!scanner.start.Equal(now.AddDate(0, 0, -5)) || !scanner.end.Equal(now) || coverage.PrimaryWindowDays != 5 {
 		t.Fatalf("scan version=%q page size=%d range=[%s,%s] coverage=%+v", scanner.version, scanner.pageSize, scanner.start, scanner.end, coverage)
 	}
 	var output bytes.Buffer
 	if err := writePostEmbeddingCoverage(&output, coverage); err != nil {
 		t.Fatal(err)
 	}
-	want := "post embedding coverage:\ntarget_version=post_embedding_v2\ncandidate_window_days=5\nwindow_start=2026-10-14T12:00:00Z\nwindow_end=2026-10-19T12:00:00Z\nempty_candidate_set=false\neligible=3\nready=1\nmissing=2\nstale_content=1\ncoverage=33.3333%\n"
+	want := "post embedding coverage:\ntarget_version=post_embedding_v2\nprimary_window_days=5\nwindow_start=2026-10-14T12:00:00Z\nwindow_end=2026-10-19T12:00:00Z\nempty_candidate_set=false\neligible=3\nready=1\nmissing=2\nstale_content=1\ncoverage=33.3333%\n"
 	if output.String() != want {
 		t.Fatalf("output=%q want=%q", output.String(), want)
 	}
@@ -65,7 +65,7 @@ func TestCalculatePostEmbeddingCoverage(t *testing.T) {
 
 func TestCalculatePostEmbeddingCoverageReportsEmptyCandidateSet(t *testing.T) {
 	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
-	coverage, err := calculatePostEmbeddingCoverage(context.Background(), &coverageTestScanner{}, "v1", now, config.DefaultRecommendationCandidateWindowDays)
+	coverage, err := calculatePostEmbeddingCoverage(context.Background(), &coverageTestScanner{}, "v1", now, config.DefaultRecommendationPrimaryWindowDays)
 	if err != nil {
 		t.Fatal(err)
 	}

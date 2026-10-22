@@ -57,7 +57,7 @@ func cleanupRecommendationRecallV3Data(db *gorm.DB, postIDs, userIDs []uint) {
 	}
 }
 
-func TestSemanticRecallUsesCandidateWindowAndCosineOrderIntegration(t *testing.T) {
+func TestSemanticRecallUsesRecentRangeAndCosineOrderIntegration(t *testing.T) {
 	db := openRecommendationRecallV3IntegrationDB(t)
 	viewer := newRecommendationCandidateIntegrationUser(t, db, "semantic-window-viewer")
 	author := newRecommendationCandidateIntegrationUser(t, db, "semantic-window-author")
@@ -79,7 +79,7 @@ func TestSemanticRecallUsesCandidateWindowAndCosineOrderIntegration(t *testing.T
 	t.Cleanup(func() { cleanupRecommendationRecallV3Data(db, postIDs, userIDs) })
 
 	cfg := testDefaultRecommendationConfig()
-	cfg.CandidateWindowDays = 7
+	cfg.PrimaryWindowDays = 7
 	profile := Profile{PositiveVector: []float32{1, 0}}
 	candidates, err := loadRecommendationSemanticCandidates(db, recommendationRecallV3TestVersion, viewer.ID, profile, map[uint]ServedItem{}, now, cfg, false, 3)
 	if err != nil {
@@ -162,7 +162,7 @@ func TestSemanticRecallPreservesRecommendationEligibilityIntegration(t *testing.
 	}
 }
 
-func TestSemanticRecallUnderfillDoesNotEscapeCandidateWindowIntegration(t *testing.T) {
+func TestSemanticRecallUnderfillStaysInRecentTierIntegration(t *testing.T) {
 	db := openRecommendationRecallV3IntegrationDB(t)
 	viewer := newRecommendationCandidateIntegrationUser(t, db, "semantic-underfill-viewer")
 	author := newRecommendationCandidateIntegrationUser(t, db, "semantic-underfill-author")
@@ -182,7 +182,7 @@ func TestSemanticRecallUnderfillDoesNotEscapeCandidateWindowIntegration(t *testi
 	t.Cleanup(func() { cleanupRecommendationRecallV3Data(db, postIDs, userIDs) })
 
 	cfg := testDefaultRecommendationConfig()
-	cfg.CandidateWindowDays = 7
+	cfg.PrimaryWindowDays = 7
 	profile := Profile{PositiveVector: []float32{1, 0}}
 	candidates, err := loadRecommendationSemanticCandidates(db, recommendationRecallV3TestVersion, viewer.ID, profile, map[uint]ServedItem{}, now, cfg, false, 4)
 	if err != nil {

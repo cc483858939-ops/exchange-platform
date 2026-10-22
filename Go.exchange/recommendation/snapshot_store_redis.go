@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	snapshotRedisKeyPrefix  = "recommendation:pool:v1:"
+	snapshotRedisKeyPrefix  = "recommendation:pool:v2:"
 	maxCursorBytes          = 2048
 	defaultSnapshotMaxBytes = 1 << 20
 )
@@ -60,7 +60,7 @@ func (codec *CursorCodec) OwnerDigest(viewer Viewer) string {
 		identity = "guest:" + strings.TrimSpace(viewer.GuestSessionID)
 	}
 	mac := hmac.New(sha256.New, codec.key)
-	_, _ = mac.Write([]byte("recommendation-owner-v1:" + identity))
+	_, _ = mac.Write([]byte("recommendation-owner-v2:" + identity))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
@@ -69,7 +69,7 @@ func (codec *CursorCodec) Encode(snapshotID string, pageIndex, pageSize int, vie
 		return "", ErrInvalidCursor
 	}
 	payload := snapshotCursorPayload{
-		Version: 1, SnapshotID: snapshotID, PageIndex: pageIndex, PageSize: pageSize,
+		Version: 2, SnapshotID: snapshotID, PageIndex: pageIndex, PageSize: pageSize,
 		OwnerDigest: codec.OwnerDigest(viewer), ExpiresAt: expiresAt.UTC().Unix(),
 	}
 	encoded, err := json.Marshal(payload)
@@ -108,7 +108,7 @@ func (codec *CursorCodec) Decode(cursor string, viewer Viewer, pageSize int, now
 		return snapshotCursorPayload{}, ErrInvalidCursor
 	}
 	var payload snapshotCursorPayload
-	if err := json.Unmarshal(encoded, &payload); err != nil || payload.Version != 1 || payload.SnapshotID == "" || payload.PageIndex < 0 || payload.PageSize <= 0 {
+	if err := json.Unmarshal(encoded, &payload); err != nil || payload.Version != 2 || payload.SnapshotID == "" || payload.PageIndex < 0 || payload.PageSize <= 0 {
 		return snapshotCursorPayload{}, ErrInvalidCursor
 	}
 	if payload.ExpiresAt <= now.UTC().Unix() {

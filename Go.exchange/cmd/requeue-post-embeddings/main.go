@@ -84,25 +84,25 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	now := time.Now().UTC()
-	candidateWindowDays := config.NormalizeRecommendationCandidateWindowDays(config.AppConfig.Recommendation.CandidateWindowDays)
-	stats, err := requeuePostEmbeddings(ctx, global.WorkerDb, publisher, config.BuildEmbeddingVersion(), now, candidateWindowDays)
+	primaryWindowDays := config.NormalizeRecommendationPrimaryWindowDays(config.AppConfig.Recommendation.PrimaryWindowDays)
+	stats, err := requeuePostEmbeddings(ctx, global.WorkerDb, publisher, config.BuildEmbeddingVersion(), now, primaryWindowDays)
 	if err != nil {
 		log.Fatalf("failed to requeue post embeddings: %v", err)
 	}
-	windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, candidateWindowDays)
-	log.Printf("post embedding reconciliation completed: candidate_window_days=%d window_start=%s window_end=%s scanned=%d missing=%d stale_content=%d published=%d",
-		candidateWindowDays, windowStart.Format(time.RFC3339Nano), windowEnd.Format(time.RFC3339Nano),
+	windowStart, windowEnd := config.RecommendationPrimaryWindowBounds(now, primaryWindowDays)
+	log.Printf("post embedding reconciliation completed: primary_window_days=%d window_start=%s window_end=%s scanned=%d missing=%d stale_content=%d published=%d",
+		primaryWindowDays, windowStart.Format(time.RFC3339Nano), windowEnd.Format(time.RFC3339Nano),
 		stats.Scanned, stats.Missing, stats.StaleContent, stats.Published)
 }
 
-func requeuePostEmbeddings(ctx context.Context, db *gorm.DB, publisher eventing.BatchPublisher, buildVersion string, now time.Time, candidateWindowDays int) (requeueStats, error) {
+func requeuePostEmbeddings(ctx context.Context, db *gorm.DB, publisher eventing.BatchPublisher, buildVersion string, now time.Time, primaryWindowDays int) (requeueStats, error) {
 	if db == nil {
 		return requeueStats{}, errors.New("database is not initialized")
 	}
-	return reconcilePostEmbeddings(ctx, gormPostEmbeddingReconciliationScanner{db: db}, publisher, buildVersion, now, candidateWindowDays)
+	return reconcilePostEmbeddings(ctx, gormPostEmbeddingReconciliationScanner{db: db}, publisher, buildVersion, now, primaryWindowDays)
 }
 
-func reconcilePostEmbeddings(ctx context.Context, scanner postEmbeddingReconciliationScanner, publisher eventing.BatchPublisher, buildVersion string, now time.Time, candidateWindowDays int) (requeueStats, error) {
+func reconcilePostEmbeddings(ctx context.Context, scanner postEmbeddingReconciliationScanner, publisher eventing.BatchPublisher, buildVersion string, now time.Time, primaryWindowDays int) (requeueStats, error) {
 	stats := requeueStats{}
 	if scanner == nil {
 		return stats, errors.New("post embedding reconciliation scanner is nil")
@@ -117,7 +117,7 @@ func reconcilePostEmbeddings(ctx context.Context, scanner postEmbeddingReconcili
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, candidateWindowDays)
+	windowStart, windowEnd := config.RecommendationPrimaryWindowBounds(now, primaryWindowDays)
 
 	var lastID uint
 	for {

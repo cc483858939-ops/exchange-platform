@@ -129,7 +129,7 @@ func TestNormalizedRecommendationConfigMissingFieldsPreserveDefaults(t *testing.
 		cfg.BehaviorWeights.Click != 1 || cfg.BehaviorWeights.QualifiedRead != 2.5 ||
 		cfg.BehaviorWeights.Reply != 5 || cfg.BehaviorWeights.QuickBounce != -2 ||
 		cfg.BehaviorWeights.NotInterested != -8 ||
-		cfg.CandidateWindowDays != 7 ||
+		cfg.PrimaryWindowDays != 7 ||
 		cfg.Trending.MaxAgeDays != 3 || cfg.Trending.HalfLifeHours != 12 || cfg.Trending.ReplyFactor != 1.5 ||
 		cfg.FollowingBonus != 0.5 ||
 		cfg.OutOfNetworkMinRatio != 0.30 || cfg.Exploration.Ratio != 0.10 || cfg.Exploration.MaxSlots != 3 ||
@@ -139,17 +139,27 @@ func TestNormalizedRecommendationConfigMissingFieldsPreserveDefaults(t *testing.
 	}
 }
 
-func TestNormalizedRecommendationCandidateWindowDefaultsAndAcceptsPositiveOverride(t *testing.T) {
-	if got := NormalizeConfig(config.RecommendationConfig{}, nil).CandidateWindowDays; got != 7 {
-		t.Fatalf("candidate window default=%d, want 7", got)
+func TestNormalizedRecommendationPrimaryWindowAndHistoricalBackfillDefaults(t *testing.T) {
+	if got := NormalizeConfig(config.RecommendationConfig{}, nil).PrimaryWindowDays; got != 7 {
+		t.Fatalf("primary window default=%d, want 7", got)
 	}
-	configured := config.RecommendationConfig{CandidateWindowDays: 5}
-	if got := NormalizeConfig(configured, nil).CandidateWindowDays; got != 5 {
-		t.Fatalf("candidate window override=%d, want 5", got)
+	configured := config.RecommendationConfig{PrimaryWindowDays: 5}
+	if got := NormalizeConfig(configured, nil).PrimaryWindowDays; got != 5 {
+		t.Fatalf("primary window override=%d, want 5", got)
 	}
-	configured.CandidateWindowDays = -1
-	if got := NormalizeConfig(configured, nil).CandidateWindowDays; got != 7 {
-		t.Fatalf("invalid candidate window=%d, want default 7", got)
+	configured.PrimaryWindowDays = -1
+	normalized := NormalizeConfig(configured, nil)
+	if normalized.PrimaryWindowDays != 7 {
+		t.Fatalf("invalid primary window=%d, want default 7", normalized.PrimaryWindowDays)
+	}
+	if normalized.HistoricalBackfill.BatchSize != config.DefaultRecommendationHistoricalBatchSize ||
+		normalized.HistoricalBackfill.MaxScanPerRequest != config.DefaultRecommendationHistoricalMaxScanPerRequest {
+		t.Fatalf("historical backfill defaults=%+v", normalized.HistoricalBackfill)
+	}
+	configured.HistoricalBackfill = config.RecommendationHistoricalBackfillConfig{BatchSize: 1500, MaxScanPerRequest: 12000}
+	normalized = NormalizeConfig(configured, nil)
+	if normalized.HistoricalBackfill.BatchSize != 1000 || normalized.HistoricalBackfill.MaxScanPerRequest != 10000 {
+		t.Fatalf("historical backfill bounds=%+v", normalized.HistoricalBackfill)
 	}
 }
 

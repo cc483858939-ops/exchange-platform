@@ -7,14 +7,38 @@ import (
 	"Go.exchange/models"
 )
 
-// CandidateQuery contains already-resolved serving inputs. Repositories only
-// apply these bounds and exclusions; callers own config and time policy.
+type CandidateRange uint8
+
+const (
+	CandidateRangeRecent CandidateRange = iota + 1
+	CandidateRangeHistorical
+	CandidateRangeAny
+)
+
+// HistoricalCursor is the stable keyset position after the last historical
+// candidate returned by the repository.
+type HistoricalCursor struct {
+	CreatedAt time.Time `json:"created_at"`
+	PostID    uint      `json:"post_id"`
+}
+
+type HistoricalCandidatePage struct {
+	Candidates []Candidate
+	Cursor     HistoricalCursor
+	Scanned    int
+	Exhausted  bool
+}
+
+// CandidateQuery contains resolved serving state and an explicit content
+// range. Snapshot revalidation uses CandidateRangeAny so old cached candidates
+// remain eligible while current visibility and interaction filters are reapplied.
 type CandidateQuery struct {
 	UserID                        uint
 	ServingVersion                string
 	Now                           time.Time
-	CandidateWindowStart          time.Time
-	CandidateWindowEnd            time.Time
+	Range                         CandidateRange
+	RecentCutoff                  time.Time
+	HistoricalCursor              *HistoricalCursor
 	Limit                         int
 	PositiveVector                []float32
 	TrendingCutoff                time.Time
@@ -24,6 +48,7 @@ type CandidateQuery struct {
 	SoftOnly                      bool
 	MaterializedInteractionsReady bool
 	InteractedPostIDs             map[uint]struct{}
+	ExcludedPostIDs               map[uint]struct{}
 	OnboardingInterestSourceKeys  []string
 	OnboardingInterestLimit       int
 }
@@ -31,8 +56,8 @@ type CandidateQuery struct {
 type PublicCandidateQuery struct {
 	ServingVersion        string
 	Now                   time.Time
-	CandidateWindowStart  time.Time
-	CandidateWindowEnd    time.Time
+	Range                 CandidateRange
+	RecentCutoff          time.Time
 	Limit                 int
 	TrendingCutoff        time.Time
 	TrendingReplyFactor   float64
@@ -49,6 +74,13 @@ type CandidateRepository interface {
 	LoadPublicTrendingCandidates(ctx context.Context, query PublicCandidateQuery) ([]Candidate, error)
 	HydrateCandidates(ctx context.Context, query CandidateQuery, candidates []Candidate) ([]RankedCandidate, error)
 	LoadPostEmbeddings(ctx context.Context, postIDs []uint, version string) (map[uint][]float32, error)
+}
+
+// HistoricalCandidateRepository provides bounded keyset backfill. The same
+// entry point serves authenticated users and guests; UserID=0 has public-only
+// eligibility and session history is carried through Served.
+type HistoricalCandidateRepository interface {
+	LoadHistoricalCandidates(ctx context.Context, query CandidateQuery) (HistoricalCandidatePage, error)
 }
 
 // OnboardingInterestRepository reads the bounded topic choices used by the
@@ -173,6 +205,12 @@ type HistoryStore interface {
 // The page key is stable for the lifetime of a candidate-pool snapshot.
 type PageHistoryStore interface {
 	RecordUserServedForPage(ctx context.Context, userID uint, pageKey string, postIDs []uint, window HistoryWindow) error
+}
+
+// GuestPageHistoryStore makes committed guest pages idempotent while keeping
+// served history scoped to the guest session used to sign its cursor.
+type GuestPageHistoryStore interface {
+	RecordGuestServedForPage(ctx context.Context, sessionID, pageKey string, postIDs []uint, window HistoryWindow) error
 }
 
 type TraceRepository interface {

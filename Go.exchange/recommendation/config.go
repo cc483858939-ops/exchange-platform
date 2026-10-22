@@ -10,7 +10,11 @@ import (
 func DefaultConfig() config.RecommendationConfig {
 	return config.RecommendationConfig{
 		ServingTimeoutMS:    5000,
-		CandidateWindowDays: config.DefaultRecommendationCandidateWindowDays,
+		PrimaryWindowDays:   config.DefaultRecommendationPrimaryWindowDays,
+		HistoricalBackfill: config.RecommendationHistoricalBackfillConfig{
+			BatchSize: config.DefaultRecommendationHistoricalBatchSize,
+			MaxScanPerRequest: config.DefaultRecommendationHistoricalMaxScanPerRequest,
+		},
 		BehaviorWeights: config.RecommendationBehaviorWeights{
 			View: 0.25, Like: 4, Click: 1, QualifiedRead: 2.5, Reply: 5, QuickBounce: -2, NotInterested: -8,
 		},
@@ -67,7 +71,8 @@ func NormalizeConfig(configured config.RecommendationConfig, presence map[string
 	if set.ServingTimeoutMS > 0 {
 		cfg.ServingTimeoutMS = set.ServingTimeoutMS
 	}
-	cfg.CandidateWindowDays = config.NormalizeRecommendationCandidateWindowDays(set.CandidateWindowDays)
+	cfg.PrimaryWindowDays = config.NormalizeRecommendationPrimaryWindowDays(set.PrimaryWindowDays)
+	cfg.HistoricalBackfill = set.HistoricalBackfill.Normalized()
 	if settingProvided(presence, "behavior_weights.view", set.BehaviorWeights.View != 0) {
 		cfg.BehaviorWeights.View = set.BehaviorWeights.View
 	}

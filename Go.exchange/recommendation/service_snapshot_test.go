@@ -113,10 +113,8 @@ func (repository *serviceTestCandidateRepository) LoadSnapshotPage(_ context.Con
 		if !exists || post.ID == 0 || post.AuthorID == 0 {
 			continue
 		}
-		if !query.CandidateWindowStart.IsZero() && post.CreatedAt.Before(query.CandidateWindowStart) {
-			continue
-		}
-		if !query.CandidateWindowEnd.IsZero() && post.CreatedAt.After(query.CandidateWindowEnd) {
+		if query.Range == CandidateRangeRecent &&
+			(post.CreatedAt.Before(query.RecentCutoff) || post.CreatedAt.After(query.Now)) {
 			continue
 		}
 		items = append(items, RankedCandidate{Candidate: candidate, Post: post, Embedding: append([]float32(nil), repository.embeddings[candidate.PostID]...)})
@@ -124,7 +122,7 @@ func (repository *serviceTestCandidateRepository) LoadSnapshotPage(_ context.Con
 	return items, contextEmbeddings, nil
 }
 
-func TestRecommendationSnapshotRevalidatesServingEmbeddingAndWindow(t *testing.T) {
+func TestRecommendationSnapshotRevalidatesServingEmbeddingWithoutRecentRangeFilter(t *testing.T) {
 	store := newMemorySnapshotStore()
 	service, repository, now := newSnapshotTestService(t, store)
 	first := firstSnapshotResult(t, service, now)
@@ -152,9 +150,8 @@ func TestRecommendationSnapshotRevalidatesServingEmbeddingAndWindow(t *testing.T
 		t.Fatalf("snapshot revalidation calls=%d, want one", len(repository.snapshotQueries))
 	}
 	query := repository.snapshotQueries[0]
-	wantStart, wantEnd := config.RecommendationCandidateWindowBounds(now, service.config.Recommendation.CandidateWindowDays)
-	if query.ServingVersion != first.EmbeddingVersion || !query.CandidateWindowStart.Equal(wantStart) || !query.CandidateWindowEnd.Equal(wantEnd) {
-		t.Fatalf("snapshot revalidation query=%+v, want serving version %q and configured window %s..%s", query, first.EmbeddingVersion, wantStart, wantEnd)
+	if query.ServingVersion != first.EmbeddingVersion || query.Range != CandidateRangeAny {
+		t.Fatalf("snapshot revalidation query=%+v, want serving version %q and CandidateRangeAny", query, first.EmbeddingVersion)
 	}
 }
 
@@ -163,7 +160,7 @@ func TestRecommendationSnapshotRevalidatesWindowAtCurrentRequestTime(t *testing.
 	boundaryCandidate := testCandidate(1, CandidateSourceSemantic)
 	validCandidate := testCandidate(2, CandidateSourceSemantic)
 	boundaryPost := repository.posts[boundaryCandidate.PostID]
-	boundaryPost.CreatedAt = servedAt.AddDate(0, 0, -service.config.Recommendation.CandidateWindowDays).Add(time.Second)
+	boundaryPost.CreatedAt = servedAt.AddDate(0, 0, -service.config.Recommendation.PrimaryWindowDays).Add(-time.Second)
 	repository.posts[boundaryCandidate.PostID] = boundaryPost
 	profile := Profile{PositiveVector: []float32{1}, ProfileStatus: ProfileStatusHit}
 	page := CachedPage{
@@ -194,8 +191,8 @@ func TestRecommendationSnapshotRevalidatesWindowAtCurrentRequestTime(t *testing.
 	if err != nil {
 		t.Fatalf("revalidate cached page at retry time: %v", err)
 	}
-	if got := selectedPostIDs(result.Selected); !equalUintSlices(got, []uint{validCandidate.PostID}) {
-		t.Fatalf("revalidated page IDs=%v, want only still-valid candidate %d", got, validCandidate.PostID)
+	if got := selectedPostIDs(result.Selected); !equalUintSlices(got, []uint{boundaryCandidate.PostID, validCandidate.PostID}) {
+		t.Fatalf("revalidated page IDs=%v, want historical and current candidates [%d %d]", got, boundaryCandidate.PostID, validCandidate.PostID)
 	}
 	if result.RequestID != page.RequestID || returnedRequest.RequestID != page.RequestID || !result.Now.Equal(servedAt) || !returnedRequest.Now.Equal(servedAt) {
 		t.Fatalf("page replay metadata changed: result=%+v request=%+v, want original request ID and ServedAt", result, returnedRequest)
@@ -204,9 +201,8 @@ func TestRecommendationSnapshotRevalidatesWindowAtCurrentRequestTime(t *testing.
 		t.Fatalf("snapshot eligibility calls=%d, want original and retry checks", len(repository.snapshotQueries))
 	}
 	query := repository.snapshotQueries[1]
-	wantStart, wantEnd := config.RecommendationCandidateWindowBounds(currentRequestTime, service.config.Recommendation.CandidateWindowDays)
-	if !query.Now.Equal(currentRequestTime) || !query.CandidateWindowStart.Equal(wantStart) || !query.CandidateWindowEnd.Equal(wantEnd) {
-		t.Fatalf("retry eligibility query=%+v, want current-time window %s..%s", query, wantStart, wantEnd)
+	if !query.Now.Equal(currentRequestTime) || query.Range != CandidateRangeAny {
+		t.Fatalf("retry eligibility query=%+v, want current request time and CandidateRangeAny", query)
 	}
 }
 
@@ -1126,6 +1122,61 @@ func TestRefreshSnapshotSemanticScoresUsesCurrentEmbeddingAndPreservesNonSemanti
 	}
 }
 
+func TestRecommendationSnapshotRefillsHistoricalCandidatesAfterCachedPoolIsConsumed(t *testing.T) {
+	store := newMemorySnapshotStore()
+	service, repository, now := newSnapshotTestService(t, store)
+	historicalIDs := make([]uint, 20)
+	posts := make(map[uint]models.Post, len(historicalIDs))
+	for index := range historicalIDs {
+		id := uint(1001 + index)
+		historicalIDs[index] = id
+		posts[id] = models.Post{Model: gorm.Model{ID: id, CreatedAt: now.AddDate(0, 0, -400).Add(-time.Duration(index) * time.Second)}, AuthorID: id + 10000}
+	}
+	for id, post := range posts {
+		repository.posts[id] = post
+	}
+	historicalRepository := &scriptedHistoricalRepository{
+		serviceTestCandidateRepository: repository,
+		pages:                          []HistoricalCandidatePage{historicalTestPage(now, historicalIDs, false)},
+	}
+	service.dependencies.Candidates = historicalRepository
+
+	pool := make([]CachedCandidate, 0, 500)
+	used := make([]uint, 0, 500)
+	for id := uint(1); id <= 500; id++ {
+		post := repository.posts[id]
+		candidate := testCandidate(id, CandidateSourceRecent)
+		candidate.RecallTier = RecallTierRecentUnseen
+		pool = append(pool, CachedCandidate{
+			Candidate: candidate, PostID: id, AuthorID: post.AuthorID, CreatedAt: post.CreatedAt,
+		})
+		used = append(used, id)
+	}
+	snapshot := CandidatePoolSnapshot{
+		ID: "consumed-pool", PageSize: 20, Candidates: pool, UsedPostIDs: used,
+		RecentCutoff: now.AddDate(0, 0, -7), SoftExhausted: true,
+	}
+	page, err := service.selectSnapshotPage(context.Background(), ServeRequest{
+		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 20, RequestID: "historical-refill", Now: now,
+	}, "embedding-v1", Profile{PositiveVector: []float32{1}, ProfileStatus: ProfileStatusHit}, &snapshot, 0, "historical-refill", ServedHistory{})
+	if err != nil {
+		t.Fatalf("select page after cached pool exhaustion: %v", err)
+	}
+	if got := cachedPagePostIDs(page); !equalUintSlices(got, historicalIDs) {
+		t.Fatalf("refilled page IDs=%v, want historical IDs %v", got, historicalIDs)
+	}
+	if snapshot.HistoricalExhausted || snapshot.Exhausted || snapshot.HistoricalCursor == nil || snapshot.HistoricalCursor.PostID != historicalIDs[len(historicalIDs)-1] {
+		t.Fatalf("snapshot after historical refill=%+v, want a live history cursor and non-exhausted pool", snapshot)
+	}
+	if len(snapshot.Candidates) != len(historicalIDs) {
+		t.Fatalf("refilled snapshot candidates=%d, want %d", len(snapshot.Candidates), len(historicalIDs))
+	}
+	if len(historicalRepository.queries) != 1 || historicalRepository.queries[0].Range != CandidateRangeHistorical ||
+		historicalRepository.queries[0].HistoricalCursor != nil || len(historicalRepository.queries[0].ExcludedPostIDs) != 500 {
+		t.Fatalf("historical refill query=%+v, want initial historical keyset query excluding all 500 consumed IDs", historicalRepository.queries)
+	}
+}
+
 func TestRecommendationSnapshotReuses500CandidatePoolAcrossFivePages(t *testing.T) {
 	store := newMemorySnapshotStore()
 	service, candidates, now := newSnapshotTestService(t, store)
@@ -1333,7 +1384,7 @@ func TestRecommendationSnapshotSameCursorConcurrentRequestsUseOneStablePage(t *t
 	}
 }
 
-func TestRecommendationSnapshotRejectsCursorReuseByAnotherUserAndFallsBackWhenRedisUnavailable(t *testing.T) {
+func TestRecommendationSnapshotRejectsCursorReuseAndReturnsStoreFailure(t *testing.T) {
 	service, _, now := newSnapshotTestService(t, newMemorySnapshotStore())
 	first, err := service.Serve(context.Background(), ServeRequest{
 		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 20, RequestID: uuid.NewString(), Now: now,
@@ -1347,14 +1398,11 @@ func TestRecommendationSnapshotRejectsCursorReuseByAnotherUserAndFallsBackWhenRe
 		t.Fatalf("cross-user cursor error=%v want invalid cursor", err)
 	}
 	service.dependencies.Snapshots = unavailableSnapshotStore{SnapshotStore: service.dependencies.Snapshots}
-	fallback, err := service.Serve(context.Background(), ServeRequest{
+	_, err = service.Serve(context.Background(), ServeRequest{
 		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 20, Cursor: first.NextCursor, Now: now.Add(time.Second),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !fallback.snapshotFallback || fallback.NextCursor != "" || fallback.Depleted {
-		t.Fatalf("redis fallback state=%#v", fallback)
+	if err == nil || !strings.Contains(err.Error(), "redis unavailable") {
+		t.Fatalf("snapshot store failure=%v, want Redis error", err)
 	}
 }
 

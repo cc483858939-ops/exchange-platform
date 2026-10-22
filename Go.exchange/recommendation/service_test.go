@@ -43,6 +43,7 @@ type serviceTestCandidateRepository struct {
 	hydrateErr               error
 	publicCalls              int
 	softQueries              int
+	softHistoricalQueries    int
 	recentQueries            []CandidateQuery
 	hydrateQueries           []CandidateQuery
 	snapshotEligibilityCalls int
@@ -124,6 +125,29 @@ func (repository *serviceTestCandidateRepository) LoadPostEmbeddings(_ context.C
 		}
 	}
 	return embeddings, nil
+}
+
+func (repository *serviceTestCandidateRepository) LoadHistoricalCandidates(_ context.Context, query CandidateQuery) (HistoricalCandidatePage, error) {
+	page := HistoricalCandidatePage{Exhausted: true}
+	if !query.SoftOnly {
+		return page, nil
+	}
+	repository.softHistoricalQueries++
+	for _, candidate := range repository.softRecent {
+		served, exists := query.Served[candidate.PostID]
+		if !exists || !served.Soft || served.Hard {
+			continue
+		}
+		candidate.RecallTier = RecallTierSoftRevisit
+		candidate.WasSoftServed = true
+		candidate.LastServedAt = served.LastServedAt
+		page.Candidates = append(page.Candidates, candidate)
+		if post, exists := repository.posts[candidate.PostID]; exists {
+			page.Cursor = HistoricalCursor{CreatedAt: post.CreatedAt.UTC(), PostID: candidate.PostID}
+		}
+	}
+	page.Scanned = len(page.Candidates)
+	return page, nil
 }
 
 type serviceTestProfileRepository struct {
@@ -209,6 +233,22 @@ func (store *serviceTestHistoryStore) RecordGuestServed(_ context.Context, _ str
 	store.lastGuestWindow = window
 	return store.recordErr
 }
+func (store *serviceTestHistoryStore) RecordGuestServedForPage(ctx context.Context, sessionID, pageKey string, postIDs []uint, window HistoryWindow) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.pageRecordAttempts++
+	if store.pageReceipts == nil {
+		store.pageReceipts = make(map[string]struct{})
+	}
+	if _, exists := store.pageReceipts[pageKey]; exists {
+		return nil
+	}
+	if err := store.RecordGuestServed(ctx, sessionID, postIDs, window); err != nil {
+		return err
+	}
+	store.pageReceipts[pageKey] = struct{}{}
+	return nil
+}
 
 type serviceTestTraceEnqueuer struct {
 	calls        *[]string
@@ -243,7 +283,8 @@ func (enqueuer *serviceTestTraceEnqueuer) TryEnqueue(job TracePersistJob) TraceE
 
 func serviceTestConfig() config.RecommendationConfig {
 	return config.RecommendationConfig{
-		CandidateWindowDays: 7,
+		PrimaryWindowDays:  7,
+		HistoricalBackfill: config.RecommendationHistoricalBackfillConfig{BatchSize: 200, MaxScanPerRequest: 2000},
 		Candidates: config.RecommendationCandidatesConfig{
 			Personalized: config.RecommendationCandidateCaps{Semantic: 20, Following: 20, Recent: 20, Trending: 20, Merged: 50},
 			ColdStart:    config.RecommendationCandidateCaps{Following: 20, Recent: 20, Trending: 20, Merged: 50},
@@ -360,22 +401,22 @@ func TestRecommendationServiceGuestOwnsPublicDiversificationFallbackAndHistory(t
 		t.Fatal(err)
 	}
 	finalizeServiceTestResult(t, service, result)
-	if candidates.publicCalls < 4 {
-		t.Fatalf("public candidate calls=%d want fresh and fallback source calls", candidates.publicCalls)
+	if candidates.publicCalls != 2 {
+		t.Fatalf("public recent/trending candidate calls=%d want two fresh source queries", candidates.publicCalls)
 	}
-	if candidates.softQueries != 0 {
-		t.Fatalf("guest serving unexpectedly used authenticated soft query count=%d", candidates.softQueries)
+	if candidates.softHistoricalQueries == 0 {
+		t.Fatal("guest serving skipped the session history soft-tier query")
 	}
 	if len(candidates.hydrateQueries) == 0 {
 		t.Fatal("guest candidates were not hydrated")
 	}
-	wantWindowStart, wantWindowEnd := config.RecommendationCandidateWindowBounds(now, serviceTestConfig().CandidateWindowDays)
+	wantRecentCutoff, _ := config.RecommendationPrimaryWindowBounds(now, serviceTestConfig().PrimaryWindowDays)
 	for _, query := range candidates.hydrateQueries {
 		if len(query.Served) != 0 {
 			t.Fatalf("guest hydration reapplied user served history: %+v", query.Served)
 		}
-		if query.ServingVersion != "post_embedding_v1" || !query.CandidateWindowStart.Equal(wantWindowStart) || !query.CandidateWindowEnd.Equal(wantWindowEnd) {
-			t.Fatalf("guest hydration eligibility=%+v want serving version and 7-day window", query)
+		if query.ServingVersion != "post_embedding_v1" || query.Range != CandidateRangeRecent || !query.RecentCutoff.Equal(wantRecentCutoff) {
+			t.Fatalf("guest hydration eligibility=%+v want serving version and recent range", query)
 		}
 	}
 	ids := selectedPostIDs(result.Selected)
@@ -408,7 +449,7 @@ func TestRecommendationServiceGuestDiversificationIsStablePerRequestAndVariesAcr
 	}
 	serve := func(requestID string) []uint {
 		result, err := newServing().Serve(context.Background(), ServeRequest{
-			Viewer: Viewer{Kind: ViewerGuest}, Limit: 10, RequestID: requestID, Now: now,
+			Viewer: Viewer{Kind: ViewerGuest, GuestSessionID: requestID}, Limit: 10, RequestID: requestID, Now: now,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -455,8 +496,8 @@ func TestRecommendationServiceFallbackReintroducesSoftButNotHardServedUserPosts(
 	if !reflect.DeepEqual(ids, []uint{1, 3}) {
 		t.Fatalf("selected ids=%v want fresh 1 plus soft-served 3", ids)
 	}
-	if candidates.softQueries == 0 || !result.Selected[1].Candidate.WasSoftServed {
-		t.Fatalf("soft fallback was not marked: queries=%d selected=%#v", candidates.softQueries, result.Selected)
+	if candidates.softHistoricalQueries == 0 || !result.Selected[1].Candidate.WasSoftServed {
+		t.Fatalf("soft fallback was not marked: queries=%d selected=%#v", candidates.softHistoricalQueries, result.Selected)
 	}
 }
 

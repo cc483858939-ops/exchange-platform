@@ -71,10 +71,14 @@ func onboardingInterestCandidateBudget(recentLimit int) int {
 }
 
 func recommendationCandidateQuery(servingVersion string, userID uint, profile Profile, served ServedHistory, now time.Time, cfg config.RecommendationConfig, softOnly bool) CandidateQuery {
-	windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, cfg.CandidateWindowDays)
+	rangeScope := CandidateRangeRecent
+	if softOnly {
+		rangeScope = CandidateRangeAny
+	}
+	recentCutoff, _ := config.RecommendationPrimaryWindowBounds(now, cfg.PrimaryWindowDays)
 	return CandidateQuery{
 		UserID: userID, ServingVersion: servingVersion, Now: now,
-		CandidateWindowStart: windowStart, CandidateWindowEnd: windowEnd,
+		Range: rangeScope, RecentCutoff: recentCutoff,
 		PositiveVector:      profile.PositiveVector,
 		TrendingCutoff:      now.AddDate(0, 0, -cfg.Trending.MaxAgeDays),
 		TrendingReplyFactor: cfg.Trending.ReplyFactor, TrendingHalfLifeHours: cfg.Trending.HalfLifeHours,
@@ -82,6 +86,12 @@ func recommendationCandidateQuery(servingVersion string, userID uint, profile Pr
 		MaterializedInteractionsReady: profile.MaterializedInteractionsReady,
 		InteractedPostIDs:             profile.InteractedPostIDs,
 	}
+}
+
+func recommendationSnapshotCandidateQuery(servingVersion string, userID uint, profile Profile, now time.Time, cfg config.RecommendationConfig) CandidateQuery {
+	query := recommendationCandidateQuery(servingVersion, userID, profile, nil, now, cfg, false)
+	query.Range = CandidateRangeAny
+	return query
 }
 
 func buildCandidateSet(ctx context.Context, repository CandidateRepository, servingVersion string, userID uint, profile Profile, served ServedHistory, now time.Time, cfg config.RecommendationConfig, softOnly bool, onboarding ...onboardingInterestContext) (CandidateSetSummary, error) {
@@ -147,9 +157,14 @@ func buildCandidateSet(ctx context.Context, repository CandidateRepository, serv
 		CandidateSet{Source: CandidateSourceRecent, Candidates: recent},
 		CandidateSet{Source: CandidateSourceTrending, Candidates: trending},
 	)
+	tier := RecallTierRecentUnseen
+	if softOnly {
+		tier = RecallTierSoftRevisit
+	}
 	fusionSpan.SetAttributes(attribute.Int("recommendation.candidate_count", len(merged)))
 	fusionSpan.End()
 	for index := range merged {
+		merged[index].RecallTier = tier
 		if item, ok := served[merged[index].PostID]; ok {
 			merged[index].LastServedAt = item.LastServedAt
 			merged[index].WasSoftServed = softOnly && item.Soft && !item.Hard
@@ -179,9 +194,9 @@ func buildPublicCandidateSet(ctx context.Context, repository CandidateRepository
 		return CandidateSetSummary{}, err
 	}
 	caps := cfg.Candidates.ColdStart
-	windowStart, windowEnd := config.RecommendationCandidateWindowBounds(now, cfg.CandidateWindowDays)
+	recentCutoff, _ := config.RecommendationPrimaryWindowBounds(now, cfg.PrimaryWindowDays)
 	query := PublicCandidateQuery{
-		ServingVersion: servingVersion, Now: now, CandidateWindowStart: windowStart, CandidateWindowEnd: windowEnd,
+		ServingVersion: servingVersion, Now: now, Range: CandidateRangeRecent, RecentCutoff: recentCutoff,
 		TrendingCutoff:      now.AddDate(0, 0, -cfg.Trending.MaxAgeDays),
 		TrendingReplyFactor: cfg.Trending.ReplyFactor, TrendingHalfLifeHours: cfg.Trending.HalfLifeHours,
 		ExcludedPostIDs: excluded,
@@ -211,6 +226,9 @@ func buildPublicCandidateSet(ctx context.Context, repository CandidateRepository
 		CandidateSet{Source: CandidateSourceRecent, Candidates: recent},
 		CandidateSet{Source: CandidateSourceTrending, Candidates: trending},
 	)
+	for index := range merged {
+		merged[index].RecallTier = RecallTierRecentUnseen
+	}
 	fusionSpan.SetAttributes(attribute.Int("recommendation.candidate_count", len(merged)))
 	fusionSpan.End()
 	span.SetAttributes(attribute.Int("recommendation.candidate_count", len(merged)))
@@ -251,6 +269,8 @@ func mergeCandidateSets(first, second CandidateSetSummary, mergedLimit int) Cand
 		SemanticCount:                    first.SemanticCount + second.SemanticCount,
 		FollowingCount:                   first.FollowingCount + second.FollowingCount,
 		RecentCount:                      first.RecentCount + second.RecentCount,
+		HistoricalCount:                  first.HistoricalCount + second.HistoricalCount,
+		SoftCount:                        first.SoftCount + second.SoftCount,
 		RecentPostIDs:                    recentPostIDs,
 		TrendingCount:                    first.TrendingCount + second.TrendingCount,
 		OnboardingInterestActive:         first.OnboardingInterestActive || second.OnboardingInterestActive,

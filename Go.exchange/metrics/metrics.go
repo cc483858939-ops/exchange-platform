@@ -77,6 +77,13 @@ var (
 	recommendationGenerationDuration             = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "go_exchange_recommendation_generation_duration_seconds", Help: "Recommendation generation duration.", Buckets: prometheus.DefBuckets}, []string{"strategy_id"})
 	recommendationRecallCandidates               = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_recall_candidates_total", Help: "Distinct recommendation candidates by source."}, []string{"source"})
 	recommendationResultsBySource                = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_results_by_source_total", Help: "Returned recommendation results by source."}, []string{"source"})
+	recommendationHistoricalScans                = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_historical_scans_total", Help: "Historical recommendation scans by tier and continuation outcome."}, []string{"tier", "status"})
+	recommendationHistoricalRows                 = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "go_exchange_recommendation_historical_scanned_rows", Help: "Historical rows scanned per bounded recommendation request.", Buckets: []float64{0, 1, 10, 50, 100, 200, 500, 1000, 2000, 5000, 10000}}, []string{"tier"})
+	recommendationHistoricalBatches              = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "go_exchange_recommendation_historical_batches", Help: "Historical keyset batches scanned per bounded recommendation request.", Buckets: []float64{0, 1, 2, 5, 10, 20, 50}}, []string{"tier"})
+	recommendationHistoricalOldestAge            = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "go_exchange_recommendation_historical_oldest_age_days", Help: "Age of the oldest historical candidate scanned in a recommendation request.", Buckets: []float64{1, 7, 30, 90, 180, 365, 730, 1825, 3650}}, []string{"tier"})
+	recommendationHistoricalDuration             = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "go_exchange_recommendation_historical_scan_duration_seconds", Help: "Duration of bounded historical recommendation scans.", Buckets: prometheus.DefBuckets}, []string{"tier"})
+	recommendationUnderfilledResults             = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_underfilled_total", Help: "Recommendation pages smaller than requested by continuation outcome."}, []string{"status"})
+	recommendationMapperRejected                 = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_mapper_rejected_total", Help: "Recommendation candidates rejected by the response mapper."})
 	recommendationResultsByClass                 = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_results_by_class_total", Help: "Returned recommendation results by class."}, []string{"class"})
 	recommendationResultsBySelection             = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "go_exchange_recommendation_results_by_selection_total", Help: "Returned recommendation results by selection mode and exploration reason."}, []string{"mode", "reason"})
 	recommendationServedHistoryFailures          = prometheus.NewCounter(prometheus.CounterOpts{Name: "go_exchange_recommendation_served_history_load_failures_total", Help: "Recommendation served-history load failures."})
@@ -122,7 +129,7 @@ func init() {
 		recommendationTelemetryEvents, recommendationClickCooldown, recommendationTelemetryBatchSize,
 		recommendationTelemetryIngestDuration, recommendationTelemetryProjection, recommendationRequests, recommendationSnapshotOutcomes,
 		recommendationRequestLogFailures, recommendationTrackingResults,
-		recommendationCandidateCount, recommendationResultCount, recommendationGenerationDuration, recommendationRecallCandidates, recommendationResultsBySource, recommendationResultsByClass, recommendationResultsBySelection, recommendationServedHistoryFailures, recommendationTracePersistFailures, recommendationTraceEnqueue, recommendationTraceQueueDepth, recommendationTracePersist, recommendationTracePersistDuration, recommendationTraceCleanupFailures, recommendationTraceCleanupRows, recommendationTraceCleanupRuns, recommendationTraceCleanupDuration, recommendationTraceCleanupBacklogLikely,
+		recommendationCandidateCount, recommendationResultCount, recommendationGenerationDuration, recommendationRecallCandidates, recommendationResultsBySource, recommendationHistoricalScans, recommendationHistoricalRows, recommendationHistoricalBatches, recommendationHistoricalOldestAge, recommendationHistoricalDuration, recommendationUnderfilledResults, recommendationMapperRejected, recommendationResultsByClass, recommendationResultsBySelection, recommendationServedHistoryFailures, recommendationTracePersistFailures, recommendationTraceEnqueue, recommendationTraceQueueDepth, recommendationTracePersist, recommendationTracePersistDuration, recommendationTraceCleanupFailures, recommendationTraceCleanupRows, recommendationTraceCleanupRuns, recommendationTraceCleanupDuration, recommendationTraceCleanupBacklogLikely,
 		recommendationProfileLoad, recommendationProfileAge, recommendationProfileMaterialization, recommendationProfileMaterializationDuration, recommendationProfileDirtyQueueDepth,
 		translationRequests, translationRequestDuration, translationCacheOperations, translationProviderRequests, translationProviderDuration,
 		rateLimitDecisions, rateLimitErrors,
@@ -461,6 +468,38 @@ func AddRecommendationRecallCandidates(source string, count int) {
 func AddRecommendationResultsBySource(source string, count int) {
 	if count > 0 {
 		recommendationResultsBySource.WithLabelValues(source).Add(float64(count))
+	}
+}
+func RecordRecommendationHistoricalScan(tier, status string, scanned, batches int, oldestAge, duration time.Duration) {
+	if tier != "historical" && tier != "soft" {
+		return
+	}
+	switch status {
+	case "available", "budget_limited", "exhausted":
+	default:
+		return
+	}
+	recommendationHistoricalScans.WithLabelValues(tier, status).Inc()
+	recommendationHistoricalRows.WithLabelValues(tier).Observe(float64(max(0, scanned)))
+	recommendationHistoricalBatches.WithLabelValues(tier).Observe(float64(max(0, batches)))
+	ageDays := oldestAge.Hours() / 24
+	if ageDays < 0 {
+		ageDays = 0
+	}
+	recommendationHistoricalOldestAge.WithLabelValues(tier).Observe(ageDays)
+	if duration < 0 {
+		duration = 0
+	}
+	recommendationHistoricalDuration.WithLabelValues(tier).Observe(duration.Seconds())
+}
+func RecordRecommendationUnderfilled(status string) {
+	if status == "budget_limited" || status == "exhausted" {
+		recommendationUnderfilledResults.WithLabelValues(status).Inc()
+	}
+}
+func AddRecommendationMapperRejected(count int) {
+	if count > 0 {
+		recommendationMapperRejected.Add(float64(count))
 	}
 }
 func AddRecommendationResultsByClass(class string, count int) {

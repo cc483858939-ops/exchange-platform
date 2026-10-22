@@ -138,15 +138,19 @@ const recommendation = (id: number, repostCount = 0) => ({
   score: 1,
 });
 
+let recommendationCursorSequence = 0;
 const recommendationPage = (
   items: ReturnType<typeof recommendation>[],
   depleted = false,
-  nextCursor: string | null = null,
+  nextCursor?: string | null,
 ) => ({
   items,
   request_id: 'request-id',
-  next_cursor: nextCursor,
+  next_cursor: nextCursor === undefined
+    ? depleted ? null : `mock-cursor-${++recommendationCursorSequence}`
+    : nextCursor,
   depleted,
+  continuation_status: depleted ? 'exhausted' as const : 'available' as const,
 });
 
 const followingActivity = (
@@ -267,10 +271,11 @@ describe('home timeline session store', () => {
     const store = useHomeTimelineStore();
 
     await store.loadForYou();
+    const firstCursor = store.forYou.nextCursor;
     await store.loadMoreForYou();
 
     expect(mocks.getPostRecommendations).toHaveBeenNthCalledWith(1, 20);
-    expect(mocks.getPostRecommendations).toHaveBeenNthCalledWith(2, 20);
+    expect(mocks.getPostRecommendations).toHaveBeenNthCalledWith(2, 20, firstCursor);
     expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2, 3, 4, 5, 6]);
     expect(store.forYou.depleted).toBe(false);
   });
@@ -348,6 +353,21 @@ describe('home timeline session store', () => {
     expect(mocks.getPostRecommendations).toHaveBeenCalledTimes(2);
   });
 
+  it('does not restart page one when a non-depleted response has no cursor', async () => {
+    mocks.getPostRecommendations.mockResolvedValueOnce(
+      recommendationPage([recommendation(1)], false, null),
+    );
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await store.loadMoreForYou();
+
+    expect(mocks.getPostRecommendations).toHaveBeenCalledTimes(1);
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1]);
+    expect(store.forYou.depleted).toBe(false);
+    expect(store.forYou.loadMoreError).toBe(true);
+  });
+
   it('replaces the accumulated For You feed on force refresh', async () => {
     mocks.getPostRecommendations
       .mockResolvedValueOnce(recommendationPage([recommendation(1)]))
@@ -419,11 +439,10 @@ describe('home timeline session store', () => {
     expect(store.refreshForYouAfterOnboarding(7)).toBe(false);
   });
 
-  it('stops after two successful no-progress pages', async () => {
+  it('does not mark duplicate pages depleted and stops automatic paging without progress', async () => {
     mocks.getPostRecommendations
-      .mockResolvedValueOnce(recommendationPage([recommendation(1)]))
-      .mockResolvedValueOnce(recommendationPage([recommendation(1)]))
-      .mockResolvedValueOnce(recommendationPage([recommendation(1)]));
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)], false, 'cursor-1'))
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)], false, 'cursor-2'));
     const store = useHomeTimelineStore();
 
     await store.loadForYou();
@@ -433,8 +452,9 @@ describe('home timeline session store', () => {
     await store.loadMoreForYou();
 
     expect(store.forYou.items.map(item => item.post.id)).toEqual([1]);
-    expect(store.forYou.depleted).toBe(true);
-    expect(mocks.getPostRecommendations).toHaveBeenCalledTimes(3);
+    expect(store.forYou.depleted).toBe(false);
+    expect(store.forYou.loadMoreError).toBe(true);
+    expect(mocks.getPostRecommendations).toHaveBeenCalledTimes(2);
   });
 
   it('hydrates only newly appended posts for later pages', async () => {
@@ -676,7 +696,7 @@ describe('home timeline session store', () => {
     mocks.authStore!.currentIdentity = null;
     mocks.feedStore!.viewerID = null;
     mocks.getPublicPostRecommendations
-      .mockResolvedValueOnce(recommendationPage([recommendation(1, 8)]))
+      .mockResolvedValueOnce(recommendationPage([recommendation(1, 8)], false, 'guest-cursor-1'))
       .mockResolvedValueOnce(recommendationPage([recommendation(2)], true));
     const store = useHomeTimelineStore();
 
@@ -690,6 +710,7 @@ describe('home timeline session store', () => {
     });
     expect(mocks.getPublicPostRecommendations).toHaveBeenNthCalledWith(2, {
       limit: 20,
+      cursor: 'guest-cursor-1',
       guestSessionId: guestSessionID,
     });
     expect(mocks.getPostLikeStates).not.toHaveBeenCalled();
@@ -724,28 +745,52 @@ describe('home timeline session store', () => {
       .toBe(guestSessionID);
   });
 
-  it('continues guest serving when session storage cannot create a UUID', async () => {
+  it('does not request guest recommendations without a durable session ID', async () => {
     const setItem = vi.spyOn(testSessionStorage, 'setItem').mockImplementation(() => {
       throw new Error('storage unavailable');
     });
     mocks.authStore!.isAuthenticated = false;
     mocks.authStore!.currentIdentity = null;
     mocks.feedStore!.viewerID = null;
-    mocks.getPublicPostRecommendations.mockResolvedValue(recommendationPage([recommendation(4)]));
     const store = useHomeTimelineStore();
 
     try {
       await store.loadForYou();
 
-      expect(store.forYou.items.map(item => item.post.id)).toEqual([4]);
-      expect(mocks.getPublicPostRecommendations).toHaveBeenCalledWith({
-        limit: 20,
-        guestSessionId: null,
-      });
+      expect(store.forYou.items).toHaveLength(0);
+      expect(store.forYou.error).toBe(true);
+      expect(mocks.getPublicPostRecommendations).not.toHaveBeenCalled();
       expect(setItem).toHaveBeenCalled();
     } finally {
       setItem.mockRestore();
     }
+  });
+
+  it('rebuilds an expired guest cursor with the same session and preserves loaded IDs', async () => {
+    mocks.authStore!.isAuthenticated = false;
+    mocks.authStore!.currentIdentity = null;
+    mocks.feedStore!.viewerID = null;
+    mocks.getPublicPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)], false, 'expired-guest-cursor'))
+      .mockRejectedValueOnce({ response: { status: 410 } })
+      .mockResolvedValueOnce(recommendationPage([recommendation(1), recommendation(2)], false, 'replacement-guest-cursor'));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await store.loadMoreForYou();
+
+    expect(mocks.getPublicPostRecommendations).toHaveBeenNthCalledWith(2, {
+      limit: 20,
+      cursor: 'expired-guest-cursor',
+      guestSessionId: guestSessionID,
+    });
+    expect(mocks.getPublicPostRecommendations).toHaveBeenNthCalledWith(3, {
+      limit: 20,
+      guestSessionId: guestSessionID,
+    });
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2]);
+    expect(store.forYou.nextCursor).toBe('replacement-guest-cursor');
+    expect(store.forYou.loadMoreError).toBe(false);
   });
 
   it('keeps authenticated recommendations independent from guest storage', async () => {
@@ -1167,6 +1212,7 @@ describe('home timeline session store', () => {
       { recommendation: recommendation(2), post: mutedAuthorPost },
     ];
     store.forYou.loaded = true;
+    store.forYou.nextCursor = 'muted-filter-cursor';
     store.following.items = [repostedByMuted, mutedAuthorPost, visiblePost];
     store.following.loaded = true;
 

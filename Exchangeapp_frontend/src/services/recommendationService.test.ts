@@ -23,6 +23,7 @@ describe('recommendation service', () => {
       request_id: 'request-42',
       next_cursor: null,
       depleted: true,
+      continuation_status: 'exhausted',
     };
     mocks.get.mockResolvedValue({ data: page });
 
@@ -34,7 +35,7 @@ describe('recommendation service', () => {
   });
 
   it('forwards a cursor for authenticated recommendation pages', async () => {
-    const page = { items: [], request_id: 'page-2', next_cursor: 'cursor-2', depleted: false };
+    const page = { items: [], request_id: 'page-2', next_cursor: 'cursor-2', depleted: false, continuation_status: 'available' };
     mocks.get.mockResolvedValue({ data: page });
 
     await expect(getPostRecommendations(20, 'cursor-1')).resolves.toEqual(page);
@@ -53,7 +54,7 @@ describe('recommendation service', () => {
   );
 
   it('requests guest recommendations with the tab session header', async () => {
-    const page = { items: [], request_id: 'guest-request', next_cursor: null, depleted: true };
+    const page = { items: [], request_id: 'guest-request', next_cursor: null, depleted: true, continuation_status: 'exhausted' };
     mocks.get.mockResolvedValue({ data: page });
 
     await expect(getPublicPostRecommendations({
@@ -70,27 +71,23 @@ describe('recommendation service', () => {
     });
   });
 
-  it('does not send a guest session header when unavailable', async () => {
-    const page = { items: [], request_id: 'guest-request', next_cursor: null, depleted: true };
-    mocks.get.mockResolvedValue({ data: page });
-
-    await expect(getPublicPostRecommendations({ limit: 20 })).resolves.toEqual(page);
-
-    expect(mocks.get).toHaveBeenCalledWith('/public/recommendations/posts', {
-      params: { limit: 20 },
-    });
+  it('requires a valid guest session before requesting guest recommendations', async () => {
+    await expect(getPublicPostRecommendations({ limit: 20 })).rejects.toThrow(/valid guest recommendation session ID is required/i);
+    await expect(getPublicPostRecommendations({ limit: 20, guestSessionId: 'guest-id' })).rejects.toThrow(/valid guest recommendation session ID is required/i);
+    expect(mocks.get).not.toHaveBeenCalled();
   });
 
   it('forwards a cursor for public recommendation pages without changing the session header', async () => {
-    const page = { items: [], request_id: 'guest-page-2', next_cursor: 'guest-cursor-2', depleted: false };
+    const sessionID = '4ca3706b-197e-4f63-8f51-f99176f8b61c';
+    const page = { items: [], request_id: 'guest-page-2', next_cursor: 'guest-cursor-2', depleted: false, continuation_status: 'available' };
     mocks.get.mockResolvedValue({ data: page });
 
-    await expect(getPublicPostRecommendations({ limit: 20, cursor: 'guest-cursor-1', guestSessionId: 'guest-id' }))
+    await expect(getPublicPostRecommendations({ limit: 20, cursor: 'guest-cursor-1', guestSessionId: sessionID }))
       .resolves.toEqual(page);
 
     expect(mocks.get).toHaveBeenCalledWith('/public/recommendations/posts', {
       params: { limit: 20, cursor: 'guest-cursor-1' },
-      headers: { 'X-Guest-Recommendation-Session': 'guest-id' },
+      headers: { 'X-Guest-Recommendation-Session': sessionID },
     });
   });
 });
