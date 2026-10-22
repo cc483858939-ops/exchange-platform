@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -162,6 +163,102 @@ func TestRegisterStoresSubmittedPasswordIntegration(t *testing.T) {
 		t.Fatalf("duplicate username status=%d body=%s", duplicateRecorder.Code, duplicateRecorder.Body.String())
 	}
 	assertAuthError(t, duplicateRecorder, "AUTH_USERNAME_UNAVAILABLE")
+}
+
+func TestRegisterOverBcryptPasswordLimitHasNoDatabaseSideEffectsIntegration(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set POSTGRES_TEST_DSN to run PostgreSQL integration test")
+	}
+
+	db, err := testdb.Open(t, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := db.Begin()
+	if tx.Error != nil {
+		t.Fatal(tx.Error)
+	}
+	t.Cleanup(func() { tx.Rollback() })
+
+	schema := "register_over_limit_" + uuid.NewString()
+	if err := tx.Exec("CREATE SCHEMA \"" + schema + "\"").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Exec("SET LOCAL search_path TO \"" + schema + "\", public").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.AutoMigrate(&models.User{}, &models.UserOnboarding{}, &models.UserOnboardingInterest{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var onboardingBefore, interestsBefore int64
+	if err := tx.Model(&models.UserOnboarding{}).Count(&onboardingBefore).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Model(&models.UserOnboardingInterest{}).Count(&interestsBefore).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	limiter := &authLimiterSpy{decision: auth.AttemptDecision{Allowed: true}}
+	tokens := &authTokenServiceSpy{}
+	userLikeInit := &userLikeInitializerSpy{}
+	controller, err := NewAuthController(tx, tokens, limiter, userLikeInit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	username := "register-over-limit-" + uuid.NewString()
+	password := strings.Repeat("a", 73)
+	payload, err := json.Marshal(map[string]string{
+		"username": username,
+		"password": password,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewReader(payload))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	controller.Register(ctx)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("register status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	assertAuthError(t, recorder, "AUTH_PASSWORD_TOO_LONG")
+	var response struct {
+		Code      string `json:"code"`
+		Error     string `json:"error"`
+		RequestID string `json:"request_id"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode registration error response: %v; body=%s", err, recorder.Body.String())
+	}
+	if response.Code == "AUTH_INTERNAL" || response.Error != "Password must be 72 bytes or fewer." || response.RequestID == "" {
+		t.Fatalf("unexpected registration error response: %+v", response)
+	}
+
+	var userCount int64
+	if err := tx.Model(&models.User{}).Where("username = ?", username).Count(&userCount).Error; err != nil || userCount != 0 {
+		t.Fatalf("over-limit registration left user count=%d err=%v", userCount, err)
+	}
+	var onboardingAfter, interestsAfter int64
+	if err := tx.Model(&models.UserOnboarding{}).Count(&onboardingAfter).Error; err != nil || onboardingAfter != onboardingBefore {
+		t.Fatalf("over-limit registration changed onboarding count from %d to %d: %v", onboardingBefore, onboardingAfter, err)
+	}
+	if err := tx.Model(&models.UserOnboardingInterest{}).Count(&interestsAfter).Error; err != nil || interestsAfter != interestsBefore {
+		t.Fatalf("over-limit registration changed onboarding interest count from %d to %d: %v", interestsBefore, interestsAfter, err)
+	}
+	if len(userLikeInit.userIDs) != 0 {
+		t.Fatalf("over-limit registration initialized user likes: %v", userLikeInit.userIDs)
+	}
+	if tokens.issueCalls != 0 || tokens.rotateCalls != 0 {
+		t.Fatalf("over-limit registration issued or rotated tokens: issue=%d rotate=%d", tokens.issueCalls, tokens.rotateCalls)
+	}
+	if len(limiter.inputs) != 0 {
+		t.Fatalf("over-limit registration reached limiter: %+v", limiter.inputs)
+	}
 }
 
 func TestRegisterOnboardingInitializationFailureRollsBackUserIntegration(t *testing.T) {

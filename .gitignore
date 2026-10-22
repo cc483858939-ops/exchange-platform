@@ -12,3 +12,6 @@ dist/
 backups/
 *.dump
 *.sql
+
+# Temporary Vitest / Node compile cache
+/Exchangeapp_frontend/.tmp-a1-vitest/
