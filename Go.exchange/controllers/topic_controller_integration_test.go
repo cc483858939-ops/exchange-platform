@@ -355,9 +355,10 @@ func TestTopicFeedStableSeededBucketTraversalIntegration(t *testing.T) {
 	t.Cleanup(func() { loadTopicPostsPage = originalPageLoader })
 	ctx, recorder := newTopicControllerContext("/api/topics/"+topic.Slug+"/posts?limit=4&cursor="+*firstPage.NextCursor, topic.Slug)
 	GetTopicPosts(ctx)
-	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "\"error\":\"invalid cursor\"") {
+	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("changed SourceKeys status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
+	requireAPIError(t, recorder, "INVALID_CURSOR")
 }
 
 func topicPostIDs(posts []postResponse) []uint {

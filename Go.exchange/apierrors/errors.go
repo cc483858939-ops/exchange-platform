@@ -307,7 +307,7 @@ func WriteInternalErrorAs(ctx *gin.Context, err error, publicCode Code) {
 // HandleRequestError preserves client disconnect and request/database timeout
 // behavior for existing controller call sites.
 func HandleRequestError(ctx *gin.Context, err error) bool {
-	if err == nil || ctx == nil || ctx.Request == nil || ctx.Writer == nil {
+	if ctx == nil || ctx.Request == nil || ctx.Writer == nil {
 		return false
 	}
 	requestErr := ctx.Request.Context().Err()
@@ -317,6 +317,7 @@ func HandleRequestError(ctx *gin.Context, err error) bool {
 		return true
 	}
 	if errors.Is(requestErr, context.DeadlineExceeded) ||
+		errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded) ||
 		isPostgresTimeoutError(err) {
 		if ctx.Writer.Written() {

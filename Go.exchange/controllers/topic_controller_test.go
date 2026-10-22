@@ -127,14 +127,51 @@ func TestGetTopicPostsRejectsBadQueriesAndUnknownTopics(t *testing.T) {
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("limit=%q status=%d body=%s", rawLimit, recorder.Code, recorder.Body.String())
 		}
+		requireAPIError(t, recorder, "INVALID_REQUEST")
 	}
-	for _, rawCursor := range []string{"bad", base64.RawURLEncoding.EncodeToString([]byte(`{"created_at":"2026-01-01T00:00:00Z"}`))} {
+	unsupported := topicPostCursorV2{
+		Version:   topicPostCursorVersion + 1,
+		TopicHash: mustTopicHash(t, topicTestCatalog().Topics[0]),
+		AnchorAt:  time.Now().UTC().Add(-time.Hour), PostID: 42,
+	}
+	unsupportedJSON, err := json.Marshal(unsupported)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rawCursor := range []string{
+		"bad",
+		base64.RawURLEncoding.EncodeToString([]byte(`{"created_at":"2026-01-01T00:00:00Z"}`)),
+		base64.RawURLEncoding.EncodeToString(unsupportedJSON),
+	} {
 		ctx, recorder := newTopicControllerContext("/api/topics/topic-one/posts?cursor="+rawCursor, "topic-one")
 		GetTopicPosts(ctx)
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("cursor=%q status=%d body=%s", rawCursor, recorder.Code, recorder.Body.String())
 		}
+		requireAPIError(t, recorder, "INVALID_CURSOR")
 	}
+
+	topic := topicTestCatalog().Topics[0]
+	topicHash := mustTopicHash(t, topic)
+	validCursor, err := encodeTopicPostCursor(topicPostCursorV2{
+		Version: topicPostCursorVersion, TopicHash: topicHash,
+		AnchorAt: time.Now().UTC().Add(-time.Hour), PostID: 42,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedTopic := topic
+	changedTopic.SourceKeys = append(append([]string(nil), topic.SourceKeys...), "changed-source")
+	loadTopicConfiguration = func() (config.CuratedTopicsConfig, error) {
+		return config.CuratedTopicsConfig{Version: config.CuratedTopicsVersion, Topics: []config.CuratedTopic{changedTopic}}, nil
+	}
+	ctx, recorder := newTopicControllerContext("/api/topics/topic-one/posts?cursor="+validCursor, "topic-one")
+	GetTopicPosts(ctx)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("changed SourceKeys status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	requireAPIError(t, recorder, "INVALID_CURSOR")
+
 	for _, slug := range []string{"unknown", "hidden"} {
 		ctx, recorder := newTopicControllerContext("/api/topics/"+slug+"/posts", slug)
 		GetTopicPosts(ctx)
@@ -143,6 +180,43 @@ func TestGetTopicPostsRejectsBadQueriesAndUnknownTopics(t *testing.T) {
 		}
 		requireAPIError(t, recorder, "TOPIC_NOT_FOUND")
 	}
+}
+
+func TestGetTopicPostsCursorHashFailureIsInternal(t *testing.T) {
+	originalConfigLoader, originalPageLoader := loadTopicConfiguration, loadTopicPostsPage
+	originalHash, originalDB := topicPageCursorCriteriaHash, global.APIDb
+	global.APIDb = &gorm.DB{}
+	loadTopicConfiguration = func() (config.CuratedTopicsConfig, error) { return topicTestCatalog(), nil }
+	loadTopicPostsPage = func(context.Context, config.CuratedTopic, int, *topicPostCursorV2) (postPageResponse, error) {
+		t.Fatal("page loader should not run after cursor hash failure")
+		return postPageResponse{}, nil
+	}
+	topicPageCursorCriteriaHash = func(config.CuratedTopic) (string, error) {
+		return "", errors.New("TEST_A2_PRIVATE_CURSOR_HASH_FAILURE")
+	}
+	t.Cleanup(func() {
+		loadTopicConfiguration, loadTopicPostsPage = originalConfigLoader, originalPageLoader
+		topicPageCursorCriteriaHash, global.APIDb = originalHash, originalDB
+	})
+
+	ctx, recorder := newTopicControllerContext("/api/topics/topic-one/posts?cursor=present", "topic-one")
+	GetTopicPosts(ctx)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("cursor hash failure status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	requireAPIError(t, recorder, "INTERNAL_ERROR")
+	if strings.Contains(recorder.Body.String(), "TEST_A2_PRIVATE_CURSOR_HASH_FAILURE") {
+		t.Fatalf("cursor hash failure leaked internal error: %s", recorder.Body.String())
+	}
+}
+
+func mustTopicHash(t *testing.T, topic config.CuratedTopic) string {
+	t.Helper()
+	hash, err := topicCursorCriteriaHash(topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hash
 }
 
 func TestTopicCursorV2RoundTripAndValidation(t *testing.T) {

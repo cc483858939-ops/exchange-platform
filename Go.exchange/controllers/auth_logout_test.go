@@ -49,7 +49,7 @@ func TestLogoutHandlerUsesCapturedCredentialWithoutAccessOrUserLookup(t *testing
 		{"success", nil, 204, ""},
 		{"invalid credential", auth.ErrRefreshInvalid, 401, "AUTH_REFRESH_INVALID"},
 		{"Redis unavailable", errors.New("private storage failure"), 503, "AUTH_LOGOUT_UNAVAILABLE"},
-		{"cancelled", context.Canceled, 503, "AUTH_LOGOUT_UNAVAILABLE"},
+		{"cancelled", context.Canceled, 504, "REQUEST_TIMEOUT"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			tokens := &logoutTokenSpy{err: test.err}

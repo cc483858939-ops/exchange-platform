@@ -266,7 +266,8 @@ func TestGetPostQuotesReturnsNotFoundWhenTargetUnavailableIntegration(t *testing
 	}
 	ctx, recorder := quoteListContext(fixture.Target.ID, "")
 	GetPostQuotes(ctx)
-	if recorder.Code != http.StatusNotFound || !strings.Contains(recorder.Body.String(), "post not found") {
+	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("status=%d body=%s, want normal Post not-found response", recorder.Code, recorder.Body.String())
 	}
+	requireAPIError(t, recorder, "POST_NOT_FOUND")
 }

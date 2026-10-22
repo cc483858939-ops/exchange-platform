@@ -45,6 +45,9 @@ type topicPostQueryRow struct {
 
 var loadTopicConfiguration = config.LoadCuratedTopics
 var loadTopicPostsPage = loadTopicPostsPageFromDB
+var topicPageCursorCriteriaHash = topicCursorCriteriaHash
+
+var errInvalidTopicLimit = errors.New("invalid topic limit")
 
 func GetTopics(ctx *gin.Context) {
 	catalog, err := loadTopicConfiguration()
@@ -74,7 +77,14 @@ func GetTopicPosts(ctx *gin.Context) {
 	}
 	limit, cursor, err := parseTopicPostPageQuery(ctx, topic)
 	if err != nil {
-		writeAPIError(ctx, "INVALID_REQUEST")
+		switch {
+		case errors.Is(err, errInvalidTopicCursor):
+			writeAPIError(ctx, "INVALID_CURSOR")
+		case errors.Is(err, errInvalidTopicLimit):
+			writeAPIError(ctx, "INVALID_REQUEST")
+		default:
+			writeInternalAPIError(ctx, err)
+		}
 		return
 	}
 	if global.APIDb == nil {
@@ -110,10 +120,10 @@ func enabledTopicBySlug(catalog config.CuratedTopicsConfig, slug string) (config
 func parseTopicPostPageQuery(ctx *gin.Context, topic config.CuratedTopic) (int, *topicPostCursorV2, error) {
 	limit, err := parsePageLimit(ctx, defaultTopicPostLimit, maxTopicPostLimit)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, errInvalidTopicLimit
 	}
 	if raw, exists := ctx.GetQuery("cursor"); exists {
-		topicHash, err := topicCursorCriteriaHash(topic)
+		topicHash, err := topicPageCursorCriteriaHash(topic)
 		if err != nil {
 			return 0, nil, err
 		}
