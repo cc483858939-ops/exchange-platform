@@ -13,6 +13,11 @@
         <p>Sign in to continue to your financial feed.</p>
       </header>
 
+      <p v-if="passwordChanged" class="auth-success" role="status" aria-live="polite">
+        Password changed successfully.<br>
+        Please sign in with your new password.
+      </p>
+
       <form class="auth-form" :aria-busy="submitting" @submit.prevent="login">
         <div class="auth-field">
           <label for="login-username">Username</label>
@@ -92,6 +97,7 @@ const authFlowQuery = computed(() => buildAuthFlowQuery(route.query));
 const loginDestination = computed(() =>
   resolveAuthSuccessDestination(router, route.query, authStore.currentIdentity),
 );
+const passwordChanged = computed(() => route.query.passwordChanged === '1');
 
 const formatLoginError = (error: unknown) => {
   if (error instanceof AuthRequestError && error.code === 'AUTH_REQUEST_TIMEOUT') {

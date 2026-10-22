@@ -102,7 +102,7 @@ func TestRuntimeSchemaIntegrationContract(t *testing.T) {
 	if err := tx.Where("id = ?", runtimeSchemaStateID).Take(&publishedState).Error; err != nil {
 		t.Fatalf("load published runtime schema state: %v", err)
 	}
-	if publishedState.CurrentVersion != 20 || publishedState.CompatibilityFloor != 20 {
+	if publishedState.CurrentVersion != PublishedSchemaCurrentVersion || publishedState.CompatibilityFloor != PublishedSchemaCompatibilityFloor {
 		t.Fatalf("published schema contract=%d/%d want=20/20", publishedState.CurrentVersion, publishedState.CompatibilityFloor)
 	}
 	if err := applyPostSchemaConstraints(tx); err != nil {

@@ -48,6 +48,7 @@ func TestAttemptLimiterUsesExactSubjectPolicies(t *testing.T) {
 		{action: AttemptRegister, limit: 3},
 		{action: AttemptRefresh, limit: 20},
 		{action: AttemptLogout, limit: 20},
+		{action: AttemptChangePassword, limit: 5},
 	} {
 		t.Run(string(test.action), func(t *testing.T) {
 			fake := &attemptScriptFake{}
@@ -79,6 +80,7 @@ func TestAttemptLimiterRejectsWhenIPBucketExceeds(t *testing.T) {
 		{action: AttemptRegister, limit: 10},
 		{action: AttemptRefresh, limit: 60},
 		{action: AttemptLogout, limit: 60},
+		{action: AttemptChangePassword, limit: 30},
 	} {
 		t.Run(string(test.action), func(t *testing.T) {
 			fake := &attemptScriptFake{}
@@ -105,6 +107,26 @@ func TestAttemptLimiterRejectsWhenIPBucketExceeds(t *testing.T) {
 				t.Fatalf("IP attempt %d unexpectedly allowed", test.limit+1)
 			}
 		})
+	}
+}
+
+func TestPasswordChangeRateLimitUsesIndependentHashedUserSubject(t *testing.T) {
+	fake := &attemptScriptFake{}
+	limiter := newTestAttemptLimiter(func() time.Time { return time.Unix(120, 0) }, fake)
+	for _, action := range []AttemptAction{AttemptLogin, AttemptChangePassword} {
+		if _, err := limiter.Allow(context.Background(), AttemptInput{
+			Action: action, ClientIP: "192.0.2.1", Subject: "42",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(fake.keys) != 2 || fake.keys[0][0] == fake.keys[1][0] || fake.keys[0][1] == fake.keys[1][1] {
+		t.Fatalf("password change reused the login bucket: %v", fake.keys)
+	}
+	for _, key := range fake.keys[1] {
+		if strings.Contains(key, "192.0.2.1") || strings.Contains(key, "42") || strings.Contains(key, "new-password") {
+			t.Fatalf("password change limiter key exposed raw input: %q", key)
+		}
 	}
 }
 

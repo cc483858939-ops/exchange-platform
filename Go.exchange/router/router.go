@@ -133,6 +133,7 @@ func setupRouter(authController *controllers.AuthController, verifier auth.Acces
 	}
 	{
 		api.GET("/recommendations/posts", withRateLimit(enableApplicationRateLimit, applicationLimiter, ratelimit.ActionRecommendations, ratelimit.FailOpen, userRecommendationHandler)...)
+		api.PUT("/me/password", authController.ChangePassword)
 		api.POST("/recommendation-events", controllers.NewRecommendationEventsHandler(publisher, telemetryRateLimiter, clickCooldown))
 		api.POST("/post-view-events", controllers.NewPostViewEventsHandler(publisher))
 		api.POST("/uploads/post-media", withRateLimit(enableApplicationRateLimit, applicationLimiter, ratelimit.ActionMediaUpload, ratelimit.FailClosed, controllers.UploadPostMedia)...)

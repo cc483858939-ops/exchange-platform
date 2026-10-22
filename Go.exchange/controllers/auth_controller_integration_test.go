@@ -24,7 +24,8 @@ import (
 type stubTokenService struct{}
 
 type refreshTokenService struct {
-	userID uint
+	userID      uint
+	authVersion int64
 }
 
 type allowAllAttemptLimiter struct{}
@@ -43,9 +44,10 @@ func (allowAllAttemptLimiter) Allow(context.Context, auth.AttemptInput) (auth.At
 	return auth.AttemptDecision{Allowed: true}, nil
 }
 
-func (stubTokenService) IssuePair(_ context.Context, userID uint) (auth.TokenPair, error) {
+func (stubTokenService) IssuePair(_ context.Context, userID uint, authVersion int64) (auth.TokenPair, error) {
 	return auth.TokenPair{
 		UserID:           userID,
+		AuthVersion:      authVersion,
 		AccessToken:      "raw-access-token",
 		RefreshToken:     "rt1.00000000-0000-4000-8000-000000000000.test-secret",
 		TokenType:        "Bearer",
@@ -62,13 +64,14 @@ func (stubTokenService) VerifyAccess(_ string) (*auth.AccessClaims, error) {
 	return nil, auth.ErrAccessTokenInvalid
 }
 
-func (service refreshTokenService) IssuePair(_ context.Context, userID uint) (auth.TokenPair, error) {
-	return stubTokenService{}.IssuePair(context.Background(), userID)
+func (service refreshTokenService) IssuePair(_ context.Context, userID uint, authVersion int64) (auth.TokenPair, error) {
+	return stubTokenService{}.IssuePair(context.Background(), userID, authVersion)
 }
 
 func (service refreshTokenService) RotateRefresh(_ context.Context, _, _ string) (auth.TokenPair, error) {
 	return auth.TokenPair{
 		UserID:           service.userID,
+		AuthVersion:      service.authVersion,
 		AccessToken:      "rotated-access-token",
 		RefreshToken:     "rt1.00000000-0000-4000-8000-000000000001.rotated-secret",
 		TokenType:        "Bearer",
@@ -377,6 +380,7 @@ func TestRefreshPreservesProfileIdentityIntegration(t *testing.T) {
 	user := models.User{
 		Username:    "refresh-user-" + uuid.NewString(),
 		Password:    "unused",
+		AuthVersion: 1,
 		DisplayName: "Refresh User",
 		AvatarURL:   "/api/files/profile-avatars/refresh/test.webp",
 	}
@@ -386,7 +390,7 @@ func TestRefreshPreservesProfileIdentityIntegration(t *testing.T) {
 	t.Cleanup(func() {
 		db.Unscoped().Delete(&user)
 	})
-	controller, err := NewAuthController(db, refreshTokenService{userID: user.ID}, allowAllAttemptLimiter{})
+	controller, err := NewAuthController(db, refreshTokenService{userID: user.ID, authVersion: user.AuthVersion}, allowAllAttemptLimiter{})
 	if err != nil {
 		t.Fatal(err)
 	}

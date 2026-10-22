@@ -29,8 +29,8 @@ func TestPostEmbeddingVectorConstraintsMigrationIntegration(t *testing.T) {
 	if err := db.Where("id = ?", runtimeSchemaStateID).Take(&runtimeState).Error; err != nil {
 		t.Fatalf("load published runtime schema state: %v", err)
 	}
-	if runtimeState.CurrentVersion != 20 || runtimeState.CompatibilityFloor != 20 {
-		t.Fatalf("runtime schema state current=%d floor=%d, want 20/20", runtimeState.CurrentVersion, runtimeState.CompatibilityFloor)
+	if runtimeState.CurrentVersion != PublishedSchemaCurrentVersion || runtimeState.CompatibilityFloor != PublishedSchemaCompatibilityFloor {
+		t.Fatalf("runtime schema state current=%d floor=%d, want %d/%d", runtimeState.CurrentVersion, runtimeState.CompatibilityFloor, PublishedSchemaCurrentVersion, PublishedSchemaCompatibilityFloor)
 	}
 	if err := CheckRuntimeSchema(context.Background(), db, SchemaValidationOptions{RequiredVersion: 11}); SchemaReasonCode(err) != "schema_incompatible" {
 		t.Fatalf("schema 12 compatibility for required version 11: reason=%q err=%v, want schema_incompatible", SchemaReasonCode(err), err)

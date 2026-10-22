@@ -14,6 +14,7 @@ const UserConnectionsView = () => import('../views/UserConnectionsView.vue');
 const UserSearchView = () => import('../views/UserSearchView.vue');
 const HistoryView = () => import('../views/HistoryView.vue');
 const MutedAccountsView = () => import('../views/MutedAccountsView.vue');
+const AccountSecurityView = () => import('../views/AccountSecurityView.vue');
 const TopicDirectoryView = () => import('../views/TopicDirectoryView.vue');
 const TopicView = () => import('../views/TopicView.vue');
 const NotificationsView = () => import('../views/NotificationsView.vue');
@@ -50,6 +51,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/search', name: 'UserSearch', component: UserSearchView, meta: { layout: 'app', title: 'Search' } },
   { path: '/history', name: 'History', component: HistoryView, meta: { layout: 'app', title: 'History' } },
   { path: '/settings/muted', name: 'MutedAccounts', component: MutedAccountsView, meta: { layout: 'app', title: 'Muted accounts' } },
+  { path: '/settings/security', name: 'AccountSecurity', component: AccountSecurityView, meta: { layout: 'app', title: 'Security', requiresAuth: true } },
   { path: '/topics', name: 'TopicDirectory', component: TopicDirectoryView, meta: { layout: 'app', title: 'Topics' } },
   { path: '/topics/:slug', name: 'Topic', component: TopicView, meta: { layout: 'app', title: 'Topic' } },
   {
@@ -97,6 +99,10 @@ export const resolveAuthenticatedGuestOnlyDestination = (
 };
 
 router.beforeEach((to, from) => {
+  if (to.meta.requiresAuth && !useAuthStore().isAuthenticated) {
+    return { name: 'Login', query: { returnTo: to.fullPath } };
+  }
+
   if (to.meta.guestOnly) {
     const authStore = useAuthStore();
     if (authStore.isAuthenticated) {

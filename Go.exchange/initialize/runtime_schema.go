@@ -17,16 +17,16 @@ import (
 )
 
 // RequiredSchemaVersion is the schema version required by this binary.
-// Schema 20 adds persistent recent mention suggestions and mention notifications.
-const RequiredSchemaVersion int64 = 20
+// Schema 21 adds per-user authentication versions for password change invalidation.
+const RequiredSchemaVersion int64 = 21
 
 // PublishedSchemaCurrentVersion and PublishedSchemaCompatibilityFloor are
 // migration-owned values. They are deliberately separate from the binary's
 // required version so a migration can publish a compatibility interval that
 // spans more than one release.
 const (
-	PublishedSchemaCurrentVersion     int64 = 20
-	PublishedSchemaCompatibilityFloor int64 = 20
+	PublishedSchemaCurrentVersion     int64 = 21
+	PublishedSchemaCompatibilityFloor int64 = 21
 )
 
 const runtimeSchemaStateID uint = 1

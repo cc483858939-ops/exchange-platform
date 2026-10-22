@@ -1,10 +1,12 @@
 package middlewares
 
 import (
-	"Go.exchange/apierrors"
-	"Go.exchange/auth"
+	"errors"
 	"strconv"
 	"strings"
+
+	"Go.exchange/apierrors"
+	"Go.exchange/auth"
 
 	"github.com/gin-gonic/gin"
 )
@@ -17,8 +19,22 @@ func AuthMiddleware(verifier auth.AccessTokenVerifier) gin.HandlerFunc {
 			return
 		}
 
-		claims, err := verifier.VerifyAccess(rawToken)
+		var claims *auth.AccessClaims
+		var err error
+		if contextual, ok := verifier.(auth.ContextAccessTokenVerifier); ok {
+			claims, err = contextual.VerifyAccessContext(ctx.Request.Context(), rawToken)
+		} else {
+			claims, err = verifier.VerifyAccess(rawToken)
+		}
 		if err != nil {
+			if errors.Is(err, auth.ErrAuthVersionUnavailable) {
+				apierrors.WriteInternalErrorAs(ctx, err, apierrors.CodeAuthVersionUnavailable)
+				return
+			}
+			apierrors.WritePublicError(ctx, apierrors.CodeAuthTokenInvalid)
+			return
+		}
+		if claims == nil {
 			apierrors.WritePublicError(ctx, apierrors.CodeAuthTokenInvalid)
 			return
 		}

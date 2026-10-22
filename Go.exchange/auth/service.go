@@ -10,6 +10,7 @@ import (
 
 type TokenPair struct {
 	UserID           uint
+	AuthVersion      int64
 	AccessToken      string
 	RefreshToken     string
 	TokenType        string
@@ -19,7 +20,7 @@ type TokenPair struct {
 
 type TokenService interface {
 	AccessTokenVerifier
-	IssuePair(ctx context.Context, userID uint) (TokenPair, error)
+	IssuePair(ctx context.Context, userID uint, authVersion int64) (TokenPair, error)
 	RotateRefresh(ctx context.Context, rawRefreshToken, requestID string) (TokenPair, error)
 	RevokeRefresh(ctx context.Context, rawRefreshToken string) error
 }
@@ -40,9 +41,9 @@ func NewManager(config Config, store RefreshStore) (*Manager, error) {
 	return &Manager{config: config, store: store, now: time.Now}, nil
 }
 
-func (m *Manager) IssuePair(ctx context.Context, userID uint) (TokenPair, error) {
-	if userID == 0 {
-		return TokenPair{}, fmt.Errorf("user ID must be positive")
+func (m *Manager) IssuePair(ctx context.Context, userID uint, authVersion int64) (TokenPair, error) {
+	if userID == 0 || authVersion <= 0 {
+		return TokenPair{}, fmt.Errorf("user ID and authentication version must be positive")
 	}
 	now := m.now().UTC()
 	sessionID := uuid.NewString()
@@ -50,7 +51,7 @@ func (m *Manager) IssuePair(ctx context.Context, userID uint) (TokenPair, error)
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("generate refresh token: %w", err)
 	}
-	accessToken, err := m.signAccessToken(userID, sessionID, now)
+	accessToken, err := m.signAccessToken(userID, authVersion, sessionID, now)
 	if err != nil {
 		return TokenPair{}, err
 	}
@@ -63,6 +64,7 @@ func (m *Manager) IssuePair(ctx context.Context, userID uint) (TokenPair, error)
 	if err := m.store.Create(ctx, RefreshSession{
 		SessionID:         sessionID,
 		UserID:            userID,
+		AuthVersion:       authVersion,
 		SecretHash:        hashRefreshSecret(secret),
 		CreatedAt:         now,
 		LastRotatedAt:     now,
@@ -73,6 +75,7 @@ func (m *Manager) IssuePair(ctx context.Context, userID uint) (TokenPair, error)
 	}
 	return TokenPair{
 		UserID:           userID,
+		AuthVersion:      authVersion,
 		AccessToken:      accessToken,
 		RefreshToken:     formatRefreshToken(sessionID, secret),
 		TokenType:        "Bearer",
@@ -105,7 +108,7 @@ func (m *Manager) RotateRefresh(ctx context.Context, rawRefreshToken, requestID 
 			return TokenPair{}, err
 		}
 	}
-	userID, effectiveTTL, sealedSecret, err := m.store.Rotate(
+	userID, authVersion, effectiveTTL, sealedSecret, err := m.store.Rotate(
 		ctx,
 		parsed.sessionID,
 		expectedHash,
@@ -123,12 +126,13 @@ func (m *Manager) RotateRefresh(ctx context.Context, rawRefreshToken, requestID 
 			return TokenPair{}, err
 		}
 	}
-	accessToken, err := m.signAccessToken(userID, parsed.sessionID, now)
+	accessToken, err := m.signAccessToken(userID, authVersion, parsed.sessionID, now)
 	if err != nil {
 		return TokenPair{}, err
 	}
 	return TokenPair{
 		UserID:           userID,
+		AuthVersion:      authVersion,
 		AccessToken:      accessToken,
 		RefreshToken:     formatRefreshToken(parsed.sessionID, newSecret),
 		TokenType:        "Bearer",
@@ -137,8 +141,8 @@ func (m *Manager) RotateRefresh(ctx context.Context, rawRefreshToken, requestID 
 	}, nil
 }
 
-// RevokeRefresh ends only the presented refresh family. Already-issued access
-// JWTs retain their configured lifetime; access verification remains stateless.
+// RevokeRefresh ends only the presented refresh family. Access JWTs are also
+// invalidated when the account authentication version changes.
 func (m *Manager) RevokeRefresh(ctx context.Context, rawRefreshToken string) error {
 	parsed, err := parseRefreshToken(rawRefreshToken)
 	if err != nil {

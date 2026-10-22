@@ -16,10 +16,11 @@ import (
 type AttemptAction string
 
 const (
-	AttemptLogin    AttemptAction = "login"
-	AttemptRegister AttemptAction = "register"
-	AttemptRefresh  AttemptAction = "refresh"
-	AttemptLogout   AttemptAction = "logout"
+	AttemptLogin          AttemptAction = "login"
+	AttemptRegister       AttemptAction = "register"
+	AttemptRefresh        AttemptAction = "refresh"
+	AttemptLogout         AttemptAction = "logout"
+	AttemptChangePassword AttemptAction = "change_password"
 )
 
 type AttemptInput struct {
@@ -44,10 +45,11 @@ type attemptPolicy struct {
 }
 
 var attemptPolicies = map[AttemptAction]attemptPolicy{
-	AttemptLogin:    {window: time.Minute, ipLimit: 30, subjectLimit: 5},
-	AttemptRegister: {window: 10 * time.Minute, ipLimit: 10, subjectLimit: 3},
-	AttemptRefresh:  {window: time.Minute, ipLimit: 60, subjectLimit: 20},
-	AttemptLogout:   {window: time.Minute, ipLimit: 60, subjectLimit: 20},
+	AttemptLogin:          {window: time.Minute, ipLimit: 30, subjectLimit: 5},
+	AttemptRegister:       {window: 10 * time.Minute, ipLimit: 10, subjectLimit: 3},
+	AttemptRefresh:        {window: time.Minute, ipLimit: 60, subjectLimit: 20},
+	AttemptLogout:         {window: time.Minute, ipLimit: 60, subjectLimit: 20},
+	AttemptChangePassword: {window: time.Minute, ipLimit: 30, subjectLimit: 5},
 }
 
 var attemptCounterScript = redis.NewScript(`

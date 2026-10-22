@@ -59,7 +59,7 @@ func TestRedisRefreshRotationAllowsExactlyOneConcurrentWinnerIntegration(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	pair, err := manager.IssuePair(context.Background(), 314)
+	pair, err := manager.IssuePair(context.Background(), 314, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

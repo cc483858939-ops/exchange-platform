@@ -228,6 +228,18 @@
       />
     </template>
 
+    <template v-else-if="props.name === 'shield'">
+      <path
+        d="M12 3.25 19 6v5.1c0 4.35-2.85 7.65-7 9.9-4.15-2.25-7-5.55-7-9.9V6l7-2.75Z"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+      <path d="m9 11.75 2 2 4-4.25" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+    </template>
+
     <template v-else-if="props.name === 'trash'">
       <path
         d="M5 7h14M10 11v6M14 11v6M8 7l1-3h6l1 3m-9 0 .8 13h6.4L15 7"
@@ -402,6 +414,7 @@ type AppIconName =
   | 'link'
   | 'analytics'
   | 'eye-off'
+  | 'shield'
   | 'trash'
   | 'arrow-left'
   | 'close'

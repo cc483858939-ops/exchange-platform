@@ -104,6 +104,14 @@ func StartHttpServerWithTracing(tokens auth.TokenService, publisher eventing.Bat
 		}
 	}()
 	apiDB := global.APIDb
+	versionReader, err := auth.NewGormAuthVersionReader(apiDB)
+	if err != nil {
+		return nil, fmt.Errorf("initialize authentication version reader: %w", err)
+	}
+	versionedVerifier, err := auth.NewVersionedAccessTokenVerifier(tokens, versionReader)
+	if err != nil {
+		return nil, fmt.Errorf("initialize versioned access token verifier: %w", err)
+	}
 	recommendationDependencies, err := recommendation.NewGormServiceDependencies(apiDB, global.RedisDB)
 	if err != nil {
 		return nil, fmt.Errorf("initialize recommendation dependencies: %w", err)
@@ -161,7 +169,7 @@ func StartHttpServerWithTracing(tokens auth.TokenService, publisher eventing.Bat
 	if err != nil {
 		return nil, fmt.Errorf("initialize recommendation click cooldown: %w", err)
 	}
-	handler, err := router.SetupRouterWithTracingAndClickCooldown(authController, tokens, publisher, readiness, applicationLimiter, recommendationHandler, telemetryRateLimiter, clickCooldown, traceEnabled, translationService)
+	handler, err := router.SetupRouterWithTracingAndClickCooldown(authController, versionedVerifier, publisher, readiness, applicationLimiter, recommendationHandler, telemetryRateLimiter, clickCooldown, traceEnabled, translationService)
 	if err != nil {
 		return nil, fmt.Errorf("initialize HTTP router: %w", err)
 	}

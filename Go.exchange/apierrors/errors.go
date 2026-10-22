@@ -60,6 +60,9 @@ const (
 	CodeAuthRateLimitUnavailable     Code = "AUTH_RATE_LIMIT_UNAVAILABLE"
 	CodeAuthRateLimited              Code = "AUTH_RATE_LIMITED"
 	CodeAuthLogoutUnavailable        Code = "AUTH_LOGOUT_UNAVAILABLE"
+	CodeAuthCurrentPasswordInvalid   Code = "AUTH_CURRENT_PASSWORD_INVALID"
+	CodeAuthPasswordUnchanged        Code = "AUTH_PASSWORD_UNCHANGED"
+	CodeAuthVersionUnavailable       Code = "AUTH_VERSION_UNAVAILABLE"
 	CodeRateLimitUnavailable         Code = "RATE_LIMIT_UNAVAILABLE"
 	CodeAuthRequired                 Code = "AUTH_REQUIRED"
 	CodeOnboardingStateMissing       Code = "ONBOARDING_STATE_MISSING"
@@ -138,6 +141,9 @@ var definitions = map[Code]Definition{
 	CodeAuthRateLimitUnavailable:     {Status: http.StatusServiceUnavailable, Message: "Authentication temporarily unavailable", internal: true},
 	CodeAuthRateLimited:              {Status: http.StatusTooManyRequests, Message: "Too many authentication attempts"},
 	CodeAuthLogoutUnavailable:        {Status: http.StatusServiceUnavailable, Message: "Server sign-out could not be confirmed", internal: true},
+	CodeAuthCurrentPasswordInvalid:   {Status: http.StatusBadRequest, Message: "Current password is incorrect"},
+	CodeAuthPasswordUnchanged:        {Status: http.StatusBadRequest, Message: "New password must be different"},
+	CodeAuthVersionUnavailable:       {Status: http.StatusServiceUnavailable, Message: "Authentication is temporarily unavailable", internal: true},
 	CodeRateLimitUnavailable:         {Status: http.StatusServiceUnavailable, Message: "Rate limiting is temporarily unavailable", internal: true},
 	CodeAuthRequired:                 {Status: http.StatusUnauthorized, Message: "Authentication required"},
 	CodeOnboardingStateMissing:       {Status: http.StatusInternalServerError, Message: "Onboarding state is unavailable", internal: true},

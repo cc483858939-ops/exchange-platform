@@ -50,7 +50,7 @@ func (s *memoryRefreshStore) Rotate(
 	now time.Time,
 	idleTTL time.Duration,
 	recovery RefreshRecovery,
-) (uint, time.Duration, string, error) {
+) (uint, int64, time.Duration, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	session, exists := s.sessions[sessionID]
@@ -58,25 +58,25 @@ func (s *memoryRefreshStore) Rotate(
 	previous, used := s.used[usedKey]
 	if !exists {
 		if used {
-			return 0, 0, "", ErrRefreshReused
+			return 0, 0, 0, "", ErrRefreshReused
 		}
-		return 0, 0, "", ErrRefreshInvalid
+		return 0, 0, 0, "", ErrRefreshInvalid
 	}
 	if session.SecretHash != expectedSecretHash {
 		if used && recovery.RequestID != "" && previous.requestID == recovery.RequestID &&
 			previous.nextHash == session.SecretHash && now.Before(previous.expiresAt) &&
 			now.Before(session.LastRotatedAt.Add(session.TTL)) {
-			return session.UserID, session.LastRotatedAt.Add(session.TTL).Sub(now), previous.sealedSecret, nil
+			return session.UserID, session.AuthVersion, session.LastRotatedAt.Add(session.TTL).Sub(now), previous.sealedSecret, nil
 		}
 		if used {
 			delete(s.sessions, sessionID)
-			return 0, 0, "", ErrRefreshReused
+			return 0, 0, 0, "", ErrRefreshReused
 		}
-		return 0, 0, "", ErrRefreshInvalid
+		return 0, 0, 0, "", ErrRefreshInvalid
 	}
 	if !now.Before(session.AbsoluteExpiresAt) {
 		delete(s.sessions, sessionID)
-		return 0, 0, "", ErrRefreshExpired
+		return 0, 0, 0, "", ErrRefreshExpired
 	}
 	ttl := minDuration(idleTTL, session.AbsoluteExpiresAt.Sub(now))
 	session.SecretHash = newSecretHash
@@ -87,7 +87,7 @@ func (s *memoryRefreshStore) Rotate(
 		requestID: recovery.RequestID, nextHash: newSecretHash,
 		sealedSecret: recovery.SealedSecret, expiresAt: now.Add(minDuration(refreshRecoveryTTL, ttl)),
 	}
-	return session.UserID, ttl, recovery.SealedSecret, nil
+	return session.UserID, session.AuthVersion, ttl, recovery.SealedSecret, nil
 }
 
 func testManager(t *testing.T) (*Manager, *memoryRefreshStore, ed25519.PrivateKey) {
@@ -116,7 +116,7 @@ func testManager(t *testing.T) (*Manager, *memoryRefreshStore, ed25519.PrivateKe
 
 func TestIssuePairUsesEdDSAAndOpaqueRefreshToken(t *testing.T) {
 	manager, store, _ := testManager(t)
-	pair, err := manager.IssuePair(context.Background(), 42)
+	pair, err := manager.IssuePair(context.Background(), 42, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestIssuePairUsesEdDSAAndOpaqueRefreshToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if claims.Subject != "42" || claims.TokenType != accessTokenType || claims.SessionID == "" || claims.ID == "" {
+	if claims.Subject != "42" || claims.TokenType != accessTokenType || claims.SessionID == "" || claims.ID == "" || claims.AuthVersion != 1 {
 		t.Fatalf("unexpected claims: %+v", claims)
 	}
 	parsed, err := parseRefreshToken(pair.RefreshToken)
@@ -146,15 +146,18 @@ func TestIssuePairUsesEdDSAAndOpaqueRefreshToken(t *testing.T) {
 	if session.SecretHash == "" || session.SecretHash == string(parsed.secret) || session.SecretHash == pair.RefreshToken {
 		t.Fatal("refresh store must contain only a one-way secret hash")
 	}
+	if session.AuthVersion != pair.AuthVersion || pair.AuthVersion != 1 {
+		t.Fatalf("refresh session auth_version=%d pair auth_version=%d, want 1", session.AuthVersion, pair.AuthVersion)
+	}
 }
 
 func TestIssuePairAlwaysUsesUniqueJWTID(t *testing.T) {
 	manager, _, _ := testManager(t)
-	first, err := manager.IssuePair(context.Background(), 7)
+	first, err := manager.IssuePair(context.Background(), 7, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := manager.IssuePair(context.Background(), 7)
+	second, err := manager.IssuePair(context.Background(), 7, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +235,7 @@ func TestVerifyAccessRejectsMissingRequiredClaims(t *testing.T) {
 
 func TestRefreshRotationAllowsExactlyOneConcurrentWinner(t *testing.T) {
 	manager, _, _ := testManager(t)
-	pair, err := manager.IssuePair(context.Background(), 99)
+	pair, err := manager.IssuePair(context.Background(), 99, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

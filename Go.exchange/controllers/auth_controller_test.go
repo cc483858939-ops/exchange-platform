@@ -46,10 +46,11 @@ func (spy *authUserLikeInitializerSpy) InitializeUserEmpty(context.Context, uint
 	return nil
 }
 
-func (spy *authTokenServiceSpy) IssuePair(_ context.Context, userID uint) (auth.TokenPair, error) {
+func (spy *authTokenServiceSpy) IssuePair(_ context.Context, userID uint, authVersion int64) (auth.TokenPair, error) {
 	spy.issueCalls++
 	return auth.TokenPair{
 		UserID:           userID,
+		AuthVersion:      authVersion,
 		AccessToken:      "access-token",
 		RefreshToken:     "rt1.test-refresh-token",
 		TokenType:        "Bearer",

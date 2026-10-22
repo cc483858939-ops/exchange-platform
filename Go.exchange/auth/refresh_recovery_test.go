@@ -15,7 +15,7 @@ func TestRefreshRecoveryReturnsSameSuccessorWithoutExtendingSession(t *testing.T
 	manager, store, _ := testManager(t)
 	now := time.Now().UTC()
 	manager.now = func() time.Time { return now }
-	original, err := manager.IssuePair(context.Background(), 42)
+	original, err := manager.IssuePair(context.Background(), 42, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestRefreshRecoveryReturnsSameSuccessorWithoutExtendingSession(t *testing.T
 
 func TestRefreshRecoveryConcurrentSameRequestReturnsOneSuccessor(t *testing.T) {
 	manager, _, _ := testManager(t)
-	original, err := manager.IssuePair(context.Background(), 42)
+	original, err := manager.IssuePair(context.Background(), 42, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestRefreshRecoveryRejectsReplayOutsideItsExactTransition(t *testing.T) {
 			manager, store, _ := testManager(t)
 			now := time.Now().UTC()
 			manager.now = func() time.Time { return now }
-			original, err := manager.IssuePair(context.Background(), 42)
+			original, err := manager.IssuePair(context.Background(), 42, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -182,7 +182,7 @@ func TestRefreshRecoveryCipherRejectsChangedBindingAndTampering(t *testing.T) {
 
 func TestRefreshRecoveryRejectsInvalidRequestIDBeforeRotation(t *testing.T) {
 	manager, store, _ := testManager(t)
-	original, err := manager.IssuePair(context.Background(), 42)
+	original, err := manager.IssuePair(context.Background(), 42, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

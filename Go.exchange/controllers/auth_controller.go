@@ -62,6 +62,7 @@ type AuthController struct {
 	userLikeInit interface {
 		InitializeUserEmpty(context.Context, uint) error
 	}
+	hashPassword func(string) (string, error)
 }
 
 type userLikeInitCompensator interface {
@@ -88,6 +89,7 @@ func NewAuthController(db *gorm.DB, tokens auth.TokenService, limiter auth.Attem
 		return nil, errors.New("auth attempt limiter is required")
 	}
 	controller := &AuthController{db: db, tokens: tokens, limiter: limiter}
+	controller.hashPassword = utils.HashPassword
 	if len(userLikeInitializers) > 0 {
 		controller.userLikeInit = userLikeInitializers[0]
 	}
@@ -125,7 +127,7 @@ func (c *AuthController) Register(ctx *gin.Context) {
 		writeInternalAPIErrorAs(ctx, err, "AUTH_INTERNAL")
 		return
 	}
-	user := models.User{Username: request.Username, Password: hashedPassword}
+	user := models.User{Username: request.Username, Password: hashedPassword, AuthVersion: 1}
 	if c.userLikeInit == nil {
 		metrics.RecordLikeLifecycleEvent("user_init_failure")
 		writeInternalAPIErrorAs(ctx, errors.New("user like initializer is unavailable"), "AUTH_LIKE_STATE_UNAVAILABLE")
@@ -170,7 +172,7 @@ func (c *AuthController) Register(ctx *gin.Context) {
 		return
 	}
 
-	pair, err := c.tokens.IssuePair(ctx.Request.Context(), user.ID)
+	pair, err := c.tokens.IssuePair(ctx.Request.Context(), user.ID, user.AuthVersion)
 	if err != nil {
 		writeInternalAPIErrorAs(ctx, err, "AUTH_TOKEN_ISSUE_FAILED")
 		return
@@ -244,7 +246,7 @@ func (c *AuthController) Login(ctx *gin.Context) {
 		return
 	}
 
-	pair, err := c.tokens.IssuePair(ctx.Request.Context(), user.ID)
+	pair, err := c.tokens.IssuePair(ctx.Request.Context(), user.ID, user.AuthVersion)
 	if err != nil {
 		writeInternalAPIErrorAs(ctx, err, "AUTH_TOKEN_ISSUE_FAILED")
 		return
@@ -282,7 +284,7 @@ func (c *AuthController) Refresh(ctx *gin.Context) {
 	}
 
 	var user models.User
-	if err := c.db.WithContext(ctx.Request.Context()).Select("id", "username", "display_name", "avatar_url").First(&user, pair.UserID).Error; err != nil {
+	if err := c.db.WithContext(ctx.Request.Context()).Select("id", "username", "display_name", "avatar_url", "auth_version").First(&user, pair.UserID).Error; err != nil {
 		if handleRequestDBError(ctx, err) {
 			return
 		}
@@ -291,6 +293,13 @@ func (c *AuthController) Refresh(ctx *gin.Context) {
 		} else {
 			writeInternalAPIErrorAs(ctx, err, "AUTH_INTERNAL")
 		}
+		return
+	}
+	if pair.AuthVersion != user.AuthVersion {
+		if revokeErr := c.tokens.RevokeRefresh(ctx.Request.Context(), pair.RefreshToken); revokeErr != nil {
+			logAPIInternalError(ctx, http.StatusInternalServerError, revokeErr)
+		}
+		writeAuthError(ctx, "AUTH_REFRESH_INVALID")
 		return
 	}
 	writeAuthResponse(ctx, pair, user)

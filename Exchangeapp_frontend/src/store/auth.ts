@@ -9,8 +9,10 @@ import {
   AuthStorageUnavailableError,
   clearPersistedAuthSession,
   createTokenRevision,
+  notifyAuthSessionInvalidated,
   readPersistedAuthSession,
   runWithAuthMutationLock,
+  subscribeToAuthSessionInvalidations,
   subscribeToPersistedAuthChanges,
   writePersistedAuthSession,
 } from '../auth/authSessionCoordinator';
@@ -84,6 +86,10 @@ const authErrorMessages: Record<string, string> = {
   AUTH_ONBOARDING_INIT_FAILED: 'Registration could not be completed.',
   AUTH_TOKEN_ISSUE_FAILED: 'Authentication failed. Please try again.',
   AUTH_LOGOUT_UNAVAILABLE: 'Sign out could not be confirmed. Please try again.',
+  AUTH_CURRENT_PASSWORD_INVALID: 'Current password is incorrect.',
+  AUTH_PASSWORD_UNCHANGED: 'Choose a password different from your current password.',
+  AUTH_VERSION_UNAVAILABLE: 'Authentication is temporarily unavailable. Please try again.',
+  AUTH_PASSWORD_CHANGED_CLEANUP_FAILED: 'Password changed, but saved credentials could not be cleared. Close other tabs and sign in again.',
 };
 
 const shouldClearAuthAfterRefreshFailure = (error: unknown): boolean => {
@@ -527,6 +533,86 @@ export const useAuthStore = defineStore('auth', () => {
     );
   };
 
+  const clearChangedPasswordSession = async (binding: AuthRequestBinding): Promise<void> => {
+    await runWithSessionMutationLock(() => {
+      if (!matchesRequestAuthBinding(binding)) {
+        if (sessionId.value === null && pendingLocalLogoutSessionId === binding.sessionID) return;
+        throw new AuthSessionChangedError();
+      }
+
+      const persisted = readPersistedAuthSession();
+      if (persisted.status === 'valid' && (
+        persisted.session.sessionId !== binding.sessionID
+        || persisted.session.userId !== binding.userID
+      )) {
+        reconcilePersistedAuthState();
+        throw new AuthSessionChangedError();
+      }
+
+      pendingLocalLogoutSessionId = binding.sessionID;
+      advanceSessionVersion();
+      applyPersistedSession(null);
+      notifyAuthSessionInvalidated({ sessionId: binding.sessionID, userId: binding.userID });
+      if (persisted.status === 'unavailable') {
+        persistIdentityCacheBestEffort(null);
+        throw new AuthRequestError(
+          'Password changed, but saved credentials could not be checked or cleared. Close other tabs and sign in again.',
+          'AUTH_PASSWORD_CHANGED_CLEANUP_FAILED',
+        );
+      }
+      try {
+        clearPersistedAuthSession();
+      } catch {
+        persistIdentityCacheBestEffort(null);
+        throw new AuthRequestError(
+          'Password changed, but saved credentials could not be cleared. Close other tabs and sign in again.',
+          'AUTH_PASSWORD_CHANGED_CLEANUP_FAILED',
+        );
+      }
+      if (!persistIdentityCacheBestEffort(null)) {
+        throw new AuthRequestError(
+          'Password changed, but browser storage cleanup could not be completed. Close other tabs and sign in again.',
+          'AUTH_PASSWORD_CHANGED_CLEANUP_FAILED',
+        );
+      }
+      if (pendingLocalLogoutSessionId === binding.sessionID) pendingLocalLogoutSessionId = null;
+    }, { requireLock: true });
+  };
+
+  const changePassword = async (currentPassword: string, newPassword: string): Promise<void> => {
+    const binding = captureRequestAuthBinding();
+    const authorization = token.value;
+    if (!binding || !authorization) throw new AuthSessionChangedError();
+
+    try {
+      const response = await authClient.put('/me/password', {
+        current_password: currentPassword,
+        new_password: newPassword,
+      }, { headers: { Authorization: authorization } });
+      if (response.status !== 204) throw new Error('Password change was not confirmed');
+    } catch (error) {
+      if (error instanceof AuthSessionChangedError) throw error;
+      throw toAuthRequestError(error, 'Password could not be changed. Please try again.');
+    }
+
+    try {
+      await clearChangedPasswordSession(binding);
+    } catch (error) {
+      if (error instanceof AuthSessionChangedError) throw error;
+      if (error instanceof AuthRequestError && error.code === 'AUTH_PASSWORD_CHANGED_CLEANUP_FAILED') throw error;
+      if (matchesRequestAuthBinding(binding)) {
+        pendingLocalLogoutSessionId = binding.sessionID;
+        advanceSessionVersion();
+        applyPersistedSession(null);
+        notifyAuthSessionInvalidated({ sessionId: binding.sessionID, userId: binding.userID });
+      }
+      throw new AuthRequestError(
+        'Password changed, but browser session cleanup could not be confirmed. Close other tabs and sign in again.',
+        'AUTH_PASSWORD_CHANGED_CLEANUP_FAILED',
+      );
+    }
+  };
+
   const syncCurrentIdentityProfile = (candidate: AuthIdentity): boolean => {
     const normalized = normalizeAuthIdentity(candidate);
     if (!normalized || !sessionUserId.value || normalized.id !== sessionUserId.value) {
@@ -540,6 +626,24 @@ export const useAuthStore = defineStore('auth', () => {
   applyPersistedSession(initialSession);
 
   const unsubscribe = subscribeToPersistedAuthChanges(reconcilePersistedAuthState);
+  const unsubscribeInvalidation = subscribeToAuthSessionInvalidations((session) => {
+    if (sessionId.value === session.sessionId && sessionUserId.value === session.userId) {
+      pendingLocalLogoutSessionId = session.sessionId;
+      advanceSessionVersion();
+      applyPersistedSession(null);
+    }
+    void runWithSessionMutationLock(() => {
+      const persisted = readPersistedAuthSession();
+      if (persisted.status === 'unavailable') throw new AuthStorageUnavailableError();
+      if (persisted.status === 'valid' && persisted.session.sessionId === session.sessionId
+        && persisted.session.userId === session.userId) {
+        clearPersistedAuthSession();
+      }
+      if (sessionId.value !== session.sessionId && pendingLocalLogoutSessionId === session.sessionId) {
+        pendingLocalLogoutSessionId = null;
+      }
+    }).catch(() => undefined);
+  });
   const handlePageShow = () => reconcilePersistedAuthState();
   const handleVisibilityChange = () => {
     if (document.visibilityState === 'visible') {
@@ -552,6 +656,7 @@ export const useAuthStore = defineStore('auth', () => {
     onScopeDispose(() => {
       sessionTransition.abort(new AuthSessionChangedError());
       unsubscribe();
+      unsubscribeInvalidation();
       window.removeEventListener('pageshow', handlePageShow);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     });
@@ -601,6 +706,7 @@ export const useAuthStore = defineStore('auth', () => {
     matchesRequestAuthBinding,
     login,
     register,
+    changePassword,
     refreshAccessToken,
     syncCurrentIdentityProfile,
     reconcilePersistedAuthState,

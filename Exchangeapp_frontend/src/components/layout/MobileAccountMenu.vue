@@ -31,6 +31,15 @@
         <AppIcon name="eye-off" :size="18" />
         <span>Muted accounts</span>
       </RouterLink>
+      <RouterLink
+        class="mobile-account-menu__item"
+        role="menuitem"
+        :to="{ name: 'AccountSecurity' }"
+        @click="closeMenu()"
+      >
+        <AppIcon name="shield" :size="18" />
+        <span>Security</span>
+      </RouterLink>
       <button
         class="mobile-account-menu__item mobile-account-menu__item--logout"
         type="button"

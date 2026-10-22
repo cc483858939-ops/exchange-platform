@@ -35,7 +35,7 @@ describe('MobileAccountMenu', () => {
     document.body.innerHTML = '';
   });
 
-  it('starts closed and opens with History, Muted accounts, and Log out actions', async () => {
+  it('starts closed and opens with History, Muted accounts, Security, and Log out actions', async () => {
     const wrapper = mountMenu();
     const trigger = wrapper.find('.mobile-account-menu__trigger');
 
@@ -47,6 +47,8 @@ describe('MobileAccountMenu', () => {
     expect(wrapper.text()).not.toContain('Bookmarks');
     expect(wrapper.text()).toContain('History');
     expect(wrapper.text()).toContain('Muted accounts');
+    expect(wrapper.text()).toContain('Security');
+    expect(wrapper.find('[data-route-name="AccountSecurity"]').exists()).toBe(true);
     expect(wrapper.text()).toContain('Log out');
     expect(wrapper.find('[data-icon="bookmark"]').exists()).toBe(false);
     expect(wrapper.find('[data-route-name="Bookmarks"]').exists()).toBe(false);

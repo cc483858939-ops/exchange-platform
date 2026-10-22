@@ -81,6 +81,7 @@ describe('History route', () => {
       ['UserSearch', '/search', 'app', 'Search'],
       ['History', '/history', 'app', 'History'],
       ['MutedAccounts', '/settings/muted', 'app', 'Muted accounts'],
+      ['AccountSecurity', '/settings/security', 'app', 'Security'],
       ['TopicDirectory', '/topics', 'app', 'Topics'],
       ['Topic', '/topics/:slug', 'app', 'Topic'],
       ['Notifications', '/notifications', 'app', 'Notifications'],
@@ -102,6 +103,7 @@ describe('History route', () => {
     expect(router.getRoutes().find(item => item.name === 'Topic')?.meta.guestOnly).toBeUndefined();
     expect(router.getRoutes().find(item => item.name === 'TopicDirectory')?.meta.guestOnly).toBeUndefined();
     expect(router.getRoutes().find(item => item.name === 'PostQuotes')?.meta.guestOnly).toBeUndefined();
+    expect(router.getRoutes().find(item => item.name === 'AccountSecurity')?.meta.requiresAuth).toBe(true);
 
     const home = router.getRoutes().find(item => item.name === 'Home');
     const loaded = (home?.components?.default as () => Promise<unknown>)?.();
@@ -329,5 +331,25 @@ describe('guest-only authentication routes', () => {
 
     await router.push('/login');
     expect(router.currentRoute.value.fullPath).toBe('/');
+  });
+});
+
+describe('authenticated account routes', () => {
+  beforeEach(async () => {
+    if (router.currentRoute.value.fullPath !== '/') await router.push('/');
+    localStorage.clear();
+    setActivePinia(createPinia());
+  });
+
+  it('redirects a guest from Security to Login and preserves the return path', async () => {
+    await router.push('/settings/security');
+    expect(router.currentRoute.value.name).toBe('Login');
+    expect(router.currentRoute.value.query.returnTo).toBe('/settings/security');
+  });
+
+  it('allows a signed-in user to open Security', async () => {
+    setAuthenticatedState();
+    await router.push('/settings/security');
+    expect(router.currentRoute.value.name).toBe('AccountSecurity');
   });
 });

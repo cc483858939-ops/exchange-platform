@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
@@ -11,12 +12,22 @@ import (
 	"github.com/google/uuid"
 )
 
+type testAuthVersionReader struct {
+	version int64
+	err     error
+}
+
+func (reader testAuthVersionReader) ReadAuthVersion(context.Context, uint) (int64, error) {
+	return reader.version, reader.err
+}
+
 func TestVerifyAccessRejectsMissingKIDAndExpiredToken(t *testing.T) {
 	manager, _, privateKey := testManager(t)
 	now := time.Now().UTC()
 	claims := AccessClaims{
-		SessionID: uuid.NewString(),
-		TokenType: accessTokenType,
+		SessionID:   uuid.NewString(),
+		TokenType:   accessTokenType,
+		AuthVersion: 1,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    manager.config.Issuer,
 			Subject:   "11",
@@ -50,6 +61,42 @@ func TestVerifyAccessRejectsMissingKIDAndExpiredToken(t *testing.T) {
 	}
 }
 
+func TestVersionedAccessTokenVerifierChecksDatabaseVersionAndFailsClosed(t *testing.T) {
+	manager, _, _ := testManager(t)
+	pair, err := manager.IssuePair(context.Background(), 84, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		version int64
+		readErr error
+		wantErr error
+	}{
+		{name: "current version", version: 3},
+		{name: "stale version", version: 4, wantErr: ErrAccessTokenInvalid},
+		{name: "version database unavailable", readErr: errors.New("database unavailable"), wantErr: ErrAuthVersionUnavailable},
+		{name: "account missing", readErr: ErrAuthVersionUserMissing, wantErr: ErrAccessTokenInvalid},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			verifier, err := NewVersionedAccessTokenVerifier(manager, testAuthVersionReader{version: test.version, err: test.readErr})
+			if err != nil {
+				t.Fatal(err)
+			}
+			claims, err := verifier.VerifyAccessContext(context.Background(), pair.AccessToken)
+			if test.wantErr != nil {
+				if !errors.Is(err, test.wantErr) {
+					t.Fatalf("error=%v, want %v", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil || claims == nil || claims.AuthVersion != 3 {
+				t.Fatalf("claims=%+v error=%v", claims, err)
+			}
+		})
+	}
+}
+
 func TestVerifyAccessAcceptsOldPublicKeyDuringRotation(t *testing.T) {
 	newPublic, newPrivate, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -74,8 +121,9 @@ func TestVerifyAccessAcceptsOldPublicKeyDuringRotation(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	oldToken := jwt.NewWithClaims(jwt.SigningMethodEdDSA, AccessClaims{
-		SessionID: uuid.NewString(),
-		TokenType: accessTokenType,
+		SessionID:   uuid.NewString(),
+		TokenType:   accessTokenType,
+		AuthVersion: 1,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    manager.config.Issuer,
 			Subject:   "22",

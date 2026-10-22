@@ -139,6 +139,16 @@ describe('LeftSidebar navigation', () => {
     expect(wrapper.find('.left-sidebar__account').text()).toContain('Sign up');
   });
 
+  it('shows the Security account link only for signed-in users', () => {
+    mocks.authStore.isAuthenticated = true;
+    mocks.authStore.currentIdentity = { id: 7, username: 'alice' };
+    const wrapper = mountSidebar();
+    const link = wrapper.get('.left-sidebar__account a[aria-label="Security"]');
+
+    expect(link.attributes('data-route-name')).toBe('AccountSecurity');
+    expect(wrapper.find('.left-sidebar__account button[aria-label="Log out"]').exists()).toBe(true);
+  });
+
   it('gates anonymous protected destinations and keeps Exchange/Home public', () => {
     const wrapper = mountSidebar();
     const links = wrapper.findAll('.left-sidebar__nav > a');

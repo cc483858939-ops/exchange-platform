@@ -84,6 +84,14 @@ describe('Login return navigation', () => {
     expect(wrapper.text()).not.toContain('Go Exchange');
   });
 
+  it('shows the password-change success message on the login page', () => {
+    mocks.route.query = { passwordChanged: '1' };
+    wrapper = mountLogin();
+
+    expect(wrapper.get('[role="status"]').text()).toContain('Password changed successfully.');
+    expect(wrapper.get('[role="status"]').text()).toContain('Please sign in with your new password.');
+  });
+
   it('replaces to a valid return target after successful login', async () => {
     mocks.route.query = { returnTo: '/posts/42?reply=1#conversation' };
     wrapper = mountLogin();

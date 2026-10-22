@@ -33,11 +33,11 @@ func TestLogoutRevokesOnlyCapturedFamilyAndKeepsAccessExpiryContract(t *testing.
 	now := time.Now().UTC()
 	manager.now = func() time.Time { return now }
 	ctx := context.Background()
-	original, err := manager.IssuePair(ctx, 42)
+	original, err := manager.IssuePair(ctx, 42, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := manager.IssuePair(ctx, 42)
+	other, err := manager.IssuePair(ctx, 42, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,10 +63,10 @@ func TestLogoutRevokesOnlyCapturedFamilyAndKeepsAccessExpiryContract(t *testing.
 		t.Fatalf("other session revoked: %v", err)
 	}
 	if _, err := manager.VerifyAccess(original.AccessToken); err != nil {
-		t.Fatalf("stateless access lifetime changed: %v", err)
+		t.Fatalf("valid access token rejected: %v", err)
 	}
 	claims, _ := manager.VerifyAccess(original.AccessToken)
-	expired, err := manager.signAccessToken(42, claims.SessionID, time.Now().Add(-manager.config.AccessTTL-time.Minute))
+	expired, err := manager.signAccessToken(42, claims.AuthVersion, claims.SessionID, time.Now().Add(-manager.config.AccessTTL-time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestLogoutRevokesOnlyCapturedFamilyAndKeepsAccessExpiryContract(t *testing.
 func TestLogoutCannotRevokeBySessionIDOrForeignSecret(t *testing.T) {
 	manager, store, _ := testManager(t)
 	ctx := context.Background()
-	pair, err := manager.IssuePair(ctx, 42)
+	pair, err := manager.IssuePair(ctx, 42, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestLogoutRacingRotationCannotResurrectFamily(t *testing.T) {
 	manager, store, _ := testManager(t)
 	ctx := context.Background()
 	for i := 0; i < 25; i++ {
-		pair, err := manager.IssuePair(ctx, 42)
+		pair, err := manager.IssuePair(ctx, 42, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -137,7 +137,7 @@ func TestLogoutRacingRotationCannotResurrectFamily(t *testing.T) {
 
 func TestLogoutCancellationDoesNotReportSuccessfulRevocation(t *testing.T) {
 	manager, _, _ := testManager(t)
-	pair, err := manager.IssuePair(context.Background(), 42)
+	pair, err := manager.IssuePair(context.Background(), 42, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

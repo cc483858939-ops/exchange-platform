@@ -19,6 +19,7 @@ const (
 type RefreshSession struct {
 	SessionID         string
 	UserID            uint
+	AuthVersion       int64
 	SecretHash        string
 	CreatedAt         time.Time
 	LastRotatedAt     time.Time
@@ -37,7 +38,7 @@ type RefreshStore interface {
 		now time.Time,
 		idleTTL time.Duration,
 		recovery RefreshRecovery,
-	) (userID uint, effectiveTTL time.Duration, sealedSecret string, err error)
+	) (userID uint, authVersion int64, effectiveTTL time.Duration, sealedSecret string, err error)
 }
 
 type RedisRefreshStore struct {
@@ -57,11 +58,12 @@ if redis.call('EXISTS', KEYS[1]) == 1 then
 end
 redis.call('HSET', KEYS[1],
   'user_id', ARGV[1],
-  'secret_hash', ARGV[2],
-  'created_at', ARGV[3],
-  'last_rotated_at', ARGV[4],
-  'absolute_expires_at', ARGV[5])
-redis.call('EXPIRE', KEYS[1], ARGV[6])
+  'auth_version', ARGV[2],
+  'secret_hash', ARGV[3],
+  'created_at', ARGV[4],
+  'last_rotated_at', ARGV[5],
+  'absolute_expires_at', ARGV[6])
+redis.call('EXPIRE', KEYS[1], ARGV[7])
 return 1
 `)
 
@@ -79,8 +81,12 @@ if not current_hash or current_hash ~= ARGV[1] then
       local sealed_secret = redis.call('HGET', KEYS[3], 'sealed_secret')
       local ttl = redis.call('TTL', KEYS[1])
       local expires_at = tonumber(redis.call('HGET', KEYS[1], 'absolute_expires_at'))
+      local auth_version = redis.call('HGET', KEYS[1], 'auth_version')
       if sealed_secret and ttl > 0 and expires_at and expires_at > tonumber(ARGV[3]) then
-        return {1, redis.call('HGET', KEYS[1], 'user_id'), ttl, sealed_secret}
+        if not auth_version or not string.match(auth_version, '^%d+$') or tonumber(auth_version) < 1 then
+          return {-4}
+        end
+        return {1, redis.call('HGET', KEYS[1], 'user_id'), auth_version, ttl, sealed_secret}
       end
     end
     redis.call('DEL', KEYS[1])
@@ -105,6 +111,10 @@ if session_ttl < 1 then
   return {-3}
 end
 local user_id = redis.call('HGET', KEYS[1], 'user_id')
+local auth_version = redis.call('HGET', KEYS[1], 'auth_version')
+if not auth_version or not string.match(auth_version, '^%d+$') or tonumber(auth_version) < 1 then
+  return {-4}
+end
 redis.call('SET', KEYS[2], 'used', 'EX', absolute_remaining)
 redis.call('HSET', KEYS[1], 'secret_hash', ARGV[2], 'last_rotated_at', ARGV[3])
 redis.call('EXPIRE', KEYS[1], session_ttl)
@@ -112,17 +122,18 @@ if ARGV[5] ~= '' then
   redis.call('HSET', KEYS[3], 'next_hash', ARGV[2], 'sealed_secret', ARGV[6])
   redis.call('EXPIRE', KEYS[3], math.min(tonumber(ARGV[7]), session_ttl))
 end
-return {1, user_id, session_ttl, ARGV[6]}
+return {1, user_id, auth_version, session_ttl, ARGV[6]}
 `)
 
 func (s *RedisRefreshStore) Create(ctx context.Context, session RefreshSession) error {
-	if session.SessionID == "" || session.UserID == 0 || session.SecretHash == "" || session.TTL <= 0 {
+	if session.SessionID == "" || session.UserID == 0 || session.AuthVersion <= 0 || session.SecretHash == "" || session.TTL <= 0 {
 		return errors.New("invalid refresh session")
 	}
 	result, err := createRefreshSessionScript.Run(
 		s.client.WithContext(ctx),
 		[]string{refreshSessionKey(session.SessionID)},
 		strconv.FormatUint(uint64(session.UserID), 10),
+		strconv.FormatInt(session.AuthVersion, 10),
 		session.SecretHash,
 		strconv.FormatInt(session.CreatedAt.Unix(), 10),
 		strconv.FormatInt(session.LastRotatedAt.Unix(), 10),
@@ -146,7 +157,7 @@ func (s *RedisRefreshStore) Rotate(
 	now time.Time,
 	idleTTL time.Duration,
 	recovery RefreshRecovery,
-) (uint, time.Duration, string, error) {
+) (uint, int64, time.Duration, string, error) {
 	result, err := rotateRefreshSessionScript.Run(
 		s.client.WithContext(ctx),
 		[]string{
@@ -163,42 +174,48 @@ func (s *RedisRefreshStore) Rotate(
 		strconv.FormatInt(durationSecondsCeil(refreshRecoveryTTL), 10),
 	).Result()
 	if err != nil {
-		return 0, 0, "", fmt.Errorf("rotate refresh session: %w", err)
+		return 0, 0, 0, "", fmt.Errorf("rotate refresh session: %w", err)
 	}
 	values, ok := result.([]interface{})
 	if !ok || len(values) == 0 {
-		return 0, 0, "", errors.New("invalid Redis refresh rotation response")
+		return 0, 0, 0, "", errors.New("invalid Redis refresh rotation response")
 	}
 	status, err := parseRedisInt(values[0])
 	if err != nil {
-		return 0, 0, "", errors.New("invalid Redis refresh rotation status")
+		return 0, 0, 0, "", errors.New("invalid Redis refresh rotation status")
 	}
 	switch status {
 	case -1:
-		return 0, 0, "", ErrRefreshInvalid
+		return 0, 0, 0, "", ErrRefreshInvalid
 	case -2:
-		return 0, 0, "", ErrRefreshReused
+		return 0, 0, 0, "", ErrRefreshReused
 	case -3:
-		return 0, 0, "", ErrRefreshExpired
+		return 0, 0, 0, "", ErrRefreshExpired
+	case -4:
+		return 0, 0, 0, "", ErrRefreshInvalid
 	case 1:
-		if len(values) != 4 {
-			return 0, 0, "", errors.New("incomplete Redis refresh rotation response")
+		if len(values) != 5 {
+			return 0, 0, 0, "", errors.New("incomplete Redis refresh rotation response")
 		}
 		userIDValue, err := parseRedisInt(values[1])
 		if err != nil || userIDValue <= 0 {
-			return 0, 0, "", errors.New("invalid refresh session user ID")
+			return 0, 0, 0, "", errors.New("invalid refresh session user ID")
 		}
-		ttlSeconds, err := parseRedisInt(values[2])
+		authVersion, err := parseRedisInt(values[2])
+		if err != nil || authVersion <= 0 {
+			return 0, 0, 0, "", errors.New("invalid refresh session authentication version")
+		}
+		ttlSeconds, err := parseRedisInt(values[3])
 		if err != nil || ttlSeconds <= 0 {
-			return 0, 0, "", errors.New("invalid refresh session TTL")
+			return 0, 0, 0, "", errors.New("invalid refresh session TTL")
 		}
-		sealedSecret, ok := values[3].(string)
+		sealedSecret, ok := values[4].(string)
 		if !ok || (recovery.RequestID != "" && sealedSecret == "") {
-			return 0, 0, "", errors.New("invalid refresh recovery secret")
+			return 0, 0, 0, "", errors.New("invalid refresh recovery secret")
 		}
-		return uint(userIDValue), time.Duration(ttlSeconds) * time.Second, sealedSecret, nil
+		return uint(userIDValue), authVersion, time.Duration(ttlSeconds) * time.Second, sealedSecret, nil
 	default:
-		return 0, 0, "", errors.New("unknown Redis refresh rotation status")
+		return 0, 0, 0, "", errors.New("unknown Redis refresh rotation status")
 	}
 }
 

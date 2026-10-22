@@ -36,6 +36,16 @@
 
     <div class="left-sidebar__account">
       <template v-if="authStore.isAuthenticated">
+        <router-link
+          class="left-sidebar__link left-sidebar__link--icon"
+          :class="{ 'left-sidebar__link--active': route.name === 'AccountSecurity' }"
+          :to="{ name: 'AccountSecurity' }"
+          aria-label="Security"
+          title="Security"
+        >
+          <AppIcon name="shield" :size="26" />
+          <span class="left-sidebar__label">Security</span>
+        </router-link>
         <button
           class="left-sidebar__link left-sidebar__link--icon left-sidebar__logout"
           type="button"

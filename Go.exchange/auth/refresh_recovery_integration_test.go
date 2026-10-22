@@ -42,7 +42,7 @@ func redisRecoveryFixture(t *testing.T) (*Manager, *redis.Client, TokenPair, str
 	if err != nil {
 		t.Fatal(err)
 	}
-	original, err := manager.IssuePair(context.Background(), 42)
+	original, err := manager.IssuePair(context.Background(), 42, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -329,7 +329,7 @@ func TestRefreshRecoversCommittedRotationAfterProfileFailureIntegration(t *testi
 	}
 	for _, scenario := range []string{"temporary query", "query timeout", "lost response", "user unavailable"} {
 		t.Run(scenario, func(t *testing.T) {
-			original, err := manager.IssuePair(context.Background(), 42)
+			original, err := manager.IssuePair(context.Background(), 42, 1)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -5,6 +5,62 @@ export const AUTH_SESSION_STORAGE_KEY = 'exchange_auth_session_v2';
 export const AUTH_USER_STORAGE_KEY = 'auth_user';
 export const AUTH_MUTATION_LOCK_NAME = 'exchange-auth-session-mutation';
 export const AUTH_MUTATION_LOCK_WAIT_TIMEOUT_MS = 15_000;
+const AUTH_INVALIDATION_CHANNEL_NAME = 'exchange-auth-session-invalidation-v1';
+
+export type AuthSessionInvalidation = { sessionId: string; userId: number };
+
+let invalidationChannel: BroadcastChannel | null | undefined;
+let invalidationSubscribers = 0;
+const getInvalidationChannel = (): BroadcastChannel | null => {
+  if (invalidationChannel !== undefined) return invalidationChannel;
+  if (typeof BroadcastChannel === 'undefined') {
+    invalidationChannel = null;
+    return null;
+  }
+  try {
+    invalidationChannel = new BroadcastChannel(AUTH_INVALIDATION_CHANNEL_NAME);
+  } catch {
+    invalidationChannel = null;
+  }
+  return invalidationChannel;
+};
+
+export const notifyAuthSessionInvalidated = (session: AuthSessionInvalidation): void => {
+  if (!session.sessionId || !Number.isSafeInteger(session.userId) || session.userId <= 0) return;
+  const channel = getInvalidationChannel();
+  try { channel?.postMessage({ type: 'session-invalidated', ...session }); } catch { /* Storage events remain the fallback. */ }
+  if (invalidationSubscribers === 0 && channel) {
+    channel.close();
+    invalidationChannel = undefined;
+  }
+};
+
+export const subscribeToAuthSessionInvalidations = (
+  callback: (session: AuthSessionInvalidation) => void,
+): (() => void) => {
+  const channel = getInvalidationChannel();
+  if (!channel) return () => undefined;
+  invalidationSubscribers += 1;
+  const handler = (event: MessageEvent<unknown>) => {
+    const value = event.data as Partial<{ type: string; sessionId: string; userId: number }> | null;
+    if (
+      value?.type === 'session-invalidated'
+      && typeof value.sessionId === 'string'
+      && value.sessionId.length > 0
+      && Number.isSafeInteger(value.userId)
+      && Number(value.userId) > 0
+    ) callback({ sessionId: value.sessionId, userId: Number(value.userId) });
+  };
+  channel.addEventListener('message', handler);
+  return () => {
+    channel.removeEventListener('message', handler);
+    invalidationSubscribers = Math.max(0, invalidationSubscribers - 1);
+    if (invalidationSubscribers === 0) {
+      channel.close();
+      invalidationChannel = undefined;
+    }
+  };
+};
 
 export class AuthMutationLockTimeoutError extends AuthRequestError {
   constructor() {
