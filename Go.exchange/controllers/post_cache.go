@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"Go.exchange/config"
 	"Go.exchange/global"
 
 	"github.com/go-redis/redis/v7"
@@ -57,11 +58,11 @@ var (
 	postCacheGroup singleflight.Group
 )
 
-// cacheGetter 定义从缓存获取数据的函数签名
-type cacheGetter func(key string) (string, error)
+// cacheGetter reads cache data with the context for the current operation.
+type cacheGetter func(ctx context.Context, key string) (string, error)
 
-// cacheSetter 定义将数据写入缓存的函数签名
-type cacheSetter func(key string, payload []byte, expiration time.Duration) error
+// cacheSetter writes cache data with the context for the current operation.
+type cacheSetter func(ctx context.Context, key string, payload []byte, expiration time.Duration) error
 
 // postDetailCacheKey returns the canonical Post detail key.
 func postDetailCacheKey(id string) string {
@@ -160,39 +161,86 @@ func InvalidatePostDetailCacheByID(id uint) error {
 	return InvalidatePostDetailCacheByIDWithRedis(global.RedisDB, id)
 }
 
-func loadPostDetailJSONCacheWithContext[T any](ctx context.Context, key string, loader func() (T, error)) (T, error) {
-	client := global.RedisDB
-	if client == nil {
-		return loader()
-	}
+func loadPostDetailJSONCacheWithContext[T any](ctx context.Context, key string, loader func(context.Context) (T, error)) (T, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	var zero T
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
+	client := global.RedisDB
+	if client == nil {
+		value, err := loader(ctx)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return zero, ctxErr
+		}
+		return value, err
+	}
 	id, err := postDetailIDFromCacheKey(key)
 	if err != nil {
-		var zero T
 		return zero, err
 	}
 	return loadJSONCacheWithFenceStoreContext(
 		ctx,
 		key,
 		postCacheTTL,
-		func(key string) (string, error) {
-			return client.WithContext(ctx).Get(key).Result()
+		func(operationCtx context.Context, key string) (string, error) {
+			return client.WithContext(operationCtx).Get(key).Result()
 		},
-		func() (string, error) {
-			return getOrCreatePostDetailFenceToken(ctx, client, id)
+		func(operationCtx context.Context) (string, error) {
+			return getOrCreatePostDetailFenceToken(operationCtx, client, id)
 		},
-		func(token string, payload []byte, expiration time.Duration) (bool, error) {
-			return setPostDetailCacheIfFenceMatches(ctx, client, id, token, payload, expiration)
+		func(operationCtx context.Context, token string, payload []byte, expiration time.Duration) (bool, error) {
+			return setPostDetailCacheIfFenceMatches(operationCtx, client, id, token, payload, expiration)
 		},
 		loader,
 	)
 }
 
-type postDetailFenceGetter func() (string, error)
+type postDetailFenceGetter func(ctx context.Context) (string, error)
 
-type postDetailFencedSetter func(token string, payload []byte, expiration time.Duration) (bool, error)
+type postDetailFencedSetter func(ctx context.Context, token string, payload []byte, expiration time.Duration) (bool, error)
+
+func awaitPostCacheFlight[T any](requestCtx context.Context, key string, load func(context.Context) (T, error)) (T, error) {
+	var zero T
+	if requestCtx == nil {
+		requestCtx = context.Background()
+	}
+	if err := requestCtx.Err(); err != nil {
+		return zero, err
+	}
+	resultCh := postCacheGroup.DoChan(key, func() (interface{}, error) {
+		workCtx, cancel := context.WithTimeout(context.WithoutCancel(requestCtx), config.APIRequestTimeout())
+		defer cancel()
+		if err := workCtx.Err(); err != nil {
+			return zero, err
+		}
+
+		value, err := load(workCtx)
+		if workErr := workCtx.Err(); workErr != nil {
+			return zero, workErr
+		}
+		return value, err
+	})
+
+	select {
+	case <-requestCtx.Done():
+		return zero, requestCtx.Err()
+	case result := <-resultCh:
+		if err := requestCtx.Err(); err != nil {
+			return zero, err
+		}
+		if result.Err != nil {
+			return zero, result.Err
+		}
+		value, ok := result.Val.(T)
+		if !ok {
+			return zero, fmt.Errorf("unexpected cache result type for key %s", key)
+		}
+		return value, nil
+	}
+}
 
 // loadJSONCacheWithFenceStoreContext protects Post detail backfills while
 // retaining the existing cache-hit and Singleflight behavior. A fence change
@@ -205,7 +253,7 @@ func loadJSONCacheWithFenceStoreContext[T any](
 	getter cacheGetter,
 	fenceGetter postDetailFenceGetter,
 	setter postDetailFencedSetter,
-	loader func() (T, error),
+	loader func(context.Context) (T, error),
 ) (T, error) {
 	var zero T
 	if ctx == nil {
@@ -215,7 +263,10 @@ func loadJSONCacheWithFenceStoreContext[T any](
 		return zero, err
 	}
 
-	cachedData, err := getter(key)
+	cachedData, err := getter(ctx, key)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return zero, ctxErr
+	}
 	switch {
 	case err == nil:
 		return unmarshalCachedValue[T](cachedData)
@@ -223,11 +274,11 @@ func loadJSONCacheWithFenceStoreContext[T any](
 		return zero, err
 	}
 
-	resultCh := postCacheGroup.DoChan(key, func() (interface{}, error) {
-		if err := ctx.Err(); err != nil {
-			return zero, err
+	return awaitPostCacheFlight(ctx, key, func(workCtx context.Context) (T, error) {
+		cachedData, err := getter(workCtx, key)
+		if workErr := workCtx.Err(); workErr != nil {
+			return zero, workErr
 		}
-		cachedData, err := getter(key)
 		switch {
 		case err == nil:
 			return unmarshalCachedValue[T](cachedData)
@@ -236,14 +287,17 @@ func loadJSONCacheWithFenceStoreContext[T any](
 		}
 
 		for attempt := 0; attempt < 2; attempt++ {
-			if err := ctx.Err(); err != nil {
-				return zero, err
+			token, err := fenceGetter(workCtx)
+			if workErr := workCtx.Err(); workErr != nil {
+				return zero, workErr
 			}
-			token, err := fenceGetter()
 			if err != nil {
 				return zero, err
 			}
-			value, err := loader()
+			value, err := loader(workCtx)
+			if workErr := workCtx.Err(); workErr != nil {
+				return zero, workErr
+			}
 			if err != nil {
 				return zero, err
 			}
@@ -251,7 +305,10 @@ func loadJSONCacheWithFenceStoreContext[T any](
 			if err != nil {
 				return zero, err
 			}
-			written, err := setter(token, payload, expiration)
+			written, err := setter(workCtx, token, payload, expiration)
+			if workErr := workCtx.Err(); workErr != nil {
+				return zero, workErr
+			}
 			if err != nil {
 				return zero, err
 			}
@@ -261,7 +318,10 @@ func loadJSONCacheWithFenceStoreContext[T any](
 
 			// A newer request may already have populated the cache after the
 			// invalidation. Prefer it before spending another database read.
-			cachedData, err = getter(key)
+			cachedData, err = getter(workCtx, key)
+			if workErr := workCtx.Err(); workErr != nil {
+				return zero, workErr
+			}
 			switch {
 			case err == nil:
 				return unmarshalCachedValue[T](cachedData)
@@ -274,31 +334,6 @@ func loadJSONCacheWithFenceStoreContext[T any](
 		}
 		return zero, fmt.Errorf("Post detail cache load exhausted unexpectedly for key %s", key)
 	})
-
-	select {
-	case <-ctx.Done():
-		return zero, ctx.Err()
-	case result := <-resultCh:
-		if result.Err != nil {
-			return zero, result.Err
-		}
-		value, ok := result.Val.(T)
-		if !ok {
-			return zero, fmt.Errorf("unexpected cache result type for key %s", key)
-		}
-		return value, nil
-	}
-}
-
-// loadJSONCacheWithStore 核心缓存加载逻辑，集成了 Singleflight 防击穿机制
-func loadJSONCacheWithStore[T any](
-	key string,
-	expiration time.Duration,
-	getter cacheGetter,
-	setter cacheSetter,
-	loader func() (T, error),
-) (T, error) {
-	return loadJSONCacheWithStoreContext(context.Background(), key, expiration, getter, setter, loader)
 }
 
 func loadJSONCacheWithStoreContext[T any](
@@ -307,7 +342,7 @@ func loadJSONCacheWithStoreContext[T any](
 	expiration time.Duration,
 	getter cacheGetter,
 	setter cacheSetter,
-	loader func() (T, error),
+	loader func(context.Context) (T, error),
 ) (T, error) {
 	var zero T
 	if ctx == nil {
@@ -318,7 +353,10 @@ func loadJSONCacheWithStoreContext[T any](
 	}
 
 	// 1. 第一层检查：直接尝试从缓存获取
-	cachedData, err := getter(key)
+	cachedData, err := getter(ctx, key)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return zero, ctxErr
+	}
 	switch {
 	case err == nil:
 		// 命中了直接反序列化返回
@@ -329,14 +367,14 @@ func loadJSONCacheWithStoreContext[T any](
 	}
 
 	// 2. 缓存未命中，进入 Singleflight 控制
-	resultCh := postCacheGroup.DoChan(key, func() (interface{}, error) {
-		if err := ctx.Err(); err != nil {
-			return zero, err
-		}
+	return awaitPostCacheFlight(ctx, key, func(workCtx context.Context) (T, error) {
 		// 2.1 二次检查：
 		// 当并发请求被 Do 阻塞再被唤醒时，之前的请求可能已经把缓存填上了，
 		// 所以在这里再查一次 Redis，如果命中了直接返回，避免再次打库。
-		cachedData, err := getter(key)
+		cachedData, err := getter(workCtx, key)
+		if workErr := workCtx.Err(); workErr != nil {
+			return zero, workErr
+		}
 		switch {
 		case err == nil:
 			return unmarshalCachedValue[T](cachedData)
@@ -345,7 +383,10 @@ func loadJSONCacheWithStoreContext[T any](
 		}
 
 		// 2.2 真正的回源加载：查数据库
-		result, err := loader()
+		result, err := loader(workCtx)
+		if workErr := workCtx.Err(); workErr != nil {
+			return zero, workErr
+		}
 		if err != nil {
 			return zero, err
 		}
@@ -355,29 +396,15 @@ func loadJSONCacheWithStoreContext[T any](
 		if err != nil {
 			return zero, err
 		}
-		if err := setter(key, payload, expiration); err != nil {
+		if err := setter(workCtx, key, payload, expiration); err != nil {
 			// Redis 出现问题时，直接上报错误，避免高并发把数据库压垮。
 			return zero, err
 		}
+		if workErr := workCtx.Err(); workErr != nil {
+			return zero, workErr
+		}
 		return result, nil
 	})
-	var value interface{}
-	select {
-	case <-ctx.Done():
-		return zero, ctx.Err()
-	case result := <-resultCh:
-		if result.Err != nil {
-			return zero, result.Err
-		}
-		value = result.Val
-	}
-
-	// 3. 将 Do 返回的 interface{} 转换为具体类型
-	result, ok := value.(T)
-	if !ok {
-		return zero, fmt.Errorf("unexpected cache result type for key %s", key)
-	}
-	return result, nil
 }
 
 // unmarshalCachedValue 辅助函数：反序列化缓存字符串

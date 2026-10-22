@@ -77,10 +77,14 @@ func TestPostDetailCacheFenceScriptsIntegration(t *testing.T) {
 		t.Fatalf("initialized fence TTL=%s err=%v want (0,%s]", initializationTTL, err, postDetailFenceTTL)
 	}
 
-	getter := func(key string) (string, error) { return client.Get(key).Result() }
-	fenceGetter := func() (string, error) { return getOrCreatePostDetailFenceToken(ctx, client, id) }
-	setter := func(token string, payload []byte, expiration time.Duration) (bool, error) {
-		return setPostDetailCacheIfFenceMatches(ctx, client, id, token, payload, expiration)
+	getter := func(operationCtx context.Context, key string) (string, error) {
+		return client.WithContext(operationCtx).Get(key).Result()
+	}
+	fenceGetter := func(operationCtx context.Context) (string, error) {
+		return getOrCreatePostDetailFenceToken(operationCtx, client, id)
+	}
+	setter := func(operationCtx context.Context, token string, payload []byte, expiration time.Duration) (bool, error) {
+		return setPostDetailCacheIfFenceMatches(operationCtx, client, id, token, payload, expiration)
 	}
 	postCacheGroup = singleflight.Group{}
 
@@ -90,7 +94,7 @@ func TestPostDetailCacheFenceScriptsIntegration(t *testing.T) {
 	var releaseOnce sync.Once
 	defer releaseOnce.Do(func() { close(allowOldBackfill) })
 	var loads atomic.Int32
-	loader := func() (cacheTestPayload, error) {
+	loader := func(context.Context) (cacheTestPayload, error) {
 		if loads.Add(1) == 1 {
 			close(oldSnapshotReady)
 			<-allowOldBackfill
@@ -98,8 +102,8 @@ func TestPostDetailCacheFenceScriptsIntegration(t *testing.T) {
 		}
 		return cacheTestPayload{Value: "fresh"}, nil
 	}
-	fencedGetter := func() (string, error) {
-		token, err := fenceGetter()
+	fencedGetter := func(operationCtx context.Context) (string, error) {
+		token, err := fenceGetter(operationCtx)
 		if err == nil {
 			select {
 			case firstFenceCaptured <- token:
@@ -175,7 +179,7 @@ func TestPostDetailCacheFenceScriptsIntegration(t *testing.T) {
 
 	// A cache write before invalidation is removed by the atomic invalidator.
 	oldPayload := []byte(`{"value":"old-before-invalidation"}`)
-	if written, err := setter(tokenB, oldPayload, postCacheTTL); err != nil || !written {
+	if written, err := setter(ctx, tokenB, oldPayload, postCacheTTL); err != nil || !written {
 		t.Fatalf("write before invalidation written=%t err=%v", written, err)
 	}
 	if err := invalidatePostDetailCacheKeyWithRedis(client, cacheKey); err != nil {
@@ -191,13 +195,13 @@ func TestPostDetailCacheFenceScriptsIntegration(t *testing.T) {
 	if err := client.Get(cacheKey).Err(); err != redis.Nil {
 		t.Fatalf("invalidation did not delete the prior cache value: %v", err)
 	}
-	if written, err := setter(tokenB, oldPayload, postCacheTTL); err != nil || written {
+	if written, err := setter(ctx, tokenB, oldPayload, postCacheTTL); err != nil || written {
 		t.Fatalf("old post-invalidation write written=%t err=%v want rejected", written, err)
 	}
 	if err := client.Get(cacheKey).Err(); err != redis.Nil {
 		t.Fatalf("rejected old write left a cache value: %v", err)
 	}
-	if written, err := setter(tokenC, []byte(`{"value":"new"}`), postCacheTTL); err != nil || !written {
+	if written, err := setter(ctx, tokenC, []byte(`{"value":"new"}`), postCacheTTL); err != nil || !written {
 		t.Fatalf("current-token write written=%t err=%v", written, err)
 	}
 
@@ -226,10 +230,10 @@ func TestPostDetailCacheFenceScriptsIntegration(t *testing.T) {
 	if tokenD == tokenC {
 		t.Fatalf("expired token was reused: %q", tokenD)
 	}
-	if written, err := setter(tokenC, oldPayload, postCacheTTL); err != nil || written {
+	if written, err := setter(ctx, tokenC, oldPayload, postCacheTTL); err != nil || written {
 		t.Fatalf("expired-token write written=%t err=%v want rejected", written, err)
 	}
-	if written, err := setter(tokenD, []byte(`{"value":"after-expiry"}`), postCacheTTL); err != nil || !written {
+	if written, err := setter(ctx, tokenD, []byte(`{"value":"after-expiry"}`), postCacheTTL); err != nil || !written {
 		t.Fatalf("new-token write written=%t err=%v", written, err)
 	}
 	if value, err := client.Get(cacheKey).Result(); err != nil || value != `{"value":"after-expiry"}` {

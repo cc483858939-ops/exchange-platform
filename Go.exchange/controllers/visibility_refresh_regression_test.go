@@ -85,7 +85,7 @@ type visibilityRefreshCache struct {
 	value string
 }
 
-func (c *visibilityRefreshCache) get(string) (string, error) {
+func (c *visibilityRefreshCache) get(context.Context, string) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.value == "" {
@@ -93,7 +93,7 @@ func (c *visibilityRefreshCache) get(string) (string, error) {
 	}
 	return c.value, nil
 }
-func (c *visibilityRefreshCache) set(_ string, payload []byte, _ time.Duration) error {
+func (c *visibilityRefreshCache) set(_ context.Context, _ string, payload []byte, _ time.Duration) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.value = string(payload)
@@ -128,7 +128,7 @@ func visibilityRefreshFixture(t *testing.T) (*visibilityRefreshCache, *atomic.Bo
 		return nil, errors.New("unexpected detail query: " + q)
 	})
 	cache := &visibilityRefreshCache{}
-	loadPostDetailCache = func(ctx context.Context, key string, loader func() (postResponse, error)) (postResponse, error) {
+	loadPostDetailCache = func(ctx context.Context, key string, loader func(context.Context) (postResponse, error)) (postResponse, error) {
 		return loadJSONCacheWithStoreContext(ctx, key, postCacheTTL, cache.get, cache.set, loader)
 	}
 	now := time.Now().UTC()
@@ -152,7 +152,7 @@ func visibilityRefreshRead(t *testing.T) (int, string) {
 func TestDeletedPostWarmCacheCannotLeakAfterInvalidationFailure(t *testing.T) {
 	cache, _, cached := visibilityRefreshFixture(t)
 	payload, _ := json.Marshal(cached)
-	_ = cache.set("", payload, postCacheTTL)
+	_ = cache.set(context.Background(), "", payload, postCacheTTL)
 	if status, _ := visibilityRefreshRead(t); status != http.StatusOK {
 		t.Fatalf("visible status=%d", status)
 	}
@@ -175,9 +175,9 @@ func TestDeletedPostWarmCacheCannotLeakAfterInvalidationFailure(t *testing.T) {
 func TestDeletedPostLateCacheFillCannotLeak(t *testing.T) {
 	cache, _, cached := visibilityRefreshFixture(t)
 	loaded, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
-	loadPostDetailCache = func(ctx context.Context, key string, _ func() (postResponse, error)) (postResponse, error) {
+	loadPostDetailCache = func(ctx context.Context, key string, _ func(context.Context) (postResponse, error)) (postResponse, error) {
 		return loadJSONCacheWithStoreContext(ctx, key, postCacheTTL, cache.get, cache.set,
-			func() (postResponse, error) { close(loaded); <-release; return cached, nil })
+			func(context.Context) (postResponse, error) { close(loaded); <-release; return cached, nil })
 	}
 	go func() {
 		_, err := loadPostDetail(context.Background(), "42")
@@ -196,7 +196,7 @@ func TestDeletedPostLateCacheFillCannotLeak(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("delete=%d", response.Code)
 	}
-	if value, _ := cache.get(""); !strings.Contains(value, cached.Content) {
+	if value, _ := cache.get(context.Background(), ""); !strings.Contains(value, cached.Content) {
 		t.Fatal("late fill was not exercised")
 	}
 	status, body := visibilityRefreshRead(t)
@@ -208,7 +208,7 @@ func TestDeletedPostLateCacheFillCannotLeak(t *testing.T) {
 func TestPostDetailVisibilityQueryFailureDoesNotReturnCachedBody(t *testing.T) {
 	cache, _, cached := visibilityRefreshFixture(t)
 	payload, _ := json.Marshal(cached)
-	_ = cache.set("", payload, postCacheTTL)
+	_ = cache.set(context.Background(), "", payload, postCacheTTL)
 	global.APIDb = visibilityRefreshDB(t, func(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
 		return nil, errors.New("database unavailable")
 	})
@@ -266,15 +266,17 @@ func TestPostDetailCachedPublicEligibilityIntegration(t *testing.T) {
 			fixture := newReplyIntegrationFixture(t, db)
 			originalCache, originalInvalidator := loadPostDetailCache, invalidatePostDetailCacheKey
 			t.Cleanup(func() { loadPostDetailCache, invalidatePostDetailCacheKey = originalCache, originalInvalidator })
-			loadPostDetailCache = func(_ context.Context, _ string, loader func() (postResponse, error)) (postResponse, error) {
-				return loader()
+			loadPostDetailCache = func(requestCtx context.Context, _ string, loader func(context.Context) (postResponse, error)) (postResponse, error) {
+				return loader(requestCtx)
 			}
 			id := strconvUint(fixture.Article.ID)
 			cached, err := loadPostDetail(context.Background(), id)
 			if err != nil {
 				t.Fatal(err)
 			}
-			loadPostDetailCache = func(context.Context, string, func() (postResponse, error)) (postResponse, error) { return cached, nil }
+			loadPostDetailCache = func(context.Context, string, func(context.Context) (postResponse, error)) (postResponse, error) {
+				return cached, nil
+			}
 			invalidatePostDetailCacheKey = func(string) error { return errors.New("DEL unavailable") }
 			switch state {
 			case "post deleted":

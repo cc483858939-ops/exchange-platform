@@ -55,7 +55,7 @@ func TestLoadPostDetailRejectsEveryNonPublicCachedResponse(t *testing.T) {
 			})
 
 			global.APIDb = nil
-			loadPostDetailCache = func(context.Context, string, func() (postResponse, error)) (postResponse, error) {
+			loadPostDetailCache = func(context.Context, string, func(context.Context) (postResponse, error)) (postResponse, error) {
 				return testCase.response, nil
 			}
 			var deletedKey string

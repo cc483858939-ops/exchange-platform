@@ -35,7 +35,7 @@ func TestLoadJSONCacheWithStoreDeduplicatesConcurrentMisses(t *testing.T) {
 	cache := map[string]string{}
 
 	// getter 模拟从 Redis 获取数据（当前模拟未命中）
-	getter := func(key string) (string, error) {
+	getter := func(_ context.Context, key string) (string, error) {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -46,7 +46,7 @@ func TestLoadJSONCacheWithStoreDeduplicatesConcurrentMisses(t *testing.T) {
 		return value, nil
 	}
 	// setter 模拟将数据写入 Redis
-	setter := func(key string, payload []byte, _ time.Duration) error {
+	setter := func(_ context.Context, key string, payload []byte, _ time.Duration) error {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -54,7 +54,7 @@ func TestLoadJSONCacheWithStoreDeduplicatesConcurrentMisses(t *testing.T) {
 		return nil
 	}
 	// loader 模拟回源逻辑（如查询数据库），并带有延迟以模拟耗时操作
-	loader := func() (cacheTestPayload, error) {
+	loader := func(context.Context) (cacheTestPayload, error) {
 		loads.Add(1) // 记录回源次数
 		time.Sleep(20 * time.Millisecond)
 		return cacheTestPayload{Value: "shared"}, nil
@@ -71,7 +71,7 @@ func TestLoadJSONCacheWithStoreDeduplicatesConcurrentMisses(t *testing.T) {
 			defer wg.Done()
 			<-start
 
-			payload, err := loadJSONCacheWithStore("post:detail:42", time.Minute, getter, setter, loader)
+			payload, err := loadJSONCacheWithStoreContext(context.Background(), "post:detail:42", time.Minute, getter, setter, loader)
 			if err != nil {
 				errs <- err
 				return
@@ -109,7 +109,7 @@ func TestPostDetailCacheFenceRejectsOldBackfillAndReloads(t *testing.T) {
 	var releaseOnce sync.Once
 	defer releaseOnce.Do(func() { close(allowOldBackfill) })
 
-	getter := func(key string) (string, error) {
+	getter := func(_ context.Context, key string) (string, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		value, ok := cache[key]
@@ -118,13 +118,13 @@ func TestPostDetailCacheFenceRejectsOldBackfillAndReloads(t *testing.T) {
 		}
 		return value, nil
 	}
-	fenceGetter := func() (string, error) {
+	fenceGetter := func(context.Context) (string, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		tokens = append(tokens, fence)
 		return fence, nil
 	}
-	setter := func(token string, payload []byte, _ time.Duration) (bool, error) {
+	setter := func(_ context.Context, token string, payload []byte, _ time.Duration) (bool, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		if token != fence {
@@ -133,7 +133,7 @@ func TestPostDetailCacheFenceRejectsOldBackfillAndReloads(t *testing.T) {
 		cache[key] = string(payload)
 		return true, nil
 	}
-	loader := func() (cacheTestPayload, error) {
+	loader := func(context.Context) (cacheTestPayload, error) {
 		if loads.Add(1) == 1 {
 			old := cacheTestPayload{Value: "stale"}
 			close(oldSnapshotReady)
@@ -188,7 +188,7 @@ func TestPostDetailCacheFenceRejectsOldBackfillAndReloads(t *testing.T) {
 	}
 	hit, err := loadJSONCacheWithFenceStoreContext(
 		context.Background(), key, postCacheTTL, getter, fenceGetter, setter,
-		func() (cacheTestPayload, error) {
+		func(context.Context) (cacheTestPayload, error) {
 			loads.Add(1)
 			return cacheTestPayload{Value: "unexpected reload"}, nil
 		},
@@ -213,7 +213,7 @@ func TestPostDetailCacheFencePreservesSingleflight(t *testing.T) {
 	var loaderStartOnce sync.Once
 	defer releaseOnce.Do(func() { close(releaseLoader) })
 
-	getter := func(key string) (string, error) {
+	getter := func(_ context.Context, key string) (string, error) {
 		call := getterCalls.Add(1)
 		if call <= workers {
 			if call == workers {
@@ -229,8 +229,8 @@ func TestPostDetailCacheFencePreservesSingleflight(t *testing.T) {
 		}
 		return value, nil
 	}
-	fenceGetter := func() (string, error) { return "stable-token", nil }
-	setter := func(token string, payload []byte, _ time.Duration) (bool, error) {
+	fenceGetter := func(context.Context) (string, error) { return "stable-token", nil }
+	setter := func(_ context.Context, token string, payload []byte, _ time.Duration) (bool, error) {
 		if token != "stable-token" {
 			return false, nil
 		}
@@ -239,7 +239,7 @@ func TestPostDetailCacheFencePreservesSingleflight(t *testing.T) {
 		cache[key] = string(payload)
 		return true, nil
 	}
-	loader := func() (cacheTestPayload, error) {
+	loader := func(context.Context) (cacheTestPayload, error) {
 		loads.Add(1)
 		loaderStartOnce.Do(func() { close(loaderStarted) })
 		<-releaseLoader
@@ -288,7 +288,7 @@ func TestLoadJSONCacheWithStoreSeparatesDifferentKeys(t *testing.T) {
 	var mu sync.Mutex
 	cache := map[string]string{}
 
-	getter := func(key string) (string, error) {
+	getter := func(_ context.Context, key string) (string, error) {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -298,7 +298,7 @@ func TestLoadJSONCacheWithStoreSeparatesDifferentKeys(t *testing.T) {
 		}
 		return value, nil
 	}
-	setter := func(key string, payload []byte, _ time.Duration) error {
+	setter := func(_ context.Context, key string, payload []byte, _ time.Duration) error {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -306,8 +306,8 @@ func TestLoadJSONCacheWithStoreSeparatesDifferentKeys(t *testing.T) {
 		return nil
 	}
 
-	loadWithKey := func(key string) func() (cacheTestPayload, error) {
-		return func() (cacheTestPayload, error) {
+	loadWithKey := func(key string) func(context.Context) (cacheTestPayload, error) {
+		return func(context.Context) (cacheTestPayload, error) {
 			loads.Add(1)
 			time.Sleep(20 * time.Millisecond)
 			return cacheTestPayload{Value: key}, nil
@@ -323,7 +323,7 @@ func TestLoadJSONCacheWithStoreSeparatesDifferentKeys(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			payload, err := loadJSONCacheWithStore(key, time.Minute, getter, setter, loadWithKey(key))
+			payload, err := loadJSONCacheWithStoreContext(context.Background(), key, time.Minute, getter, setter, loadWithKey(key))
 			if err != nil {
 				errs <- err
 				return
@@ -349,18 +349,18 @@ func TestLoadJSONCacheWithStorePreservesPostAuthorDTO(t *testing.T) {
 	postCacheGroup = singleflight.Group{}
 	cache := map[string]string{}
 	loads := 0
-	getter := func(key string) (string, error) {
+	getter := func(_ context.Context, key string) (string, error) {
 		value, ok := cache[key]
 		if !ok {
 			return "", redis.Nil
 		}
 		return value, nil
 	}
-	setter := func(key string, payload []byte, _ time.Duration) error {
+	setter := func(_ context.Context, key string, payload []byte, _ time.Duration) error {
 		cache[key] = string(payload)
 		return nil
 	}
-	loader := func() (postResponse, error) {
+	loader := func(context.Context) (postResponse, error) {
 		loads++
 		return postResponse{
 			ID:         42,
@@ -371,11 +371,11 @@ func TestLoadJSONCacheWithStorePreservesPostAuthorDTO(t *testing.T) {
 		}, nil
 	}
 
-	miss, err := loadJSONCacheWithStore("post:detail:v5:42", time.Minute, getter, setter, loader)
+	miss, err := loadJSONCacheWithStoreContext(context.Background(), "post:detail:v5:42", time.Minute, getter, setter, loader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hit, err := loadJSONCacheWithStore("post:detail:v5:42", time.Minute, getter, setter, loader)
+	hit, err := loadJSONCacheWithStoreContext(context.Background(), "post:detail:v5:42", time.Minute, getter, setter, loader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,7 +490,7 @@ func TestLoadPostDetailCacheHitPreservesCachedAuthorAfterVisibilityCheck(t *test
 		Visibility:  "public",
 		Author:      publicAuthorResponse{ID: 7, Username: "alice", DisplayName: "Cached Alice", AvatarURL: "cached.jpg"},
 	}
-	loadPostDetailCache = func(_ context.Context, key string, loader func() (postResponse, error)) (postResponse, error) {
+	loadPostDetailCache = func(requestCtx context.Context, key string, loader func(context.Context) (postResponse, error)) (postResponse, error) {
 		if key != postDetailCacheKey("123") {
 			t.Fatalf("unexpected post detail cache key: %q", key)
 		}
@@ -498,11 +498,12 @@ func TestLoadPostDetailCacheHitPreservesCachedAuthorAfterVisibilityCheck(t *test
 		if err != nil {
 			t.Fatal(err)
 		}
-		return loadJSONCacheWithStore(
+		return loadJSONCacheWithStoreContext(
+			requestCtx,
 			key,
 			postCacheTTL,
-			func(string) (string, error) { return string(payload), nil },
-			func(string, []byte, time.Duration) error { return nil },
+			func(context.Context, string) (string, error) { return string(payload), nil },
+			func(context.Context, string, []byte, time.Duration) error { return nil },
 			loader,
 		)
 	}
@@ -539,18 +540,19 @@ func TestLoadPostDetailCacheMissLoadsAndCachesAuthorSummaryIntegration(t *testin
 	postCacheGroup = singleflight.Group{}
 	cache := map[string]string{}
 	var writes int
-	loadPostDetailCache = func(_ context.Context, key string, loader func() (postResponse, error)) (postResponse, error) {
-		return loadJSONCacheWithStore(
+	loadPostDetailCache = func(requestCtx context.Context, key string, loader func(context.Context) (postResponse, error)) (postResponse, error) {
+		return loadJSONCacheWithStoreContext(
+			requestCtx,
 			key,
 			postCacheTTL,
-			func(key string) (string, error) {
+			func(_ context.Context, key string) (string, error) {
 				value, ok := cache[key]
 				if !ok {
 					return "", redis.Nil
 				}
 				return value, nil
 			},
-			func(key string, payload []byte, _ time.Duration) error {
+			func(_ context.Context, key string, payload []byte, _ time.Duration) error {
 				writes++
 				cache[key] = string(payload)
 				return nil
@@ -676,7 +678,7 @@ func TestLoadPostDetailRejectsInvalidCachedResponseAndBestEffortDeletes(t *testi
 	global.APIDb = nil
 	now := time.Now().UTC()
 	future := now.Add(time.Hour)
-	loadPostDetailCache = func(context.Context, string, func() (postResponse, error)) (postResponse, error) {
+	loadPostDetailCache = func(context.Context, string, func(context.Context) (postResponse, error)) (postResponse, error) {
 		return postResponse{
 			ID:          42,
 			PublishedAt: &future,
@@ -744,8 +746,8 @@ func TestLoadPostDetailMissFiltersDeletedPostsIntegration(t *testing.T) {
 		global.APIDb = originalDB
 	})
 	global.APIDb = db
-	loadPostDetailCache = func(_ context.Context, _ string, loader func() (postResponse, error)) (postResponse, error) {
-		return loader()
+	loadPostDetailCache = func(requestCtx context.Context, _ string, loader func(context.Context) (postResponse, error)) (postResponse, error) {
+		return loader(requestCtx)
 	}
 
 	validID := strconv.FormatUint(uint64(posts[0].ID), 10)
@@ -799,18 +801,18 @@ func TestLoadJSONCacheWithStoreReturnsCachedValueWithoutReloading(t *testing.T) 
 	postCacheGroup = singleflight.Group{}
 
 	var loads atomic.Int32
-	getter := func(string) (string, error) {
+	getter := func(context.Context, string) (string, error) {
 		return `{"value":"cached"}`, nil
 	}
-	setter := func(string, []byte, time.Duration) error {
+	setter := func(context.Context, string, []byte, time.Duration) error {
 		return nil
 	}
-	loader := func() (cacheTestPayload, error) {
+	loader := func(context.Context) (cacheTestPayload, error) {
 		loads.Add(1)
 		return cacheTestPayload{Value: "db"}, nil
 	}
 
-	payload, err := loadJSONCacheWithStore("posts", time.Minute, getter, setter, loader)
+	payload, err := loadJSONCacheWithStoreContext(context.Background(), "posts", time.Minute, getter, setter, loader)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

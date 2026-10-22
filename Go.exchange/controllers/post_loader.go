@@ -46,7 +46,7 @@ func isPublicPostResponseAt(post postResponse, now time.Time) bool {
 	return true
 }
 
-var loadPostDetailCache = func(ctx context.Context, key string, loader func() (postResponse, error)) (postResponse, error) {
+var loadPostDetailCache = func(ctx context.Context, key string, loader func(context.Context) (postResponse, error)) (postResponse, error) {
 	return loadPostDetailJSONCacheWithContext(ctx, key, loader)
 }
 
@@ -59,16 +59,26 @@ var validatePostDetailPublic = func(db *gorm.DB, id uint) error {
 }
 
 func loadPostDetail(ctx context.Context, id string) (postResponse, error) {
-	db := global.APIDb
-	if db != nil {
-		db = db.WithContext(ctx)
+	if ctx == nil {
+		ctx = context.Background()
 	}
+	if err := ctx.Err(); err != nil {
+		return postResponse{}, err
+	}
+	baseDB := global.APIDb
 	key := postDetailCacheKey(id)
-	loader := func() (postResponse, error) {
-		if db == nil {
+	loader := func(workCtx context.Context) (postResponse, error) {
+		if err := workCtx.Err(); err != nil {
+			return postResponse{}, err
+		}
+		if baseDB == nil {
 			return postResponse{}, errors.New("database is not initialized")
 		}
-		post, err := loadPublicPost(db, id, time.Now().UTC())
+		workDB := baseDB.WithContext(workCtx)
+		post, err := loadPublicPost(workDB, id, time.Now().UTC())
+		if workErr := workCtx.Err(); workErr != nil {
+			return postResponse{}, workErr
+		}
 		if err != nil {
 			return postResponse{}, err
 		}
@@ -76,15 +86,25 @@ func loadPostDetail(ctx context.Context, id string) (postResponse, error) {
 		if err != nil {
 			return postResponse{}, err
 		}
-		if err := hydratePostResponseMediaFromDB(db, &response); err != nil {
+		if err := hydratePostResponseMediaFromDB(workDB, &response); err != nil {
+			return postResponse{}, err
+		}
+		if err := workCtx.Err(); err != nil {
 			return postResponse{}, err
 		}
 		return response, nil
 	}
 
 	response, err := loadPostDetailCache(ctx, key, loader)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return postResponse{}, ctxErr
+	}
 	if err != nil {
 		return postResponse{}, err
+	}
+	requestDB := baseDB
+	if requestDB != nil {
+		requestDB = requestDB.WithContext(ctx)
 	}
 	requestedID, parseErr := strconv.ParseUint(id, 10, 64)
 	if parseErr != nil || requestedID == 0 || requestedID != uint64(response.ID) || !isPublicPostResponseAt(response, time.Now().UTC()) {
@@ -93,23 +113,33 @@ func loadPostDetail(ctx context.Context, id string) (postResponse, error) {
 	}
 	// A cache hit or a late cache fill is not evidence of current visibility.
 	// Validate on the primary database after loading, before exposing any body.
-	if err := validatePostDetailPublic(db, response.ID); err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+	visibilityErr := validatePostDetailPublic(requestDB, response.ID)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return postResponse{}, ctxErr
+	}
+	if visibilityErr != nil {
+		if errors.Is(visibilityErr, gorm.ErrRecordNotFound) {
 			_ = invalidatePostDetailCacheKey(key)
 		}
-		return postResponse{}, err
+		return postResponse{}, visibilityErr
 	}
 	ensurePostResponseMedia(&response)
-	if db != nil {
+	if requestDB != nil {
 		responses := []postResponse{response}
-		if err := hydratePostResponseRepostCountsFromDB(db, responses); err != nil {
+		if err := hydratePostResponseRepostCountsFromDB(requestDB, responses); err != nil {
 			return postResponse{}, err
 		}
 		response = responses[0]
+		if err := ctx.Err(); err != nil {
+			return postResponse{}, err
+		}
 	}
 	// Reference fields are always loaded after the viewer-independent base
 	// record, so a deleted target becomes a tombstone before the response.
-	if err := hydratePostResponseReferencesFromDB(db, &response, time.Now().UTC()); err != nil {
+	if err := hydratePostResponseReferencesFromDB(requestDB, &response, time.Now().UTC()); err != nil {
+		return postResponse{}, err
+	}
+	if err := ctx.Err(); err != nil {
 		return postResponse{}, err
 	}
 	return response, nil

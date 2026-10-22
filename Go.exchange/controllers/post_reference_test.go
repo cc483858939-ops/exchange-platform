@@ -43,7 +43,7 @@ func TestGetPostByIDReturnsServerErrorForReferenceHydrationFailure(t *testing.T)
 	previousDB := global.APIDb
 	previousCache := loadPostDetailCache
 	global.APIDb = nil
-	loadPostDetailCache = func(context.Context, string, func() (postResponse, error)) (postResponse, error) {
+	loadPostDetailCache = func(context.Context, string, func(context.Context) (postResponse, error)) (postResponse, error) {
 		quoteID := uint(99)
 		publishedAt := time.Now().UTC()
 		return postResponse{

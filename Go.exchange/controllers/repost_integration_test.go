@@ -188,11 +188,11 @@ func TestPublicPostRepostCountHydrationAndCacheFreshnessIntegration(t *testing.T
 
 	var cached postResponse
 	cachePrimed := false
-	loadPostDetailCache = func(_ context.Context, _ string, loader func() (postResponse, error)) (postResponse, error) {
+	loadPostDetailCache = func(requestCtx context.Context, _ string, loader func(context.Context) (postResponse, error)) (postResponse, error) {
 		if cachePrimed {
 			return cached, nil
 		}
-		response, err := loader()
+		response, err := loader(requestCtx)
 		if err != nil {
 			return postResponse{}, err
 		}

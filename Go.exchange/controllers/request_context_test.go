@@ -29,7 +29,7 @@ func TestGetPostByIDPassesRequestContextToDetailLoader(t *testing.T) {
 
 	var receivedContext context.Context
 	publishedAt := time.Now().UTC()
-	loadPostDetailCache = func(ctx context.Context, _ string, _ func() (postResponse, error)) (postResponse, error) {
+	loadPostDetailCache = func(ctx context.Context, _ string, _ func(context.Context) (postResponse, error)) (postResponse, error) {
 		receivedContext = ctx
 		return postResponse{ID: 42, PublishedAt: &publishedAt, Visibility: "public"}, nil
 	}
@@ -49,7 +49,7 @@ func TestGetPostByIDPassesRequestContextToDetailLoader(t *testing.T) {
 	}
 }
 
-func TestGetPostByIDSuppressesResponseWhenRequestIsCanceled(t *testing.T) {
+func TestGetPostByIDSkipsDetailLoadWhenRequestIsCanceled(t *testing.T) {
 	originalCacheLoader := loadPostDetailCache
 	originalDB := global.APIDb
 	t.Cleanup(func() {
@@ -60,9 +60,9 @@ func TestGetPostByIDSuppressesResponseWhenRequestIsCanceled(t *testing.T) {
 
 	requestContext, cancel := context.WithCancel(context.WithValue(context.Background(), requestContextTestKey{}, "detail"))
 	cancel()
-	var receivedContext context.Context
-	loadPostDetailCache = func(ctx context.Context, _ string, _ func() (postResponse, error)) (postResponse, error) {
-		receivedContext = ctx
+	var cacheLoadCalls int
+	loadPostDetailCache = func(ctx context.Context, _ string, _ func(context.Context) (postResponse, error)) (postResponse, error) {
+		cacheLoadCalls++
 		return postResponse{}, ctx.Err()
 	}
 	recorder := httptest.NewRecorder()
@@ -71,8 +71,8 @@ func TestGetPostByIDSuppressesResponseWhenRequestIsCanceled(t *testing.T) {
 	ctx.Params = gin.Params{{Key: "id", Value: "42"}}
 	GetPostByID(ctx)
 
-	if receivedContext != requestContext || receivedContext.Err() != context.Canceled {
-		t.Fatal("detail loader did not receive the canceled request context")
+	if cacheLoadCalls != 0 {
+		t.Fatal("canceled request entered the detail cache loader")
 	}
 	if recorder.Body.Len() != 0 {
 		t.Fatalf("canceled request wrote response body: %q", recorder.Body.String())
