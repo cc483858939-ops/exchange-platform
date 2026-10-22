@@ -60,12 +60,84 @@ describe('Register navigation and errors', () => {
     document.body.innerHTML = '';
   });
 
-  const submit = async () => {
+  const submit = async (password = 'secret123') => {
     await wrapper!.get('#register-username').setValue('alice');
-    await wrapper!.get('#register-password').setValue('secret123');
+    await wrapper!.get('#register-password').setValue(password);
     await wrapper!.get('form').trigger('submit');
     await flushPromises();
   };
+
+  it('rejects a 73-byte ASCII password before calling the registration API', async () => {
+    wrapper = mountRegister();
+
+    await submit('a'.repeat(73));
+
+    expect(wrapper.get('.auth-error').text()).toBe('Password must be 72 bytes or fewer.');
+    expect(mocks.authStore.register).not.toHaveBeenCalled();
+    expect((wrapper.get('#register-username').element as HTMLInputElement).value).toBe('alice');
+    expect((wrapper.get('#register-password').element as HTMLInputElement).value).toBe('a'.repeat(73));
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeUndefined();
+    expect(wrapper.get('button[type="submit"]').text()).toBe('Sign up');
+  });
+
+  it.each([
+    ['CJK', '汉'.repeat(25)],
+    ['Emoji', '😀'.repeat(19)],
+  ])('rejects an over-limit %s password by UTF-8 bytes', async (_name, password) => {
+    wrapper = mountRegister();
+
+    await submit(password);
+
+    expect(wrapper.get('.auth-error').text()).toBe('Password must be 72 bytes or fewer.');
+    expect(mocks.authStore.register).not.toHaveBeenCalled();
+    expect((wrapper.get('#register-password').element as HTMLInputElement).value).toBe(password);
+  });
+
+  it.each([
+    ['ASCII', 'a'.repeat(72)],
+    ['CJK', '汉'.repeat(24)],
+    ['Emoji', '😀'.repeat(18)],
+  ])('submits a valid 72-byte %s password', async (_name, password) => {
+    wrapper = mountRegister();
+
+    await submit(password);
+
+    expect(mocks.authStore.register).toHaveBeenCalledTimes(1);
+    expect(mocks.authStore.register).toHaveBeenCalledWith('alice', password);
+  });
+
+  it('shows the dedicated message when the backend rejects password byte length', async () => {
+    mocks.authStore.register.mockRejectedValueOnce(
+      new AuthRequestError('Password too long', 'AUTH_PASSWORD_TOO_LONG'),
+    );
+    wrapper = mountRegister();
+
+    await submit('valid-password');
+
+    expect(wrapper.get('.auth-error').text()).toBe('Password must be 72 bytes or fewer.');
+    expect(wrapper.text()).not.toContain('Could not create account. Please try again.');
+    expect(mocks.authStore.register).toHaveBeenCalledWith('alice', 'valid-password');
+  });
+
+  it('allows the user to correct an over-limit password and resubmit', async () => {
+    wrapper = mountRegister();
+
+    await submit('a'.repeat(73));
+    expect(wrapper.get('.auth-error').text()).toBe('Password must be 72 bytes or fewer.');
+    expect(mocks.authStore.register).not.toHaveBeenCalled();
+
+    await wrapper.get('#register-password').setValue('valid-password');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    expect(mocks.authStore.register).toHaveBeenCalledTimes(1);
+    expect(mocks.authStore.register).toHaveBeenCalledWith('alice', 'valid-password');
+    expect(wrapper.find('.auth-error').exists()).toBe(false);
+    expect((wrapper.get('#register-username').element as HTMLInputElement).value).toBe('alice');
+    expect((wrapper.get('#register-password').element as HTMLInputElement).value).toBe('valid-password');
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeUndefined();
+    expect(mocks.router.replace).toHaveBeenCalledWith({ name: 'Home' });
+  });
 
   it('shows the username-specific error and preserves the form after a conflict', async () => {
     mocks.authStore.register.mockRejectedValueOnce(

@@ -20,6 +20,7 @@ import (
 	"github.com/gin-gonic/gin/binding"
 	ginjson "github.com/gin-gonic/gin/codec/json"
 	"github.com/jackc/pgx/v5/pgconn"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -72,6 +73,7 @@ var errRegistrationOnboardingInit = errors.New("initialize registration onboardi
 var errRegistrationUsernameConflict = errors.New("registration username conflict")
 
 const authRequestMaxBodyBytes int64 = 16 << 10
+const maxBcryptPasswordBytes = 72
 
 func NewAuthController(db *gorm.DB, tokens auth.TokenService, limiter auth.AttemptLimiter, userLikeInitializers ...interface {
 	InitializeUserEmpty(context.Context, uint) error
@@ -106,12 +108,20 @@ func (c *AuthController) Register(ctx *gin.Context) {
 		writeAuthError(ctx, "AUTH_REQUEST_INVALID")
 		return
 	}
+	if len(request.Password) > maxBcryptPasswordBytes {
+		writeAuthError(ctx, "AUTH_PASSWORD_TOO_LONG")
+		return
+	}
 	if !c.allowAttempt(ctx, auth.AttemptRegister, strings.ToLower(strings.TrimSpace(request.Username))) {
 		return
 	}
 
 	hashedPassword, err := utils.HashPassword(request.Password)
 	if err != nil {
+		if errors.Is(err, bcrypt.ErrPasswordTooLong) {
+			writeAuthError(ctx, "AUTH_PASSWORD_TOO_LONG")
+			return
+		}
 		writeInternalAPIErrorAs(ctx, err, "AUTH_INTERNAL")
 		return
 	}

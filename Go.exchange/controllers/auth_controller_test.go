@@ -13,6 +13,7 @@ import (
 
 	"Go.exchange/auth"
 	"Go.exchange/models"
+	"Go.exchange/utils"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/postgres"
@@ -34,6 +35,15 @@ type authTokenServiceSpy struct {
 	issueCalls        int
 	rotateCalls       int
 	refreshRequestIDs []string
+}
+
+type authUserLikeInitializerSpy struct {
+	calls int
+}
+
+func (spy *authUserLikeInitializerSpy) InitializeUserEmpty(context.Context, uint) error {
+	spy.calls++
+	return nil
 }
 
 func (spy *authTokenServiceSpy) IssuePair(_ context.Context, userID uint) (auth.TokenPair, error) {
@@ -219,6 +229,95 @@ func TestAuthControllerRejectsOversizedBodyBeforeLimiterAndTokenService(t *testi
 				t.Fatalf("expensive operation ran: limiter=%d issue=%d rotate=%d", len(limiter.inputs), tokens.issueCalls, tokens.rotateCalls)
 			}
 		})
+	}
+}
+
+func TestAuthControllerRejectsPasswordOverBcryptLimit(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		password string
+	}{
+		{name: "ASCII", password: strings.Repeat("a", 73)},
+		{name: "CJK", password: strings.Repeat("汉", 25)},
+		{name: "Emoji", password: strings.Repeat("😀", 19)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			limiter := &authLimiterSpy{decision: auth.AttemptDecision{Allowed: true}}
+			tokens := &authTokenServiceSpy{}
+			userLikeInit := &authUserLikeInitializerSpy{}
+			payload, err := json.Marshal(registerRequest{Username: "alice", Password: test.password})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			controller := &AuthController{
+				db:           nil,
+				tokens:       tokens,
+				limiter:      limiter,
+				userLikeInit: userLikeInit,
+			}
+			response := callAuthHandler(controller, payload, (*AuthController).Register)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			assertAuthError(t, response, "AUTH_PASSWORD_TOO_LONG")
+
+			var body struct {
+				Error     string `json:"error"`
+				RequestID string `json:"request_id"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode auth error: %v; body=%s", err, response.Body.String())
+			}
+			if body.Error != "Password must be 72 bytes or fewer." || body.RequestID == "" {
+				t.Fatalf("unexpected public error response: %+v", body)
+			}
+			if len(limiter.inputs) != 0 {
+				t.Fatalf("over-limit password reached limiter: %+v", limiter.inputs)
+			}
+			if tokens.issueCalls != 0 || userLikeInit.calls != 0 {
+				t.Fatalf("registration side effect ran: token issues=%d user-like init=%d", tokens.issueCalls, userLikeInit.calls)
+			}
+		})
+	}
+}
+
+func TestAuthControllerAcceptsBcryptPasswordByteBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		password string
+	}{
+		{name: "ASCII", password: strings.Repeat("a", 72)},
+		{name: "CJK", password: strings.Repeat("汉", 24)},
+		{name: "Emoji", password: strings.Repeat("😀", 18)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := len(test.password); got != 72 {
+				t.Fatalf("password byte length=%d, want 72", got)
+			}
+			hash, err := utils.HashPassword(test.password)
+			if err != nil {
+				t.Fatalf("HashPassword rejected 72-byte %s password: %v", test.name, err)
+			}
+			if !utils.CheckPassword(test.password, hash) {
+				t.Fatalf("bcrypt hash did not verify the complete %s password", test.name)
+			}
+		})
+	}
+}
+
+func TestAuthControllerEmptyRegistrationPasswordRemainsInvalid(t *testing.T) {
+	limiter := &authLimiterSpy{decision: auth.AttemptDecision{Allowed: true}}
+	tokens := &authTokenServiceSpy{}
+	controller := &AuthController{db: nil, tokens: tokens, limiter: limiter}
+	response := callAuthHandler(controller, []byte(`{"username":"alice","password":""}`), (*AuthController).Register)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	assertAuthError(t, response, "AUTH_REQUEST_INVALID")
+	if len(limiter.inputs) != 0 || tokens.issueCalls != 0 {
+		t.Fatalf("empty password reached registration side effects: limiter=%d token issues=%d", len(limiter.inputs), tokens.issueCalls)
 	}
 }
 

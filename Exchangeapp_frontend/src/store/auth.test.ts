@@ -746,6 +746,27 @@ describe('auth store cross-tab session coordination', () => {
     });
   });
 
+  it('maps the backend bcrypt password limit to a specific validation error', async () => {
+    const store = createAuthStore();
+    mocks.post.mockRejectedValueOnce({
+      response: {
+        data: {
+          code: 'AUTH_PASSWORD_TOO_LONG',
+          error: 'Password must be 72 bytes or fewer.',
+          request_id: 'a1-password-limit-test',
+        },
+      },
+    });
+
+    const error = await store.register('alice', 'a'.repeat(73)).catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(AuthRequestError);
+    expect(error).toMatchObject({
+      code: 'AUTH_PASSWORD_TOO_LONG',
+      message: 'Password must be 72 bytes or fewer.',
+    });
+  });
+
   it('rotates credentials without advancing the authentication session version', async () => {
     seedV2Auth();
     const store = createAuthStore();

@@ -47,6 +47,7 @@ const (
 	CodeAuthTokenInvalid             Code = "AUTH_TOKEN_INVALID"
 	CodeAuthCredentialsInvalid       Code = "AUTH_CREDENTIALS_INVALID"
 	CodeAuthRequestInvalid           Code = "AUTH_REQUEST_INVALID"
+	CodeAuthPasswordTooLong          Code = "AUTH_PASSWORD_TOO_LONG"
 	CodeAuthRequestTooLarge          Code = "AUTH_REQUEST_TOO_LARGE"
 	CodeAuthInternal                 Code = "AUTH_INTERNAL"
 	CodeAuthLikeStateUnavailable     Code = "AUTH_LIKE_STATE_UNAVAILABLE"
@@ -124,6 +125,7 @@ var definitions = map[Code]Definition{
 	CodeAuthTokenInvalid:             {Status: http.StatusUnauthorized, Message: "Authentication failed"},
 	CodeAuthCredentialsInvalid:       {Status: http.StatusUnauthorized, Message: "Invalid username or password"},
 	CodeAuthRequestInvalid:           {Status: http.StatusBadRequest, Message: "Invalid request data"},
+	CodeAuthPasswordTooLong:          {Status: http.StatusBadRequest, Message: "Password must be 72 bytes or fewer."},
 	CodeAuthRequestTooLarge:          {Status: http.StatusRequestEntityTooLarge, Message: "Authentication request is too large"},
 	CodeAuthInternal:                 {Status: http.StatusInternalServerError, Message: "Authentication failed", internal: true},
 	CodeAuthLikeStateUnavailable:     {Status: http.StatusServiceUnavailable, Message: "Registration is temporarily unavailable", internal: true},

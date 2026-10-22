@@ -103,6 +103,9 @@ const formatRegisterError = (error: unknown) => {
   if (error instanceof AuthRequestError && error.code === 'AUTH_REQUEST_INVALID') {
     return 'Enter a username and password.';
   }
+  if (error instanceof AuthRequestError && error.code === 'AUTH_PASSWORD_TOO_LONG') {
+    return 'Password must be 72 bytes or fewer.';
+  }
   return 'Could not create account. Please try again.';
 };
 
@@ -118,6 +121,10 @@ const register = async () => {
   }
   if (form.value.password.length === 0) {
     formError.value = 'Create a password.';
+    return;
+  }
+  if (new TextEncoder().encode(form.value.password).length > 72) {
+    formError.value = 'Password must be 72 bytes or fewer.';
     return;
   }
 

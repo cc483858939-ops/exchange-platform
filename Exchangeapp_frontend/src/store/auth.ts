@@ -71,6 +71,7 @@ const authErrorMessages: Record<string, string> = {
   AUTH_TOKEN_INVALID: 'Authentication failed.',
   AUTH_CREDENTIALS_INVALID: 'Invalid username or password.',
   AUTH_REQUEST_INVALID: 'Invalid request data.',
+  AUTH_PASSWORD_TOO_LONG: 'Password must be 72 bytes or fewer.',
   AUTH_REQUEST_TOO_LARGE: 'Authentication request is too large.',
   AUTH_RATE_LIMITED: 'Too many authentication attempts.',
   AUTH_RATE_LIMIT_UNAVAILABLE: 'Authentication is temporarily unavailable.',
