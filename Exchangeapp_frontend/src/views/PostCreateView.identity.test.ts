@@ -207,12 +207,26 @@ const deferred = <T,>() => {
   return { promise, resolve };
 };
 
+const testPublishLocks = {
+  request: async <T>(
+    _name: string,
+    _options: { mode: 'exclusive' },
+    callback: () => T | Promise<T>,
+  ) => callback(),
+};
+
 describe('PostCreateView identity and text publishing', () => {
   let wrapper: VueWrapper | null = null;
 
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
+    vi.stubGlobal('navigator', new Proxy(navigator, {
+      get(target, property) {
+        if (property === 'locks') return testPublishLocks;
+        return Reflect.get(target, property, target);
+      },
+    }));
     mocks.authStore!.isAuthenticated = true;
     mocks.authStore!.sessionID = 'session-7';
     mocks.authStore!.sessionVersion = 5;
@@ -298,6 +312,7 @@ describe('PostCreateView identity and text publishing', () => {
     vi.useRealTimers();
     wrapper?.unmount();
     wrapper = null;
+    vi.unstubAllGlobals();
   });
 
   it('renders the current identity without a profile request', () => {

@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { reactive } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Post } from '../types/Post';
+import { withPostPublishExecutionLock } from '../utils/postPublishExecutionLock';
 import { usePostDraftStore } from './postDraft';
 import { usePostPublishStore } from './postPublish';
 
@@ -182,36 +183,120 @@ const deferred = <T,>() => {
   return { promise, resolve, reject };
 };
 
+type TestLockRequest = {
+  callback: (lock: { name: string; mode: 'exclusive' }) => unknown;
+  resolve: (value: unknown) => void;
+  reject: (reason: unknown) => void;
+};
+
+const createTestLockManager = () => {
+  const states = new Map<string, { owner: TestLockRequest | null; queue: TestLockRequest[] }>();
+  const stateFor = (name: string) => {
+    let state = states.get(name);
+    if (!state) {
+      state = { owner: null, queue: [] };
+      states.set(name, state);
+    }
+    return state;
+  };
+  const drain = (name: string) => {
+    const state = stateFor(name);
+    if (state.owner) return;
+    const request = state.queue.shift();
+    if (!request) return;
+    state.owner = request;
+    void Promise.resolve()
+      .then(() => request.callback({ name, mode: 'exclusive' }))
+      .then(request.resolve, request.reject)
+      .finally(() => {
+        if (state.owner === request) {
+          state.owner = null;
+          drain(name);
+        }
+      });
+  };
+
+  return {
+    request: vi.fn((
+      name: string,
+      _options: { mode: 'exclusive' },
+      callback: TestLockRequest['callback'],
+    ) => new Promise((resolve, reject) => {
+      stateFor(name).queue.push({ callback, resolve, reject });
+      drain(name);
+    })),
+    forceRelease(name: string) {
+      const state = stateFor(name);
+      state.owner = null;
+      drain(name);
+    },
+    pendingCount(name: string) {
+      return stateFor(name).queue.length;
+    },
+  };
+};
+
+let publishLocks = createTestLockManager();
+
+const cloneValue = (value: any): any => {
+  if (value === null || value === undefined || typeof value !== 'object') return value;
+  if (value instanceof Blob) return value.slice(0, value.size, value.type);
+  if (Array.isArray(value)) return value.map(cloneValue);
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, cloneValue(entry)]));
+};
+
+const clonePublishRecord = (record: any) => cloneValue(record);
+
+const createAuthStore = (
+  userID = 7,
+  sessionID = 'session-7',
+  sessionVersion = 5,
+) => {
+  const authStore: any = reactive({
+    isAuthenticated: true,
+    sessionID,
+    sessionVersion,
+    currentIdentity: {
+      id: userID,
+      username: userID === 7 ? 'alice' : 'bob',
+      display_name: userID === 7 ? 'Alice' : 'Bob',
+      avatar_url: '',
+    },
+    syncCurrentIdentityProfile: vi.fn(),
+  });
+  authStore.captureRequestAuthBinding = () => {
+    if (!authStore.isAuthenticated || !authStore.sessionID || !authStore.currentIdentity?.id) return null;
+    return Object.freeze({
+      userID: authStore.currentIdentity.id,
+      sessionID: authStore.sessionID,
+      sessionVersion: authStore.sessionVersion,
+    });
+  };
+  authStore.matchesRequestAuthBinding = (binding: any) => Boolean(
+    authStore.isAuthenticated
+    && authStore.currentIdentity?.id === binding.userID
+    && authStore.sessionID === binding.sessionID
+    && authStore.sessionVersion === binding.sessionVersion,
+  );
+  return authStore;
+};
+
+const createTabStore = (viewerID = 7) => {
+  setActivePinia(createPinia());
+  usePostDraftStore().setViewer(viewerID);
+  return usePostPublishStore();
+};
+
 describe('postPublish store', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
+    publishLocks = createTestLockManager();
+    vi.stubGlobal('navigator', { locks: publishLocks });
     let uuidCounter = 0;
     mocks.randomUUID.mockImplementation(() => operationUUID(++uuidCounter));
     vi.stubGlobal('crypto', { randomUUID: mocks.randomUUID });
-    mocks.authStore = reactive({
-      isAuthenticated: true,
-      sessionID: 'session-7',
-      sessionVersion: 5,
-      currentIdentity: { id: 7, username: 'alice', display_name: 'Alice', avatar_url: '' },
-      syncCurrentIdentityProfile: vi.fn(),
-      captureRequestAuthBinding: () => {
-        const store = mocks.authStore;
-        if (!store.isAuthenticated || !store.sessionID || !store.currentIdentity?.id) return null;
-        return Object.freeze({
-          userID: store.currentIdentity.id,
-          sessionID: store.sessionID,
-          sessionVersion: store.sessionVersion,
-        });
-      },
-      matchesRequestAuthBinding: (binding: any) => {
-        const store = mocks.authStore;
-        return Boolean(store.isAuthenticated
-          && store.currentIdentity?.id === binding.userID
-          && store.sessionID === binding.sessionID
-          && store.sessionVersion === binding.sessionVersion);
-      },
-    });
+    mocks.authStore = createAuthStore();
     mocks.createPost.mockResolvedValue(publishedPost());
     mocks.refreshAndSyncPostQuoteCount.mockReset().mockResolvedValue(false);
     mocks.uploadPostMedia.mockImplementation(async (item: File) => `/media/${item.name}`);
@@ -273,23 +358,23 @@ describe('postPublish store', () => {
     });
     mocks.publishRecords.clear();
     mocks.getPostPublishOperation.mockImplementation(async (viewerID: number) => (
-      mocks.publishRecords.get(viewerID) || null
+      clonePublishRecord(mocks.publishRecords.get(viewerID) || null)
     ));
     mocks.claimPostPublishOperation.mockImplementation(async (record: any) => {
       const current = mocks.publishRecords.get(record.publisherUserID);
-      if (current) return { status: 'occupied', operation: current };
-      mocks.publishRecords.set(record.publisherUserID, record);
+      if (current) return { status: 'occupied', operation: clonePublishRecord(current) };
+      mocks.publishRecords.set(record.publisherUserID, clonePublishRecord(record));
       return { status: 'claimed' };
     });
     mocks.updatePostPublishOperationCheckpoint.mockImplementation(async (record: any) => {
       const current = mocks.publishRecords.get(record.publisherUserID);
       if (!current || current.id !== record.id) return false;
-      mocks.publishRecords.set(record.publisherUserID, {
+      mocks.publishRecords.set(record.publisherUserID, clonePublishRecord({
         ...record,
         media: record.media.map((metadata: any, index: number) => ({
           ...metadata, blob: mocks.publishRecords.get(record.publisherUserID).media[index].blob,
         })),
-      });
+      }));
       return true;
     });
     mocks.deletePostPublishOperation.mockImplementation(async (viewerID: number, operationID: string) => {
@@ -1280,43 +1365,387 @@ describe('postPublish store', () => {
     expect(mocks.publishRecords.has(7)).toBe(false);
   });
 
-  it('replays a recovered publishing operation with its original key and exact payload', async () => {
-    const oldRequest = deferred<Post>();
+  it('allows only one active tab to upload and publish a recovered operation', async () => {
+    const upload = deferred<string>();
+    mocks.uploadPostMedia.mockReturnValueOnce(upload.promise);
+    mocks.publishRecords.set(7, persistedPublishOperation({
+      id: operationUUID(902),
+      content: 'Recover in one tab',
+      phase: 'uploading',
+      media: [{ draftMediaID: 'media-one', file: file('one.png'), uploadedURL: '' }],
+    }));
+
+    const firstTab = createTabStore();
+    await firstTab.activateViewer(7);
+    await vi.waitFor(() => expect(mocks.uploadPostMedia).toHaveBeenCalledTimes(1));
+
+    const secondTab = createTabStore();
+    await secondTab.activateViewer(7);
+    await flushPromises();
+
+    expect(publishLocks.request).toHaveBeenCalledWith(
+      'exchange-post-publish:7',
+      { mode: 'exclusive' },
+      expect.any(Function),
+    );
+    expect(mocks.uploadPostMedia).toHaveBeenCalledTimes(1);
+    expect(mocks.createPost).not.toHaveBeenCalled();
+
+    upload.resolve('/media/one.png');
+    await vi.waitFor(() => expect(mocks.createPost).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(mocks.publishRecords.has(7)).toBe(false));
+
+    expect(mocks.uploadPostMedia).toHaveBeenCalledTimes(1);
+    expect(mocks.createPost).toHaveBeenCalledTimes(1);
+    expect(firstTab.latestOperation).toBeNull();
+    expect(secondTab.latestOperation).toBeNull();
+  });
+
+  it('does not replay a publishing operation from a second active tab', async () => {
+    const firstRequest = deferred<Post>();
+    mocks.createPost.mockReturnValue(firstRequest.promise);
+    const record = persistedPublishOperation({
+      id: operationUUID(903),
+      content: 'Active tabs share one request',
+      phase: 'publishing',
+      media: [
+        { draftMediaID: 'first', file: file('first.png'), uploadedURL: '/media/first.png' },
+        { draftMediaID: 'second', file: file('second.png'), uploadedURL: '/media/second.png' },
+      ],
+    });
+    mocks.publishRecords.set(7, record);
+
+    const firstTab = createTabStore();
+    await firstTab.activateViewer(7);
+    await vi.waitFor(() => expect(mocks.createPost).toHaveBeenCalledTimes(1));
+    const originalCall = mocks.createPost.mock.calls[0];
+
+    const secondTab = createTabStore();
+    await secondTab.activateViewer(7);
+    await flushPromises();
+
+    expect(mocks.createPost).toHaveBeenCalledTimes(1);
+    firstRequest.resolve(publishedPost());
+    await vi.waitFor(() => expect(mocks.publishRecords.has(7)).toBe(false));
+    await flushPromises();
+
+    expect(mocks.createPost).toHaveBeenCalledTimes(1);
+    expect(mocks.createPost.mock.calls[0]?.[0]).toEqual(originalCall?.[0]);
+  });
+
+  it('replays a publishing operation with its original key and payload after lock release', async () => {
+    const abandonedRequest = deferred<Post>();
     mocks.createPost
-      .mockReturnValueOnce(oldRequest.promise)
+      .mockReturnValueOnce(abandonedRequest.promise)
       .mockResolvedValueOnce(publishedPost());
     const draft = usePostDraftStore();
     draft.setContent('Replay exactly');
-    const image = file('already-uploaded.png');
-    const mediaID = draft.addMedia(image);
-    draft.setUploadedURL(mediaID, '/media/checkpointed.png');
-    const firstStore = usePostPublishStore();
-    const firstResult = await firstStore.startOrRetryDraft();
+    draft.setQuotePostID(42);
+    const firstImage = file('first.png');
+    const secondImage = file('second.png');
+    const firstMediaID = draft.addMedia(firstImage);
+    const secondMediaID = draft.addMedia(secondImage);
+    draft.setUploadedURL(firstMediaID, '/media/first.png');
+    draft.setUploadedURL(secondMediaID, '/media/second.png');
+    const firstTab = usePostPublishStore();
+    const firstResult = await firstTab.startOrRetryDraft();
     expect(firstResult.status).toBe('accepted');
     if (firstResult.status !== 'accepted') throw new Error('initial publish was not accepted');
     await vi.waitFor(() => expect(mocks.createPost).toHaveBeenCalledTimes(1));
     const originalCall = mocks.createPost.mock.calls[0];
 
-    // A new Pinia instance models a hard refresh: only IndexedDB remains.
-    setActivePinia(createPinia());
-    mocks.authStore.sessionVersion = 42;
-    usePostDraftStore().setViewer(7);
-    const recoveredStore = usePostPublishStore();
-    await recoveredStore.activateViewer(7);
-    await flushPromises();
+    // Simulate the first tab terminating while the POST is unresolved.
+    publishLocks.forceRelease('exchange-post-publish:7');
+    const recoveredTab = createTabStore();
+    await recoveredTab.activateViewer(7);
+    await vi.waitFor(() => expect(mocks.createPost).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(mocks.publishRecords.has(7)).toBe(false));
 
-    expect(mocks.createPost).toHaveBeenCalledTimes(2);
     expect(mocks.createPost.mock.calls[1]?.[0]).toEqual(originalCall?.[0]);
     expect(mocks.createPost.mock.calls[1]?.[1]).toEqual(expect.objectContaining({
       idempotencyKey: firstResult.operation.id,
-      authBinding: { userID: 7, sessionID: 'session-7', sessionVersion: 42 },
+      authBinding: expect.objectContaining({ userID: 7, sessionID: 'session-7' }),
     }));
-    expect(recoveredStore.latestOperation).toBeNull();
-    expect(recoveredStore.currentSuccessNotice).toMatchObject({
+    expect(recoveredTab.latestOperation).toBeNull();
+    expect(recoveredTab.currentSuccessNotice).toMatchObject({
       operationID: firstResult.operation.id,
       publisherUserID: 7,
       postID: publishedPost().id,
     });
+  });
+
+  it('reuses an uploaded URL checkpoint when another tab recovers after termination', async () => {
+    const upload = deferred<string>();
+    const firstRequest = deferred<Post>();
+    mocks.uploadPostMedia.mockReturnValueOnce(upload.promise);
+    mocks.createPost
+      .mockReturnValueOnce(firstRequest.promise)
+      .mockResolvedValueOnce(publishedPost());
+    mocks.publishRecords.set(7, persistedPublishOperation({
+      id: operationUUID(904),
+      content: 'Resume from uploaded media',
+      phase: 'uploading',
+      media: [{ draftMediaID: 'media-one', file: file('one.png'), uploadedURL: '' }],
+    }));
+
+    const firstTab = createTabStore();
+    await firstTab.activateViewer(7);
+    await vi.waitFor(() => expect(mocks.uploadPostMedia).toHaveBeenCalledTimes(1));
+    upload.resolve('/media/checkpointed.png');
+    await vi.waitFor(() => expect(mocks.createPost).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(mocks.publishRecords.get(7)?.media[0]?.uploadedURL)
+      .toBe('/media/checkpointed.png'));
+    const originalCall = mocks.createPost.mock.calls[0];
+
+    publishLocks.forceRelease('exchange-post-publish:7');
+    const recoveredTab = createTabStore();
+    await recoveredTab.activateViewer(7);
+    await vi.waitFor(() => expect(mocks.createPost).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(mocks.publishRecords.has(7)).toBe(false));
+
+    expect(mocks.uploadPostMedia).toHaveBeenCalledTimes(1);
+    expect(mocks.createPost.mock.calls[1]?.[0]).toEqual(originalCall?.[0]);
+    expect(mocks.createPost.mock.calls[1]?.[1]).toEqual(expect.objectContaining({
+      idempotencyKey: operationUUID(904),
+    }));
+  });
+
+  it('does not let a waiting tab retry over the current durable phase', async () => {
+    const operation = persistedFailedOperation({
+      id: operationUUID(905),
+      content: 'Cross-tab retry',
+    });
+    mocks.publishRecords.set(7, operation);
+    const firstTab = createTabStore();
+    const secondTab = createTabStore();
+    await Promise.all([firstTab.activateViewer(7), secondTab.activateViewer(7)]);
+    const request = deferred<Post>();
+    mocks.createPost.mockReturnValueOnce(request.promise);
+
+    await expect(firstTab.retry(operation.id)).resolves.toBe(true);
+    await vi.waitFor(() => expect(mocks.createPost).toHaveBeenCalledTimes(1));
+    const checkpointCount = mocks.updatePostPublishOperationCheckpoint.mock.calls.length;
+    const secondRetry = secondTab.retry(operation.id);
+    await flushPromises();
+
+    expect(secondTab.latestOperation?.phase).toBe('failed');
+    expect(mocks.publishRecords.get(7)?.phase).toBe('publishing');
+    expect(mocks.updatePostPublishOperationCheckpoint).toHaveBeenCalledTimes(checkpointCount);
+    expect(mocks.createPost).toHaveBeenCalledTimes(1);
+
+    request.resolve(publishedPost());
+    await vi.waitFor(() => expect(mocks.publishRecords.has(7)).toBe(false));
+    await expect(secondRetry).resolves.toBe(false);
+    expect(mocks.createPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a waiting tab abandon a retry that is publishing', async () => {
+    const operation = persistedFailedOperation({
+      id: operationUUID(906),
+      content: 'Retry and abandon race',
+    });
+    mocks.publishRecords.set(7, operation);
+    const firstTab = createTabStore();
+    const secondTab = createTabStore();
+    await Promise.all([firstTab.activateViewer(7), secondTab.activateViewer(7)]);
+    const request = deferred<Post>();
+    mocks.createPost.mockReturnValueOnce(request.promise);
+
+    await expect(firstTab.retry(operation.id)).resolves.toBe(true);
+    await vi.waitFor(() => expect(mocks.createPost).toHaveBeenCalledTimes(1));
+    const abandon = secondTab.abandonFailedOperation(operation.id);
+    await flushPromises();
+
+    expect(mocks.deletePostPublishOperation).not.toHaveBeenCalled();
+    expect(mocks.publishRecords.get(7)?.phase).toBe('publishing');
+
+    request.resolve(publishedPost());
+    await vi.waitFor(() => expect(mocks.publishRecords.has(7)).toBe(false));
+    await expect(abandon).resolves.toBe(false);
+    expect(mocks.deletePostPublishOperation).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not automatically retry a failure observed by the next waiting tab', async () => {
+    const request = deferred<Post>();
+    mocks.createPost.mockReturnValueOnce(request.promise);
+    mocks.publishRecords.set(7, persistedPublishOperation({
+      id: operationUUID(907),
+      content: 'Failure while another tab waits',
+      phase: 'publishing',
+    }));
+    const firstTab = createTabStore();
+    await firstTab.activateViewer(7);
+    await vi.waitFor(() => expect(mocks.createPost).toHaveBeenCalledTimes(1));
+    const secondTab = createTabStore();
+    await secondTab.activateViewer(7);
+
+    request.reject(new Error('offline'));
+    await vi.waitFor(() => expect(mocks.publishRecords.get(7)?.phase).toBe('failed'));
+    await flushPromises();
+
+    expect(secondTab.latestOperation).toMatchObject({
+      id: operationUUID(907),
+      phase: 'failed',
+      failureKind: 'retryable',
+    });
+    expect(mocks.createPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('rechecks the session after a waiting tab acquires the user lock', async () => {
+    const firstRequest = deferred<Post>();
+    mocks.createPost.mockReturnValueOnce(firstRequest.promise);
+    mocks.publishRecords.set(7, persistedPublishOperation({
+      id: operationUUID(908),
+      content: 'Session checked after lock',
+      phase: 'publishing',
+    }));
+    const firstTab = createTabStore();
+    await firstTab.activateViewer(7);
+    await vi.waitFor(() => expect(mocks.createPost).toHaveBeenCalledTimes(1));
+
+    mocks.authStore = createAuthStore(7, 'session-7', 5);
+    const waitingTab = createTabStore();
+    await waitingTab.activateViewer(7);
+    await vi.waitFor(() => expect(publishLocks.pendingCount('exchange-post-publish:7')).toBe(1));
+    mocks.authStore.sessionID = 'session-8';
+    publishLocks.forceRelease('exchange-post-publish:7');
+
+    await vi.waitFor(() => expect(mocks.publishRecords.get(7)).toMatchObject({
+      id: operationUUID(908),
+      phase: 'failed',
+      failureKind: 'auth_context_changed',
+    }));
+    expect(mocks.createPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed when the locked IndexedDB read fails', async () => {
+    let readCount = 0;
+    mocks.getPostPublishOperation.mockImplementation(async () => {
+      readCount += 1;
+      if (readCount === 2) throw new Error('storage became unavailable');
+      return null;
+    });
+    const draft = usePostDraftStore();
+    draft.setContent('Keep draft on read failure');
+    draft.addMedia(file('pending.png'));
+    const store = usePostPublishStore();
+
+    await expect(store.startOrRetryDraft()).resolves.toEqual({
+      status: 'rejected',
+      reason: 'persistence_unavailable',
+    });
+
+    expect(mocks.claimPostPublishOperation).not.toHaveBeenCalled();
+    expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
+    expect(mocks.createPost).not.toHaveBeenCalled();
+    expect(draft.content).toBe('Keep draft on read failure');
+    expect(mocks.publishRecords.has(7)).toBe(false);
+  });
+
+  it('does not execute a queued stale operation after its durable ID is replaced', async () => {
+    const hold = deferred<void>();
+    const blocker = withPostPublishExecutionLock(7, () => hold.promise);
+    await flushPromises();
+    const old = persistedPublishOperation({
+      id: operationUUID(909),
+      content: 'Old operation',
+      phase: 'publishing',
+    });
+    mocks.publishRecords.set(7, old);
+    const store = createTabStore();
+    await store.activateViewer(7);
+    await vi.waitFor(() => expect(publishLocks.pendingCount('exchange-post-publish:7')).toBe(1));
+
+    mocks.publishRecords.set(7, persistedFailedOperation({
+      id: operationUUID(910),
+      content: 'Replacement operation',
+    }));
+    hold.resolve();
+    await blocker;
+    await flushPromises();
+
+    expect(store.latestOperation).toMatchObject({
+      id: operationUUID(910),
+      phase: 'failed',
+    });
+    expect(mocks.publishRecords.get(7)?.id).toBe(operationUUID(910));
+    expect(mocks.createPost).not.toHaveBeenCalled();
+    expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when Web Locks are missing or rejected', async () => {
+    const draft = usePostDraftStore();
+    draft.setContent('Preserve when locks fail');
+    draft.addMedia(file('pending.png'));
+    const store = usePostPublishStore();
+
+    vi.stubGlobal('navigator', {});
+    await expect(store.startOrRetryDraft()).resolves.toEqual({
+      status: 'rejected',
+      reason: 'coordination_unavailable',
+    });
+    expect(store.recoveryError).toContain('cannot safely coordinate publishing across tabs');
+    expect(mocks.claimPostPublishOperation).not.toHaveBeenCalled();
+    expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
+    expect(mocks.createPost).not.toHaveBeenCalled();
+    expect(draft.content).toBe('Preserve when locks fail');
+
+    vi.stubGlobal('navigator', { locks: publishLocks });
+    publishLocks.request.mockRejectedValueOnce(new Error('lock request rejected'));
+    await expect(store.startOrRetryDraft()).resolves.toEqual({
+      status: 'rejected',
+      reason: 'coordination_unavailable',
+    });
+    expect(mocks.claimPostPublishOperation).not.toHaveBeenCalled();
+    expect(mocks.uploadPostMedia).not.toHaveBeenCalled();
+    expect(mocks.createPost).not.toHaveBeenCalled();
+  });
+
+  it('allows a different viewer to publish while the first viewer is locked', async () => {
+    const firstRequest = deferred<Post>();
+    mocks.createPost
+      .mockReturnValueOnce(firstRequest.promise)
+      .mockResolvedValueOnce(publishedPost(8));
+    const firstDraft = usePostDraftStore();
+    firstDraft.setContent('Viewer seven');
+    const firstTab = usePostPublishStore();
+    const firstStart = await firstTab.startOrRetryDraft();
+    expect(firstStart.status).toBe('accepted');
+    await vi.waitFor(() => expect(mocks.createPost).toHaveBeenCalledTimes(1));
+
+    mocks.authStore = createAuthStore(8, 'session-8', 5);
+    const secondDraft = createTabStore(8);
+    usePostDraftStore().setContent('Viewer eight');
+    const secondStart = await secondDraft.startOrRetryDraft();
+    expect(secondStart.status).toBe('accepted');
+    await vi.waitFor(() => expect(mocks.publishRecords.has(8)).toBe(false));
+
+    expect(publishLocks.request.mock.calls.map(call => call[0])).toContain('exchange-post-publish:7');
+    expect(publishLocks.request.mock.calls.map(call => call[0])).toContain('exchange-post-publish:8');
+    expect(mocks.createPost).toHaveBeenCalledTimes(2);
+    firstRequest.resolve(publishedPost());
+    await flushPromises();
+  });
+
+  it('queues repeated recovery calls only once in the same tab', async () => {
+    const request = deferred<Post>();
+    mocks.createPost.mockReturnValueOnce(request.promise);
+    mocks.publishRecords.set(7, persistedPublishOperation({
+      id: operationUUID(911),
+      content: 'Deduplicate recovery scheduling',
+      phase: 'publishing',
+    }));
+    const store = createTabStore();
+    await store.activateViewer(7);
+    await vi.waitFor(() => expect(mocks.createPost).toHaveBeenCalledTimes(1));
+
+    await Promise.all([store.activateViewer(7), store.activateViewer(7)]);
+    await flushPromises();
+
+    expect(publishLocks.request).toHaveBeenCalledTimes(1);
+    expect(mocks.createPost).toHaveBeenCalledTimes(1);
+    request.resolve(publishedPost());
+    await vi.waitFor(() => expect(mocks.publishRecords.has(7)).toBe(false));
   });
 
   it('scopes the visible operation to the authenticated viewer and hides it while logged out', async () => {
@@ -2127,7 +2556,8 @@ describe('postPublish store', () => {
 
     await expect(store.abandonFailedOperation(first.id)).resolves.toBe(false);
     expect(mocks.publishRecords.get(7)?.id).toBe(operationUUID(908));
-    expect(store.getOperation(first.id)?.phase).toBe('failed');
+    expect(store.getOperation(first.id)).toBeUndefined();
+    expect(store.latestOperation?.id).toBe(operationUUID(908));
     await expect(store.startOrRetryDraft()).resolves.toEqual({
       status: 'blocked',
       reason: 'unresolved_publish',

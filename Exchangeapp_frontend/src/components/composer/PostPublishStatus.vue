@@ -60,7 +60,9 @@ const message = computed(() => {
     case 'publishing':
       return 'Posting...';
     case 'failed':
-      return operation.value?.error || 'Couldn’t confirm this post.';
+      return postPublishStore.recoveryError
+        || operation.value?.error
+        || 'Couldn’t confirm this post.';
     case 'succeeded':
       return 'Post sent. Finishing cleanup...';
     default:

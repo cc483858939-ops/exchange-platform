@@ -1326,9 +1326,11 @@ const submitPost = async () => {
     publishPreparing.value = false;
   }
   if (result.status === 'rejected') {
-    publishError.value = result.reason === 'persistence_unavailable'
-      ? 'Couldn’t prepare this post for reliable sending. Your draft was preserved. Try again.'
-      : 'Your account could not be verified. Your draft was preserved.';
+    publishError.value = result.reason === 'coordination_unavailable'
+      ? 'This browser cannot safely coordinate publishing across tabs. Publishing is paused; use a browser that supports cross-tab locks and try again.'
+      : result.reason === 'persistence_unavailable'
+        ? 'Couldn’t prepare this post for reliable sending. Your draft was preserved. Try again.'
+        : 'Your account could not be verified. Your draft was preserved.';
     return;
   }
   if (result.status === 'blocked') {

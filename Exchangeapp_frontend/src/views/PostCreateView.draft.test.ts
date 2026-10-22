@@ -177,12 +177,26 @@ const deferred = <T,>() => {
   return { promise, resolve };
 };
 
+const testPublishLocks = {
+  request: async <T>(
+    _name: string,
+    _options: { mode: 'exclusive' },
+    callback: () => T | Promise<T>,
+  ) => callback(),
+};
+
 describe('PostCreateView durable drafts and exit protection', () => {
   let wrapper: VueWrapper | null = null;
 
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
+    vi.stubGlobal('navigator', new Proxy(navigator, {
+      get(target, property) {
+        if (property === 'locks') return testPublishLocks;
+        return Reflect.get(target, property, target);
+      },
+    }));
     mocks.drafts.clear();
     mocks.publishOperations.clear();
     mocks.route.name = 'PostCreate';

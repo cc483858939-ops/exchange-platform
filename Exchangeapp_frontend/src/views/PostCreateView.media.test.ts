@@ -170,6 +170,14 @@ const deferred = <T,>() => {
   return { promise, resolve, reject };
 };
 
+const testPublishLocks = {
+  request: async <T>(
+    _name: string,
+    _options: { mode: 'exclusive' },
+    callback: () => T | Promise<T>,
+  ) => callback(),
+};
+
 describe('PostCreateView media picker and retry behavior', () => {
   let wrapper: VueWrapper | null = null;
   let previewURLCounter = 0;
@@ -177,6 +185,12 @@ describe('PostCreateView media picker and retry behavior', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
+    vi.stubGlobal('navigator', new Proxy(navigator, {
+      get(target, property) {
+        if (property === 'locks') return testPublishLocks;
+        return Reflect.get(target, property, target);
+      },
+    }));
     previewURLCounter = 0;
     mocks.createLocalImagePreviewGenerator.mockReturnValue(mocks.previewGenerator);
     mocks.previewGenerator.generate.mockImplementation(async (file: File) => ({
@@ -883,7 +897,13 @@ describe('PostCreateView media picker and retry behavior', () => {
   it('locks the composer during durable preflight and only suppresses unload after acceptance', async () => {
     const persistence = deferred<{ status: 'claimed' }>();
     const postRequest = deferred<ReturnType<typeof publishedPost>>();
-    mocks.claimPostPublishOperation.mockReturnValueOnce(persistence.promise);
+    mocks.claimPostPublishOperation.mockImplementationOnce(async (record: any) => {
+      const result = await persistence.promise;
+      if (result.status === 'claimed') {
+        mocks.publishRecords.set(record.publisherUserID, record);
+      }
+      return result;
+    });
     mocks.createPost.mockReturnValue(postRequest.promise);
     wrapper = mountPage();
     await wrapper.get('#post-content').setValue('Reliable send');

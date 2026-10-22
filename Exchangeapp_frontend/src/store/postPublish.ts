@@ -45,6 +45,10 @@ import {
   captureBookmarkStateSyncVersion,
   syncHydratedPostBookmarkState,
 } from './sessionSync';
+import {
+  PublishCoordinationUnavailableError,
+  withPostPublishExecutionLock,
+} from '../utils/postPublishExecutionLock';
 
 export type PublishPhase = PersistedPublishPhase;
 export type PublishFailureKind = PersistedPublishFailureKind;
@@ -76,7 +80,7 @@ export type StartPublishResult =
   }
   | {
     status: 'rejected';
-    reason: 'unauthenticated' | 'persistence_unavailable';
+    reason: 'unauthenticated' | 'persistence_unavailable' | 'coordination_unavailable';
   };
 
 const mediaUploadConcurrency = 2;
@@ -84,6 +88,7 @@ const publishSuccessNoticeDurationMs = 4000;
 const publishFailureMessage = 'Couldn’t confirm this post. Retry safely.';
 const publishPersistenceMessage = 'Couldn’t save publish progress on this device. Retry.';
 const publishRecoveryUnavailableMessage = 'Couldn’t restore the pending post from this device. Publishing is paused to prevent duplicate submissions.';
+const publishCoordinationUnavailableMessage = 'This browser cannot safely coordinate publishing across tabs. Publishing is paused; use a browser that supports cross-tab locks and try again.';
 const publishConflictMessage = 'This post can’t be retried safely.';
 const publishMentionLimitMessage = 'A post can mention at most 5 different valid users. Edit the draft before trying again.';
 
@@ -97,6 +102,11 @@ class PublishAuthContextChangedError extends Error {
 }
 
 type SuccessCleanupResult = 'resolved' | 'pending';
+
+type LockedStart<T> = {
+  result: T;
+  completion?: () => Promise<void>;
+};
 
 const normalizeViewerID = (value: unknown) => (
   typeof value === 'number'
@@ -117,6 +127,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
   const unresolvedOperationByViewer = ref(new Map<number, string>());
   const runningOperationIDs = new Set<string>();
   const abandoningOperationIDs = new Set<string>();
+  const startingViewerIDs = new Set<number>();
   let successNoticeTimer: ReturnType<typeof setTimeout> | null = null;
   const hydrationPromises = new Map<number, Promise<void>>();
   const hydratedViewerIDs = new Set<number>();
@@ -206,6 +217,39 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     );
   };
 
+  const setCoordinationUnavailable = (viewerID: number) => {
+    recoveryErrors.value.set(viewerID, publishCoordinationUnavailableMessage);
+  };
+
+  const setRecoveryUnavailable = (viewerID: number) => {
+    recoveryErrors.value.set(viewerID, publishRecoveryUnavailableMessage);
+  };
+
+  const withLockedStartResult = <T>(
+    viewerID: number,
+    prepare: () => Promise<LockedStart<T>>,
+    onReleased?: () => void,
+  ): Promise<T> => new Promise<T>((resolve, reject) => {
+    let resultSettled = false;
+    const execution = withPostPublishExecutionLock(viewerID, async () => {
+      const started = await prepare();
+      resultSettled = true;
+      resolve(started.result);
+      if (started.completion) await started.completion();
+    });
+
+    void execution
+      .catch(error => {
+        if (!resultSettled) {
+          resultSettled = true;
+          reject(error);
+        } else {
+          setRecoveryUnavailable(viewerID);
+        }
+      })
+      .finally(() => onReleased?.());
+  });
+
   const latestOperation = computed<PublishOperation | null>(() => {
     const viewerID = currentViewerID();
     if (viewerID === null) return null;
@@ -230,10 +274,15 @@ export const usePostPublishStore = defineStore('postPublish', () => {
   });
 
   const upsertOperation = (operation: PublishOperation) => {
+    const existing = getViewerOperation(operation.publisherUserID);
+    const current = existing?.id === operation.id && existing !== operation
+      ? Object.assign(existing, operation)
+      : operation;
     operations.value = [
-      ...operations.value.filter(item => item.publisherUserID !== operation.publisherUserID),
-      operation,
+      ...operations.value.filter(item => item.publisherUserID !== current.publisherUserID),
+      current,
     ];
+    return current;
   };
 
   const isInFlight = (operation: PublishOperation) => (
@@ -416,7 +465,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     }
   };
 
-  const finalizeSuccessfulOperation = async (
+  const finalizeSuccessfulOperationUnderLock = async (
     operation: PublishOperation,
     post: Post,
   ): Promise<SuccessCleanupResult> => {
@@ -527,13 +576,63 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     await persistBestEffort(operation);
   };
 
-  const runOperation = async (operation: PublishOperation) => {
-    if (runningOperationIDs.has(operation.id)) return;
-    runningOperationIDs.add(operation.id);
+  const readLatestOperationUnderLock = async (
+    viewerID: number,
+    expectedOperationID?: string,
+  ): Promise<PublishOperation | null> => {
+    let persisted: Awaited<ReturnType<typeof getPostPublishOperation>>;
+    try {
+      persisted = await getPostPublishOperation(viewerID);
+    } catch (error) {
+      throw new PublishPersistenceError(
+        error instanceof Error ? error.message : 'Could not read publish storage.',
+      );
+    }
+
+    if (!persisted) {
+      const previous = getViewerOperation(viewerID);
+      if (previous && (!expectedOperationID || previous.id === expectedOperationID)) {
+        releaseOperationOwnership(viewerID, previous.id);
+        postDraft.releasePublishOperationBinding(previous.id, viewerID);
+        removeOperationIfCurrent(viewerID, previous.id);
+      }
+      recoveryErrors.value.delete(viewerID);
+      return null;
+    }
+    if (persisted.publisherUserID !== viewerID) {
+      throw new PublishPersistenceError('The saved publish operation belongs to another viewer.');
+    }
+
+    const latest = restorePublishOperation(persisted) as PublishOperation;
+    if (latest.phase === 'succeeded' && !latest.post) {
+      throw new PublishPersistenceError('The successful publish record is incomplete.');
+    }
+
+    const previous = getViewerOperation(viewerID);
+    if (expectedOperationID && latest.id !== expectedOperationID) {
+      if (previous?.id === expectedOperationID) {
+        postDraft.releasePublishOperationBinding(expectedOperationID, viewerID);
+      }
+      const replacement = upsertOperation(latest);
+      markOperationUnresolved(replacement);
+      recoveryErrors.value.delete(viewerID);
+      return null;
+    }
+
+    const current = upsertOperation(latest);
+    markOperationUnresolved(current);
+    recoveryErrors.value.delete(viewerID);
+    return current;
+  };
+
+  const executeOperationUnderLock = async (operation: PublishOperation) => {
     let posting = false;
     try {
-      if (operation.media.some(media => !media.uploadedURL)) {
-        operation.phase = 'uploading';
+      if (operation.phase !== 'uploading' && operation.phase !== 'publishing') return;
+      if (!operationMatchesCurrentSession(operation)) {
+        throw new PublishAuthContextChangedError();
+      }
+      if (operation.phase === 'uploading') {
         await uploadPendingMedia(operation);
       }
       if (operation.media.some(media => !media.uploadedURL.trim())) {
@@ -566,7 +665,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       operation.phase = 'succeeded';
       // If this checkpoint fails, keep the in-memory result successful and continue cleanup.
       await persistBestEffort(operation);
-      await finalizeSuccessfulOperation(operation, post);
+      await finalizeSuccessfulOperationUnderLock(operation, post);
     } catch (error) {
       if (error instanceof SupersededPublishOperationError) return;
       const conflict = posting && isPostIdempotencyConflictError(error);
@@ -583,26 +682,84 @@ export const usePostPublishStore = defineStore('postPublish', () => {
             ? 'idempotency_conflict'
             : mentionLimit ? 'validation_error' : 'retryable',
       );
+    }
+  };
+
+  const executeTrackedOperationUnderLock = async (operation: PublishOperation) => {
+    runningOperationIDs.add(operation.id);
+    try {
+      await executeOperationUnderLock(operation);
     } finally {
       runningOperationIDs.delete(operation.id);
     }
+  };
+
+  const runOperation = (operation: PublishOperation) => {
+    if (runningOperationIDs.has(operation.id)) return;
+    runningOperationIDs.add(operation.id);
+    let replacementOperationID: string | null = null;
+
+    const execution = withPostPublishExecutionLock(operation.publisherUserID, async () => {
+      const latest = await readLatestOperationUnderLock(operation.publisherUserID, operation.id);
+      if (!latest) {
+        const replacement = getViewerOperation(operation.publisherUserID);
+        if (replacement && replacement.id !== operation.id) {
+          replacementOperationID = replacement.id;
+        }
+        return;
+      }
+
+      if (latest.phase === 'uploading' || latest.phase === 'publishing') {
+        if (!operationMatchesCurrentSession(latest)) {
+          await markFailed(latest, new PublishAuthContextChangedError(), 'auth_context_changed');
+          return;
+        }
+        await executeOperationUnderLock(latest);
+      } else if (latest.phase === 'succeeded' && latest.post) {
+        await finalizeSuccessfulOperationUnderLock(latest, latest.post);
+      } else if (
+        canAbandonDurableSubmission(latest.phase, latest.failureKind)
+        && !operationMatchesCurrentSession(latest)
+      ) {
+        await markFailed(latest, new PublishAuthContextChangedError(), 'auth_context_changed');
+      }
+    });
+
+    void execution
+      .catch(error => {
+        if (error instanceof PublishCoordinationUnavailableError) {
+          setCoordinationUnavailable(operation.publisherUserID);
+        } else {
+          setRecoveryUnavailable(operation.publisherUserID);
+        }
+      })
+      .finally(() => {
+        runningOperationIDs.delete(operation.id);
+        if (replacementOperationID) {
+          const replacement = getOperation(replacementOperationID);
+          if (replacement && (
+            isInFlight(replacement)
+            || replacement.phase === 'succeeded'
+            || (canAbandonDurableSubmission(replacement.phase, replacement.failureKind)
+              && !operationMatchesCurrentSession(replacement))
+          )) {
+            runOperation(replacement);
+          }
+        }
+      });
   };
 
   const resumeCurrentViewerOperation = (viewerID: number) => {
     if (currentViewerID() !== viewerID) return;
     const operation = getViewerOperation(viewerID);
     if (!operation) return;
-    if (operation.phase === 'succeeded' && operation.post) {
-      void finalizeSuccessfulOperation(operation, operation.post);
-    } else if (operation.phase === 'uploading' || operation.phase === 'publishing') {
-      if (!operationMatchesCurrentSession(operation)) {
-        void markFailed(operation, new PublishAuthContextChangedError(), 'auth_context_changed');
-      } else {
-        void runOperation(operation);
-      }
-    } else if (canRetryDurableSubmission(operation.phase, operation.failureKind)
-      && !operationMatchesCurrentSession(operation)) {
-      void markFailed(operation, new PublishAuthContextChangedError(), 'auth_context_changed');
+    if (
+      isInFlight(operation)
+      || operation.phase === 'succeeded'
+      || (canAbandonDurableSubmission(operation.phase, operation.failureKind)
+        && !operationMatchesCurrentSession(operation))
+    ) {
+      runOperation(operation);
     }
   };
 
@@ -628,17 +785,15 @@ export const usePostPublishStore = defineStore('postPublish', () => {
           if (operation.phase === 'succeeded' && !operation.post) {
             throw new Error('The successful publish record is incomplete.');
           }
-          if (operation.phase !== 'succeeded' && !operationMatchesCurrentSession(operation)) {
-            operation.phase = 'failed';
-            operation.failureKind = 'auth_context_changed';
-            operation.error = publishFailureMessage;
-          }
           markOperationUnresolved(operation);
           upsertOperation(operation);
           recoveryErrors.value.delete(viewerID);
-          if (operation.phase === 'succeeded' && operation.post) {
-            await finalizeSuccessfulOperation(operation, operation.post);
-          } else if (operation.phase === 'uploading' || operation.phase === 'publishing') {
+          if (
+            isInFlight(operation)
+            || operation.phase === 'succeeded'
+            || (canAbandonDurableSubmission(operation.phase, operation.failureKind)
+              && !operationMatchesCurrentSession(operation))
+          ) {
             resumeCurrentViewerOperation(viewerID);
           }
         } else {
@@ -669,11 +824,9 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     }
   };
 
-  const retry = async (operationID: string): Promise<boolean> => {
-    const operation = getOperation(operationID);
+  const prepareRetryUnderLock = async (operation: PublishOperation): Promise<boolean> => {
     if (
-      !operation
-      || !canRetryDurableSubmission(operation.phase, operation.failureKind)
+      !canRetryDurableSubmission(operation.phase, operation.failureKind)
       || currentViewerID() !== operation.publisherUserID
       || unresolvedOperationByViewer.value.get(operation.publisherUserID) !== operation.id
       || abandoningOperationIDs.has(operation.id)
@@ -690,8 +843,8 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       && isInFlight(candidate)
     ));
     if (conflictingInFlight) return false;
-    const shouldRebindCurrentDraft = draftMatchesOperation(operation);
 
+    const shouldRebindCurrentDraft = draftMatchesOperation(operation);
     const previous = {
       phase: operation.phase,
       failureKind: operation.failureKind,
@@ -714,8 +867,150 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     if (shouldRebindCurrentDraft) {
       postDraft.bindPublishOperation(operation.id);
     }
-    void runOperation(operation);
+    upsertOperation(operation);
     return true;
+  };
+
+  const retry = async (operationID: string): Promise<boolean> => {
+    const operation = getOperation(operationID);
+    if (
+      !operation
+      || !canRetryDurableSubmission(operation.phase, operation.failureKind)
+      || currentViewerID() !== operation.publisherUserID
+      || unresolvedOperationByViewer.value.get(operation.publisherUserID) !== operation.id
+      || runningOperationIDs.has(operation.id)
+      || abandoningOperationIDs.has(operation.id)
+    ) {
+      return false;
+    }
+    const conflictingInFlight = operations.value.find(candidate => (
+      candidate.id !== operation.id
+      && candidate.publisherUserID === operation.publisherUserID
+      && isInFlight(candidate)
+    ));
+    if (conflictingInFlight) return false;
+
+    runningOperationIDs.add(operation.id);
+    try {
+      return await withLockedStartResult(
+        operation.publisherUserID,
+        async () => {
+          const latest = await readLatestOperationUnderLock(
+            operation.publisherUserID,
+            operation.id,
+          );
+          if (!latest || !(await prepareRetryUnderLock(latest))) {
+            return { result: false };
+          }
+          return {
+            result: true,
+            completion: () => executeOperationUnderLock(latest),
+          };
+        },
+        () => runningOperationIDs.delete(operation.id),
+      );
+    } catch (error) {
+      if (error instanceof PublishCoordinationUnavailableError) {
+        setCoordinationUnavailable(operation.publisherUserID);
+      } else {
+        setRecoveryUnavailable(operation.publisherUserID);
+      }
+      return false;
+    }
+  };
+
+  const createOperationFromCurrentDraft = (
+    authBinding: AuthRequestBinding,
+  ): PublishOperation => {
+    const sourceDraft: PublishSourceDraft = postDraft.isSavedDraft
+      && !postDraft.hasUnsavedChanges
+      && postDraft.draftID !== null
+      && postDraft.savedSnapshot !== null
+      ? {
+        sourceDraftID: postDraft.draftID,
+        sourceDraftSnapshot: createPostDraftSnapshot(
+          postDraft.savedSnapshot.content,
+          postDraft.savedSnapshot.media,
+          postDraft.savedSnapshot.quotePostID,
+        ),
+      }
+      : { sourceDraftID: null, sourceDraftSnapshot: null };
+    return {
+      ...sourceDraft,
+      id: createClientOperationID(),
+      publisherUserID: authBinding.userID,
+      publisherSessionID: authBinding.sessionID,
+      content: postDraft.content.trim(),
+      quotePostID: postDraft.quotePostID,
+      media: postDraft.media.map(media => ({
+        draftMediaID: media.id,
+        file: media.file,
+        uploadedURL: media.uploadedURL.trim(),
+      })),
+      phase: postDraft.media.some(media => !media.uploadedURL.trim()) ? 'uploading' : 'publishing',
+      failureKind: null,
+      error: '',
+      startedAt: Date.now(),
+      post: null,
+    };
+  };
+
+  const handleExistingOperationUnderLock = async (
+    operation: PublishOperation,
+  ): Promise<LockedStart<StartPublishResult> | null> => {
+    if (operation.phase === 'succeeded') {
+      if (!operation.post) setRecoveryUnavailable(operation.publisherUserID);
+      else await finalizeSuccessfulOperationUnderLock(operation, operation.post);
+      return {
+        result: operation.post
+          ? { status: 'blocked', reason: 'cleanup_pending' }
+          : { status: 'rejected', reason: 'persistence_unavailable' },
+      };
+    }
+
+    if (isInFlight(operation)) {
+      if (!operationMatchesCurrentSession(operation)) {
+        await markFailed(operation, new PublishAuthContextChangedError(), 'auth_context_changed');
+        return { result: { status: 'blocked', reason: 'unresolved_publish' } };
+      }
+      const sameBoundSubmission = postDraft.publishOperationID === operation.id
+        && draftMatchesOperation(operation);
+      return {
+        result: sameBoundSubmission
+          ? { status: 'accepted', operation }
+          : { status: 'blocked', reason: 'another_publish_in_flight' },
+      };
+    }
+
+    if (operation.phase === 'failed') {
+      if (!operationMatchesCurrentSession(operation)) {
+        await markFailed(operation, new PublishAuthContextChangedError(), 'auth_context_changed');
+        return { result: { status: 'blocked', reason: 'unresolved_publish' } };
+      }
+      const sameSubmission = draftMatchesOperation(operation);
+      if (operation.failureKind === 'idempotency_conflict') {
+        return {
+          result: {
+            status: 'blocked',
+            reason: sameSubmission ? 'idempotency_conflict' : 'unresolved_publish',
+          },
+        };
+      }
+      if (!sameSubmission || !canRetryDurableSubmission(operation.phase, operation.failureKind)) {
+        return { result: { status: 'blocked', reason: 'unresolved_publish' } };
+      }
+      if (!(await prepareRetryUnderLock(operation))) {
+        return operation.error === publishPersistenceMessage
+          ? { result: { status: 'rejected', reason: 'persistence_unavailable' } }
+          : { result: { status: 'blocked', reason: 'another_publish_in_flight' } };
+      }
+      return {
+        result: { status: 'accepted', operation },
+        completion: () => executeTrackedOperationUnderLock(operation),
+      };
+    }
+
+    return { result: { status: 'blocked', reason: 'unresolved_publish' } };
   };
 
   const startOrRetryDraft = async (): Promise<StartPublishResult> => {
@@ -742,9 +1037,11 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       // The durable owner must be represented in memory before a new key can be made.
       return { status: 'blocked', reason: 'unresolved_publish' };
     }
-
     if (unresolvedOperation) {
       if (isInFlight(unresolvedOperation)) {
+        if (recoveryErrors.value.get(publisherUserID) === publishCoordinationUnavailableMessage) {
+          return { status: 'rejected', reason: 'coordination_unavailable' };
+        }
         if (
           postDraft.publishOperationID === unresolvedOperation.id
           && draftMatchesOperation(unresolvedOperation)
@@ -753,155 +1050,104 @@ export const usePostPublishStore = defineStore('postPublish', () => {
         }
         return { status: 'blocked', reason: 'another_publish_in_flight' };
       }
-
-      if (unresolvedOperation.phase === 'failed') {
-        if (abandoningOperationIDs.has(unresolvedOperation.id)) {
-          return { status: 'blocked', reason: 'unresolved_publish' };
-        }
-        const sameSubmission = draftMatchesOperation(unresolvedOperation);
-        if (unresolvedOperation.failureKind === 'idempotency_conflict') {
-          return {
-            status: 'blocked',
-            reason: sameSubmission ? 'idempotency_conflict' : 'unresolved_publish',
-          };
-        }
-        if (
-          !canRetryDurableSubmission(unresolvedOperation.phase, unresolvedOperation.failureKind)
-          || !sameSubmission
-        ) {
-          return { status: 'blocked', reason: 'unresolved_publish' };
-        }
-        if (!(await retry(unresolvedOperation.id))) {
-          return unresolvedOperation.error === publishPersistenceMessage
-            ? { status: 'rejected', reason: 'persistence_unavailable' }
-            : { status: 'blocked', reason: 'another_publish_in_flight' };
-        }
-        postDraft.bindPublishOperation(unresolvedOperation.id);
-        return { status: 'accepted', operation: unresolvedOperation };
-      }
-
-      if (unresolvedOperation.phase === 'succeeded' && unresolvedOperation.post) {
-        const cleanup = await finalizeSuccessfulOperation(
-          unresolvedOperation,
-          unresolvedOperation.post,
-        );
-        if (cleanup === 'pending') {
-          return { status: 'blocked', reason: 'cleanup_pending' };
-        }
-        if (currentViewerID() !== publisherUserID) {
-          return { status: 'rejected', reason: 'unauthenticated' };
-        }
-        if (unresolvedOperationByViewer.value.has(publisherUserID)) {
-          const currentReason = getDraftPublishBlockReason(publisherUserID);
-          return {
-            status: 'blocked',
-            reason: currentReason || 'unresolved_publish',
-          };
-        }
-      } else {
-        return { status: 'rejected', reason: 'persistence_unavailable' };
-      }
-    } else {
-      const existingInFlight = findInFlightForViewer(publisherUserID);
-      if (existingInFlight) {
-        return { status: 'blocked', reason: 'another_publish_in_flight' };
-      }
     }
 
-    const sourceDraft: PublishSourceDraft = postDraft.isSavedDraft
-      && !postDraft.hasUnsavedChanges
-      && postDraft.draftID !== null
-      && postDraft.savedSnapshot !== null
-      ? {
-        sourceDraftID: postDraft.draftID,
-        sourceDraftSnapshot: createPostDraftSnapshot(
-          postDraft.savedSnapshot.content,
-          postDraft.savedSnapshot.media,
-          postDraft.savedSnapshot.quotePostID,
-        ),
-      }
-      : { sourceDraftID: null, sourceDraftSnapshot: null };
-    const operation: PublishOperation = {
-      ...sourceDraft,
-      id: createClientOperationID(),
-      publisherUserID,
-      publisherSessionID: authBinding.sessionID,
-      content: postDraft.content.trim(),
-      quotePostID: postDraft.quotePostID,
-      media: postDraft.media.map(media => ({
-        draftMediaID: media.id,
-        file: media.file,
-        uploadedURL: media.uploadedURL.trim(),
-      })),
-      phase: postDraft.media.some(media => !media.uploadedURL.trim()) ? 'uploading' : 'publishing',
-      failureKind: null,
-      error: '',
-      startedAt: Date.now(),
-      post: null,
-    };
-
-    let claim: Awaited<ReturnType<typeof claimPostPublishOperation>>;
+    if (startingViewerIDs.has(publisherUserID)) {
+      return { status: 'blocked', reason: 'another_publish_in_flight' };
+    }
+    startingViewerIDs.add(publisherUserID);
     try {
-      claim = await claimPostPublishOperation(serialize(operation));
-    } catch {
+      return await withLockedStartResult(
+        publisherUserID,
+        async () => {
+          if (!authStore.matchesRequestAuthBinding(authBinding)) {
+            return { result: { status: 'rejected', reason: 'unauthenticated' } };
+          }
+
+          let existing = await readLatestOperationUnderLock(publisherUserID);
+          if (existing) {
+            const existingResult = await handleExistingOperationUnderLock(existing);
+            if (existingResult) return existingResult;
+            existing = await readLatestOperationUnderLock(publisherUserID);
+            if (existing) {
+              return { result: { status: 'blocked', reason: 'unresolved_publish' } };
+            }
+          }
+
+          if (!authStore.matchesRequestAuthBinding(authBinding)) {
+            return { result: { status: 'rejected', reason: 'unauthenticated' } };
+          }
+          const candidate = createOperationFromCurrentDraft(authBinding);
+          let claim: Awaited<ReturnType<typeof claimPostPublishOperation>>;
+          try {
+            claim = await claimPostPublishOperation(serialize(candidate));
+          } catch (error) {
+            throw new PublishPersistenceError(
+              error instanceof Error ? error.message : 'Could not save publish progress.',
+            );
+          }
+
+          if (claim.status === 'occupied') {
+            const occupied = await readLatestOperationUnderLock(publisherUserID);
+            if (!occupied) {
+              return { result: { status: 'rejected', reason: 'persistence_unavailable' } };
+            }
+            if (occupied.phase === 'succeeded') {
+              if (!occupied.post) setRecoveryUnavailable(publisherUserID);
+              return {
+                result: occupied.post
+                  ? { status: 'blocked', reason: 'cleanup_pending' }
+                  : { status: 'rejected', reason: 'persistence_unavailable' },
+              };
+            }
+            const occupiedResult = await handleExistingOperationUnderLock(occupied);
+            if (occupiedResult) return occupiedResult;
+            const current = await readLatestOperationUnderLock(publisherUserID);
+            if (current) {
+              return { result: { status: 'blocked', reason: 'unresolved_publish' } };
+            }
+            try {
+              claim = await claimPostPublishOperation(serialize(candidate));
+            } catch (error) {
+              throw new PublishPersistenceError(
+                error instanceof Error ? error.message : 'Could not save publish progress.',
+              );
+            }
+            if (claim.status !== 'claimed') {
+              return { result: { status: 'blocked', reason: 'unresolved_publish' } };
+            }
+          }
+
+          const claimed = await readLatestOperationUnderLock(publisherUserID, candidate.id);
+          if (!claimed) {
+            return { result: { status: 'blocked', reason: 'unresolved_publish' } };
+          }
+          clearSuccessNotice();
+          if (!authStore.matchesRequestAuthBinding(authBinding)) {
+            await markFailed(
+              claimed,
+              new PublishAuthContextChangedError(),
+              'auth_context_changed',
+            );
+            return { result: { status: 'rejected', reason: 'unauthenticated' } };
+          }
+          postDraft.bindPublishOperation(claimed.id);
+          recoveryErrors.value.delete(publisherUserID);
+          return {
+            result: { status: 'accepted', operation: claimed },
+            completion: () => executeTrackedOperationUnderLock(claimed),
+          };
+        },
+        () => startingViewerIDs.delete(publisherUserID),
+      );
+    } catch (error) {
+      if (error instanceof PublishCoordinationUnavailableError) {
+        setCoordinationUnavailable(publisherUserID);
+        return { status: 'rejected', reason: 'coordination_unavailable' };
+      }
+      setRecoveryUnavailable(publisherUserID);
       return { status: 'rejected', reason: 'persistence_unavailable' };
     }
-
-    if (claim.status === 'occupied') {
-      if (currentViewerID() !== publisherUserID) {
-        return { status: 'rejected', reason: 'unauthenticated' };
-      }
-      const existing = restorePublishOperation(claim.operation) as PublishOperation;
-      if (existing.phase === 'succeeded' && !existing.post) {
-        recoveryErrors.value.set(publisherUserID, publishRecoveryUnavailableMessage);
-        return { status: 'rejected', reason: 'persistence_unavailable' };
-      }
-      if (existing.phase !== 'succeeded' && !operationMatchesCurrentSession(existing)) {
-        existing.phase = 'failed';
-        existing.failureKind = 'auth_context_changed';
-        existing.error = publishFailureMessage;
-        await persistBestEffort(existing);
-      }
-      markOperationUnresolved(existing);
-      upsertOperation(existing);
-      recoveryErrors.value.delete(publisherUserID);
-
-      if (!authStore.matchesRequestAuthBinding(authBinding)) {
-        return { status: 'rejected', reason: 'unauthenticated' };
-      }
-      if (isInFlight(existing)) {
-        return { status: 'blocked', reason: 'another_publish_in_flight' };
-      }
-      if (existing.phase === 'succeeded') {
-        return { status: 'blocked', reason: 'cleanup_pending' };
-      }
-      if (existing.failureKind === 'idempotency_conflict') {
-        return {
-          status: 'blocked',
-          reason: draftMatchesOperation(existing) ? 'idempotency_conflict' : 'unresolved_publish',
-        };
-      }
-      return { status: 'blocked', reason: 'unresolved_publish' };
-    }
-
-    if (!authStore.matchesRequestAuthBinding(authBinding)) {
-      operation.phase = 'failed';
-      operation.failureKind = 'auth_context_changed';
-      operation.error = publishFailureMessage;
-      await persistBestEffort(operation);
-      markOperationUnresolved(operation);
-      upsertOperation(operation);
-      return { status: 'rejected', reason: 'unauthenticated' };
-    }
-
-    // The durable record exists before the working draft is bound or any network starts.
-    clearSuccessNotice();
-    markOperationUnresolved(operation);
-    postDraft.bindPublishOperation(operation.id);
-    upsertOperation(operation);
-    recoveryErrors.value.delete(publisherUserID);
-    void runOperation(operation);
-    return { status: 'accepted', operation };
   };
 
   const abandonFailedOperation = async (operationID: string): Promise<boolean> => {
@@ -918,22 +1164,46 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     }
 
     abandoningOperationIDs.add(operation.id);
-    let deleted: boolean;
     try {
-      deleted = await deletePostPublishOperation(operation.publisherUserID, operation.id);
-    } catch {
+      return await withPostPublishExecutionLock(operation.publisherUserID, async () => {
+        const latest = await readLatestOperationUnderLock(
+          operation.publisherUserID,
+          operation.id,
+        );
+        if (
+          !latest
+          || latest.id !== operation.id
+          || !canAbandonDurableSubmission(latest.phase, latest.failureKind)
+          || currentViewerID() !== latest.publisherUserID
+        ) {
+          return false;
+        }
+
+        let deleted = false;
+        try {
+          deleted = await deletePostPublishOperation(latest.publisherUserID, latest.id);
+        } catch {
+          setRecoveryUnavailable(latest.publisherUserID);
+          return false;
+        }
+        if (!deleted) return false;
+
+        releaseOperationOwnership(latest.publisherUserID, latest.id);
+        postDraft.releasePublishOperationBinding(latest.id, latest.publisherUserID);
+        removeOperationIfCurrent(latest.publisherUserID, latest.id);
+        recoveryErrors.value.delete(latest.publisherUserID);
+        return true;
+      });
+    } catch (error) {
+      if (error instanceof PublishCoordinationUnavailableError) {
+        setCoordinationUnavailable(operation.publisherUserID);
+      } else {
+        setRecoveryUnavailable(operation.publisherUserID);
+      }
       return false;
     } finally {
       abandoningOperationIDs.delete(operation.id);
     }
-    if (!deleted) {
-      return false;
-    }
-
-    releaseOperationOwnership(operation.publisherUserID, operation.id);
-    postDraft.releasePublishOperationBinding(operation.id, operation.publisherUserID);
-    removeOperationIfCurrent(operation.publisherUserID, operation.id);
-    return true;
   };
 
   return {
