@@ -118,7 +118,10 @@ func (service *RecommendationService) createInitialSnapshot(ctx context.Context,
 			result.freshRankedCandidates, result.softRankedCandidates, prior,
 			request.Limit, now, pageRequestID, selectionConfig(service.config.Recommendation),
 		)
-		if len(selected) == 0 {
+		// Preselection cannot refill historical or soft candidates. Leave
+		// incomplete pages for dynamic generation, which performs the full
+		// Recent -> Historical -> Soft fallback sequence.
+		if len(selected) < request.Limit {
 			break
 		}
 		page := cachedPageFromSelected(pageIndex, pageRequestID, now, generationDuration, selected)

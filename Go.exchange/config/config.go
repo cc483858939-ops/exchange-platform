@@ -325,7 +325,7 @@ func (c RecommendationProfileMaterializationConfig) Normalized() RecommendationP
 type RecommendationConfig struct {
 	ServingTimeoutMS                  int                                        `mapstructure:"serving_timeout_ms"`
 	PrimaryWindowDays                 int                                        `mapstructure:"primary_window_days"`
-	HistoricalBackfill                RecommendationHistoricalBackfillConfig    `mapstructure:"historical_backfill"`
+	HistoricalBackfill                RecommendationHistoricalBackfillConfig     `mapstructure:"historical_backfill"`
 	BehaviorWeights                   RecommendationBehaviorWeights              `mapstructure:"behavior_weights"`
 	Fusion                            RecommendationFusionConfig                 `mapstructure:"fusion"`
 	Trending                          RecommendationTrendingConfig               `mapstructure:"trending"`
@@ -356,8 +356,8 @@ type RecommendationConfig struct {
 }
 
 const (
-	DefaultRecommendationPrimaryWindowDays = 7
-	DefaultRecommendationHistoricalBatchSize = 200
+	DefaultRecommendationPrimaryWindowDays           = 7
+	DefaultRecommendationHistoricalBatchSize         = 200
 	DefaultRecommendationHistoricalMaxScanPerRequest = 2000
 )
 

@@ -9,10 +9,10 @@ import (
 
 func DefaultConfig() config.RecommendationConfig {
 	return config.RecommendationConfig{
-		ServingTimeoutMS:    5000,
-		PrimaryWindowDays:   config.DefaultRecommendationPrimaryWindowDays,
+		ServingTimeoutMS:  5000,
+		PrimaryWindowDays: config.DefaultRecommendationPrimaryWindowDays,
 		HistoricalBackfill: config.RecommendationHistoricalBackfillConfig{
-			BatchSize: config.DefaultRecommendationHistoricalBatchSize,
+			BatchSize:         config.DefaultRecommendationHistoricalBatchSize,
 			MaxScanPerRequest: config.DefaultRecommendationHistoricalMaxScanPerRequest,
 		},
 		BehaviorWeights: config.RecommendationBehaviorWeights{

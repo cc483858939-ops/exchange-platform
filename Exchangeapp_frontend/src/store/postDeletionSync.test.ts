@@ -4,6 +4,7 @@ import { flushPromises } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { nextTick, reactive } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RecommendationPageResponse } from '../services/recommendationService';
 import type { Post, PostReference } from '../types/Post';
 import { postToFeedPost } from '../utils/feedPost';
 
@@ -61,6 +62,13 @@ const post = (id = 101): Post => ({
   visibility: 'public', media: [], like_count: 1, repost_count: 0, reply_count: 0, quote_count: 0, view_count: 0, deleted: false,
 });
 const page = (items: Post[], next_cursor: string | null = null) => ({ items, next_cursor });
+const recommendationPage = (items: RecommendationPageResponse['items']): RecommendationPageResponse => ({
+  items,
+  request_id: 'post-deletion-test-request',
+  next_cursor: null,
+  depleted: true,
+  continuation_status: 'exhausted',
+});
 const activity = (value: Post) => ({
   activity_type: 'post' as const, activity_at: value.published_at, source_id: value.id, actor: value.author, post: value,
 });
@@ -93,7 +101,7 @@ describe('Post deletion across cached surfaces and delayed responses', () => {
     mocks.bookmarks.mockResolvedValue(page([]));
     mocks.following.mockResolvedValue(page([]));
     mocks.timeline.mockResolvedValue(page([]));
-    mocks.recommendations.mockResolvedValue({ items: [], depleted: true });
+    mocks.recommendations.mockResolvedValue(recommendationPage([]));
     mocks.topic.mockResolvedValue({ ...page([]), topic: { slug: 'test', name: 'Test' } });
   });
 
@@ -129,7 +137,7 @@ describe('Post deletion across cached surfaces and delayed responses', () => {
     const store = useHomeTimelineStore();
     const request = store.loadForYou();
     remove(99);
-    response.resolve({ items: [{ post: post(), score: 1 }], depleted: true });
+    response.resolve(recommendationPage([{ post: post(), score: 1 }]));
     await request;
     expect(store.forYou.items).toHaveLength(1);
     expectTombstones(store.forYou.items[0].post);

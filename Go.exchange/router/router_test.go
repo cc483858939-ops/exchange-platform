@@ -111,10 +111,13 @@ func TestSetupRouterCapturesRouteTemplatesAndFiltersNoiseRoutes(t *testing.T) {
 	}
 	engine.GET("/__otel/:id", func(ctx *gin.Context) { ctx.Status(http.StatusNoContent) })
 	for _, test := range []struct {
-		path       string
-		wantStatus int
+		path           string
+		guestSessionID string
+		wantStatus     int
 	}{
-		{path: "/api/public/recommendations/posts?limit=17", wantStatus: http.StatusOK},
+		{path: "/api/public/recommendations/posts?limit=17", guestSessionID: "4ca3706b-197e-4f63-8f51-f99176f8b61c", wantStatus: http.StatusOK},
+		{path: "/api/public/recommendations/posts?limit=17", wantStatus: http.StatusBadRequest},
+		{path: "/api/public/recommendations/posts?limit=17", guestSessionID: "not-a-uuid", wantStatus: http.StatusBadRequest},
 		{path: "/api/recommendations/posts", wantStatus: http.StatusUnauthorized},
 		{path: "/__otel/member-42?token=not-recorded", wantStatus: http.StatusNoContent},
 		{path: "/healthz", wantStatus: http.StatusOK},
@@ -123,6 +126,9 @@ func TestSetupRouterCapturesRouteTemplatesAndFiltersNoiseRoutes(t *testing.T) {
 	} {
 		response := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, test.path, nil)
+		if test.guestSessionID != "" {
+			request.Header.Set("X-Guest-Recommendation-Session", test.guestSessionID)
+		}
 		if test.path == "/__otel/member-42?token=not-recorded" {
 			request.Header.Set("Authorization", "Bearer private-test-token")
 			request.Header.Set("User-Agent", "private-test-user-agent")

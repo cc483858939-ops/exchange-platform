@@ -297,6 +297,263 @@ func firstSnapshotResult(t *testing.T, service *RecommendationService, now time.
 	return result
 }
 
+func newHistoricalSnapshotBackfillFixture(
+	t *testing.T,
+	recentCount int,
+	historicalCount int,
+	historicalExhausted bool,
+) (*RecommendationService, *scriptedHistoricalRepository, time.Time) {
+	t.Helper()
+	service, base, now := newSnapshotTestService(t, newMemorySnapshotStore())
+
+	recent := make([]Candidate, 0, recentCount)
+	for index := 1; index <= recentCount; index++ {
+		postID := uint(index)
+		recent = append(recent, testCandidate(postID, CandidateSourceRecent))
+		post := base.posts[postID]
+		post.CreatedAt = now.Add(-time.Duration(index) * time.Hour)
+		base.posts[postID] = post
+	}
+	base.semantic = nil
+	base.following = nil
+	base.recent = recent
+	base.trending = nil
+	base.publicRecent = recent
+	base.publicTrend = nil
+
+	historicalIDs := make([]uint, historicalCount)
+	for index := range historicalIDs {
+		postID := uint(1001 + index)
+		historicalIDs[index] = postID
+		base.posts[postID] = models.Post{
+			Model:    gorm.Model{ID: postID, CreatedAt: now.AddDate(0, 0, -30).Add(-time.Duration(index) * time.Second)},
+			AuthorID: postID + 10000,
+		}
+	}
+
+	cfg := service.config.Recommendation
+	cfg.PrimaryWindowDays = 7
+	cfg.HistoricalBackfill = config.RecommendationHistoricalBackfillConfig{BatchSize: 200, MaxScanPerRequest: 2000}
+	cfg.Candidates.Personalized = config.RecommendationCandidateCaps{Recent: recentCount, Merged: 500}
+	cfg.Candidates.ColdStart = config.RecommendationCandidateCaps{Recent: recentCount, Merged: 500}
+	cfg.Snapshot.MaxCandidates = 500
+	cfg.Snapshot.PreselectPages = 2
+	cfg.Snapshot.DefaultPageSize = 20
+	cfg.Snapshot.MaxPageSize = 20
+	service.config.Recommendation = cfg
+
+	history := service.dependencies.History.(*serviceTestHistoryStore)
+	history.guest = make(ServedHistory)
+	historical := &scriptedHistoricalRepository{
+		serviceTestCandidateRepository: base,
+		pages: []HistoricalCandidatePage{
+			historicalTestPage(now, historicalIDs, historicalExhausted),
+		},
+		softPage: HistoricalCandidatePage{Exhausted: true},
+	}
+	service.dependencies.Candidates = historical
+	return service, historical, now
+}
+
+func assertSnapshotHasNoPreselectedSecondPage(t *testing.T, service *RecommendationService, first ServeResult) {
+	t.Helper()
+	snapshot, err := service.dependencies.Snapshots.Load(context.Background(), first.PoolID)
+	if err != nil {
+		t.Fatalf("load initial snapshot: %v", err)
+	}
+	if _, exists := snapshotPageAt(snapshot, 1); exists || len(snapshot.Pages) != 1 {
+		t.Fatalf("initial snapshot preselected an incomplete second page: page_count=%d", len(snapshot.Pages))
+	}
+	firstIDs := make(map[uint]struct{}, len(first.Selected))
+	for _, id := range selectedPostIDs(first.Selected) {
+		firstIDs[id] = struct{}{}
+	}
+	if len(snapshot.UsedPostIDs) != len(firstIDs) {
+		t.Fatalf("initial snapshot used IDs=%v, want only first-page IDs %v", snapshot.UsedPostIDs, selectedPostIDs(first.Selected))
+	}
+	for _, id := range snapshot.UsedPostIDs {
+		if _, exists := firstIDs[id]; !exists {
+			t.Fatalf("incomplete preselection reserved Post %d before it was served", id)
+		}
+	}
+	if snapshot.HistoricalCursor != nil || snapshot.HistoricalExhausted || snapshot.SoftCursor != nil || snapshot.SoftExhausted || snapshot.Exhausted {
+		t.Fatalf("initial snapshot advanced or exhausted a recall tier during preselection: %+v", snapshot)
+	}
+}
+
+func serveHistoricalSnapshotTestPage(t *testing.T, service *RecommendationService, viewer Viewer, cursor string, now time.Time) ServeResult {
+	t.Helper()
+	result, err := service.Serve(context.Background(), ServeRequest{
+		Viewer: viewer, Limit: 20, Cursor: cursor, RequestID: uuid.NewString(), Now: now,
+	})
+	if err != nil {
+		t.Fatalf("serve snapshot page: %v", err)
+	}
+	return result
+}
+
+func assertNoRepeatedPostIDs(t *testing.T, pages ...[]uint) {
+	t.Helper()
+	seen := make(map[uint]struct{})
+	for _, page := range pages {
+		for _, id := range page {
+			if _, exists := seen[id]; exists {
+				t.Fatalf("Post %d repeated across snapshot pages", id)
+			}
+			seen[id] = struct{}{}
+		}
+	}
+}
+
+func TestRecommendationSnapshotDoesNotPreselectUnderfilledPageBeforeHistoricalBackfill(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		viewer Viewer
+	}{
+		{name: "authenticated", viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}},
+		{name: "guest", viewer: Viewer{Kind: ViewerGuest, GuestSessionID: "4ca3706b-197e-4f63-8f51-f99176f8b61c"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, historical, now := newHistoricalSnapshotBackfillFixture(t, 30, 100, false)
+			first := serveHistoricalSnapshotTestPage(t, service, test.viewer, "", now)
+			firstIDs := selectedPostIDs(first.Selected)
+			if len(firstIDs) != 20 || first.Depleted || first.NextCursor == "" {
+				t.Fatalf("first page IDs=%v depleted=%t cursor=%q, want 20 recent posts and a continuation", firstIDs, first.Depleted, first.NextCursor)
+			}
+			for _, id := range firstIDs {
+				if id > 30 {
+					t.Fatalf("first page included historical Post %d before recent candidates were consumed", id)
+				}
+			}
+			assertSnapshotHasNoPreselectedSecondPage(t, service, first)
+			if len(historical.queries) != 0 {
+				t.Fatalf("initial full page unexpectedly queried historical candidates: %+v", historical.queries)
+			}
+			finalizeServiceTestResult(t, service, first)
+
+			second := serveHistoricalSnapshotTestPage(t, service, test.viewer, first.NextCursor, now.Add(time.Second))
+			secondIDs := selectedPostIDs(second.Selected)
+			if len(secondIDs) != 20 || second.Depleted || second.NextCursor == "" || second.ContinuationStatus != ContinuationAvailable {
+				t.Fatalf("second page IDs=%v depleted=%t status=%q cursor=%q, want full available page", secondIDs, second.Depleted, second.ContinuationStatus, second.NextCursor)
+			}
+			remainingRecent, historicalCount := 0, 0
+			for _, id := range secondIDs {
+				switch {
+				case id <= 30:
+					remainingRecent++
+				case id >= 1001 && id <= 1100:
+					historicalCount++
+				default:
+					t.Fatalf("second page contains unexpected Post %d", id)
+				}
+			}
+			if remainingRecent != 10 || historicalCount != 10 {
+				t.Fatalf("second page composition: recent=%d historical=%d IDs=%v, want 10 each", remainingRecent, historicalCount, secondIDs)
+			}
+			if len(historical.queries) == 0 || historical.queries[0].Range != CandidateRangeHistorical || historical.queries[0].HistoricalCursor != nil {
+				t.Fatalf("second page did not start historical backfill: queries=%+v", historical.queries)
+			}
+			assertNoRepeatedPostIDs(t, firstIDs, secondIDs)
+			if got := len(firstIDs) + len(secondIDs); got != 40 {
+				t.Fatalf("first two pages contain %d Posts, want 40 unique Posts", got)
+			}
+			finalizeServiceTestResult(t, service, second)
+
+			third := serveHistoricalSnapshotTestPage(t, service, test.viewer, second.NextCursor, now.Add(2*time.Second))
+			thirdIDs := selectedPostIDs(third.Selected)
+			if len(thirdIDs) != 20 || third.Depleted || third.NextCursor == "" {
+				t.Fatalf("third page IDs=%v depleted=%t cursor=%q, want another historical page", thirdIDs, third.Depleted, third.NextCursor)
+			}
+			for _, id := range thirdIDs {
+				if id < 1001 || id > 1100 {
+					t.Fatalf("third page returned non-historical Post %d", id)
+				}
+			}
+			assertNoRepeatedPostIDs(t, firstIDs, secondIDs, thirdIDs)
+			if len(historical.queries) != 1 {
+				t.Fatalf("third page rescanned history despite cached historical candidates: queries=%+v", historical.queries)
+			}
+		})
+	}
+}
+
+func TestRecommendationSnapshotPreselectsFullSecondPage(t *testing.T) {
+	viewer := Viewer{Kind: ViewerAuthenticated, UserID: 42}
+	service, historical, now := newHistoricalSnapshotBackfillFixture(t, 40, 100, false)
+	first := serveHistoricalSnapshotTestPage(t, service, viewer, "", now)
+	if len(first.Selected) != 20 || first.Depleted || first.NextCursor == "" {
+		t.Fatalf("first page=%+v, want 20 recent posts and a continuation", first)
+	}
+	snapshot, err := service.dependencies.Snapshots.Load(context.Background(), first.PoolID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preselected, exists := snapshotPageAt(snapshot, 1)
+	if !exists || len(preselected.Items) != 20 || len(snapshot.Pages) != 2 || len(snapshot.UsedPostIDs) != 40 {
+		t.Fatalf("full second page was not preselected: exists=%t items=%d pages=%d used=%d", exists, len(preselected.Items), len(snapshot.Pages), len(snapshot.UsedPostIDs))
+	}
+	if len(historical.queries) != 0 {
+		t.Fatalf("preselecting a full recent page unexpectedly queried historical candidates: %+v", historical.queries)
+	}
+	finalizeServiceTestResult(t, service, first)
+
+	second := serveHistoricalSnapshotTestPage(t, service, viewer, first.NextCursor, now.Add(time.Second))
+	if !second.CacheHit || !equalUintSlices(selectedPostIDs(second.Selected), cachedPagePostIDs(preselected)) {
+		t.Fatalf("preselected page replay cache=%t IDs=%v, want cached IDs %v", second.CacheHit, selectedPostIDs(second.Selected), cachedPagePostIDs(preselected))
+	}
+	if len(historical.queries) != 0 {
+		t.Fatalf("replaying a full preselected page queried historical candidates: %+v", historical.queries)
+	}
+}
+
+func TestRecommendationSnapshotDoesNotPreselectEmptyPageBeforeHistoricalBackfill(t *testing.T) {
+	viewer := Viewer{Kind: ViewerAuthenticated, UserID: 42}
+	service, historical, now := newHistoricalSnapshotBackfillFixture(t, 20, 100, false)
+	first := serveHistoricalSnapshotTestPage(t, service, viewer, "", now)
+	if len(first.Selected) != 20 || first.NextCursor == "" {
+		t.Fatalf("first page=%+v, want 20 recent posts and a continuation", first)
+	}
+	assertSnapshotHasNoPreselectedSecondPage(t, service, first)
+	finalizeServiceTestResult(t, service, first)
+
+	second := serveHistoricalSnapshotTestPage(t, service, viewer, first.NextCursor, now.Add(time.Second))
+	if len(second.Selected) != 20 || second.Depleted || second.NextCursor == "" {
+		t.Fatalf("historical second page IDs=%v depleted=%t cursor=%q, want 20 results and continuation", selectedPostIDs(second.Selected), second.Depleted, second.NextCursor)
+	}
+	for _, id := range selectedPostIDs(second.Selected) {
+		if id < 1001 || id > 1100 {
+			t.Fatalf("second page returned non-historical Post %d after recent pool was consumed", id)
+		}
+	}
+	if len(historical.queries) == 0 || historical.queries[0].Range != CandidateRangeHistorical {
+		t.Fatalf("second page did not dynamically query historical candidates: %+v", historical.queries)
+	}
+}
+
+func TestRecommendationSnapshotReturnsPartialPageOnlyAfterAllRecallTiersExhausted(t *testing.T) {
+	viewer := Viewer{Kind: ViewerAuthenticated, UserID: 42}
+	service, historical, now := newHistoricalSnapshotBackfillFixture(t, 21, 4, true)
+	first := serveHistoricalSnapshotTestPage(t, service, viewer, "", now)
+	assertSnapshotHasNoPreselectedSecondPage(t, service, first)
+	finalizeServiceTestResult(t, service, first)
+
+	second := serveHistoricalSnapshotTestPage(t, service, viewer, first.NextCursor, now.Add(time.Second))
+	ids := selectedPostIDs(second.Selected)
+	if len(ids) != 5 || !second.Depleted || second.ContinuationStatus != ContinuationExhausted || second.NextCursor != "" {
+		t.Fatalf("final partial page IDs=%v depleted=%t status=%q cursor=%q, want 5 results and confirmed exhaustion", ids, second.Depleted, second.ContinuationStatus, second.NextCursor)
+	}
+	if len(historical.queries) < 2 || historical.queries[0].Range != CandidateRangeHistorical || !historical.queries[1].SoftOnly {
+		t.Fatalf("partial page did not confirm historical and soft exhaustion: %+v", historical.queries)
+	}
+	snapshot, err := service.dependencies.Snapshots.Load(context.Background(), first.PoolID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Exhausted || !snapshot.HistoricalExhausted || !snapshot.SoftExhausted {
+		t.Fatalf("snapshot marked exhausted before every tier was checked: %+v", snapshot)
+	}
+}
+
 func TestRecommendationTraceQueueFullDoesNotFailServing(t *testing.T) {
 	for _, outcome := range []TraceEnqueueResult{TraceEnqueueDroppedFull, TraceEnqueueDroppedStopping} {
 		t.Run(string(outcome), func(t *testing.T) {
