@@ -194,7 +194,7 @@ func TestDevDataEmbeddingInvalidationAcrossSyncPathsIntegration(t *testing.T) {
 	assertDevDataEmbeddingOutbox(t, db, postID, 4)
 }
 
-func TestDevDataBodyChangeRequiresCurrentServingEmbeddingForRecommendationIntegration(t *testing.T) {
+func TestDevDataBodyChangeInvalidatesServingEmbeddingWithoutBlockingNonSemanticRecallIntegration(t *testing.T) {
 	db := openDevDataIntegrationDB(t)
 	data := newSyncIntegrationData()
 	t.Cleanup(func() { cleanupDevDataIntegrationRows(db, data) })
@@ -227,19 +227,44 @@ func TestDevDataBodyChangeRequiresCurrentServingEmbeddingForRecommendationIntegr
 	if err != nil {
 		t.Fatal(err)
 	}
-	loadServingCandidateIDs := func() []uint {
+	loadServingQuery := func() recommendation.CandidateQuery {
 		t.Helper()
 		servingVersion, err := embeddingstate.LoadServingVersion(context.Background(), db)
 		if err != nil {
 			t.Fatalf("load serving version: %v", err)
 		}
 		cutoff, _ := config.RecommendationPrimaryWindowBounds(now, config.DefaultRecommendationPrimaryWindowDays)
-		candidates, err := repository.LoadRecentCandidates(context.Background(), recommendation.CandidateQuery{
-			UserID: viewer.ID, ServingVersion: servingVersion, Now: now,
+		positiveVector := []float32{1, 0}
+		if servingVersion == "post_embedding_v2" {
+			positiveVector = []float32{0, 1}
+		}
+		return recommendation.CandidateQuery{
+			UserID: viewer.ID, ServingVersion: servingVersion, PositiveVector: positiveVector, Now: now,
 			Range: recommendation.CandidateRangeRecent, RecentCutoff: cutoff, Limit: 10,
-		})
+		}
+	}
+	loadServingCandidates := func() (recommendation.CandidateQuery, []recommendation.Candidate) {
+		t.Helper()
+		query := loadServingQuery()
+		candidates, err := repository.LoadRecentCandidates(context.Background(), query)
 		if err != nil {
-			t.Fatalf("load %s recommendation candidates: %v", servingVersion, err)
+			t.Fatalf("load %s recent recommendation candidates: %v", query.ServingVersion, err)
+		}
+		return query, candidates
+	}
+	recentCandidateIDs := func(candidates []recommendation.Candidate) []uint {
+		t.Helper()
+		ids := make([]uint, 0, len(candidates))
+		for _, candidate := range candidates {
+			ids = append(ids, candidate.PostID)
+		}
+		return ids
+	}
+	loadServingSemanticCandidateIDs := func(query recommendation.CandidateQuery) []uint {
+		t.Helper()
+		candidates, err := repository.LoadSemanticCandidates(context.Background(), query)
+		if err != nil {
+			t.Fatalf("load %s semantic recommendation candidates: %v", query.ServingVersion, err)
 		}
 		ids := make([]uint, 0, len(candidates))
 		for _, candidate := range candidates {
@@ -247,9 +272,45 @@ func TestDevDataBodyChangeRequiresCurrentServingEmbeddingForRecommendationIntegr
 		}
 		return ids
 	}
-	if got := loadServingCandidateIDs(); !containsUintID(got, postID) {
-		t.Fatalf("Post %d with v1 serving embedding is not eligible: %v", postID, got)
+	assertHydratedEmbedding := func(query recommendation.CandidateQuery, candidates []recommendation.Candidate, want []float32) {
+		t.Helper()
+		hydrated, err := repository.HydrateCandidates(context.Background(), query, candidates)
+		if err != nil {
+			t.Fatalf("hydrate %s recent recommendation candidates: %v", query.ServingVersion, err)
+		}
+		for _, candidate := range hydrated {
+			if candidate.Post.ID != postID {
+				continue
+			}
+			if want == nil {
+				if candidate.Embedding != nil {
+					t.Fatalf("Post %d hydrated stale embedding under %s: %v", postID, query.ServingVersion, candidate.Embedding)
+				}
+				return
+			}
+			if len(candidate.Embedding) != len(want) {
+				t.Fatalf("Post %d hydrated embedding under %s=%v, want %v", postID, query.ServingVersion, candidate.Embedding, want)
+			}
+			for index := range want {
+				if candidate.Embedding[index] != want[index] {
+					t.Fatalf("Post %d hydrated embedding under %s=%v, want %v", postID, query.ServingVersion, candidate.Embedding, want)
+				}
+			}
+			return
+		}
+		t.Fatalf("Post %d was dropped during %s hydration", postID, query.ServingVersion)
 	}
+	query, recentCandidates := loadServingCandidates()
+	if query.ServingVersion != "post_embedding_v1" {
+		t.Fatalf("initial serving version=%q, want post_embedding_v1", query.ServingVersion)
+	}
+	if !containsUintID(recentCandidateIDs(recentCandidates), postID) {
+		t.Fatalf("Post %d with v1 serving embedding is not eligible for ordinary recent recall: %v", postID, recentCandidateIDs(recentCandidates))
+	}
+	if got := loadServingSemanticCandidateIDs(query); !containsUintID(got, postID) {
+		t.Fatalf("Post %d with valid v1 embedding is not eligible for v1 semantic recall: %v", postID, got)
+	}
+	assertHydratedEmbedding(query, recentCandidates, []float32{1, 0})
 	assertDevDataEmbeddingOutbox(t, db, postID, 0)
 
 	post.Text += " body B"
@@ -265,9 +326,14 @@ func TestDevDataBodyChangeRequiresCurrentServingEmbeddingForRecommendationIntegr
 	if dirty.Reason != "post_embedding_changed" {
 		t.Fatalf("dirty profile reason=%q, want post_embedding_changed", dirty.Reason)
 	}
-	if got := loadServingCandidateIDs(); containsUintID(got, postID) {
-		t.Fatalf("body-changed Post %d remained eligible under v1 after invalidation: %v", postID, got)
+	query, recentCandidates = loadServingCandidates()
+	if !containsUintID(recentCandidateIDs(recentCandidates), postID) {
+		t.Fatalf("body-changed Post %d was removed from ordinary recent recall after embedding invalidation: %v", postID, recentCandidateIDs(recentCandidates))
 	}
+	if got := loadServingSemanticCandidateIDs(query); containsUintID(got, postID) {
+		t.Fatalf("body-changed Post %d remained eligible for v1 semantic recall after invalidation: %v", postID, got)
+	}
+	assertHydratedEmbedding(query, recentCandidates, nil)
 
 	var changedPost models.Post
 	if err := db.First(&changedPost, postID).Error; err != nil {
@@ -281,15 +347,25 @@ func TestDevDataBodyChangeRequiresCurrentServingEmbeddingForRecommendationIntegr
 	}).Error; err != nil {
 		t.Fatalf("write current v2 projection: %v", err)
 	}
-	if got := loadServingCandidateIDs(); containsUintID(got, postID) {
-		t.Fatalf("v2 projection made Post %d eligible before serving version switch: %v", postID, got)
+	query, recentCandidates = loadServingCandidates()
+	if !containsUintID(recentCandidateIDs(recentCandidates), postID) {
+		t.Fatalf("v2 projection removed Post %d from ordinary recent recall before serving version switch: %v", postID, recentCandidateIDs(recentCandidates))
 	}
+	if got := loadServingSemanticCandidateIDs(query); containsUintID(got, postID) {
+		t.Fatalf("v2 projection made Post %d eligible for v1 semantic recall before serving version switch: %v", postID, got)
+	}
+	assertHydratedEmbedding(query, recentCandidates, nil)
 	if err := embeddingstate.SetServingVersion(context.Background(), db, "post_embedding_v2"); err != nil {
 		t.Fatalf("switch serving version to v2: %v", err)
 	}
-	if got := loadServingCandidateIDs(); !containsUintID(got, postID) {
-		t.Fatalf("Post %d with current v2 projection is not eligible after serving version switch: %v", postID, got)
+	query, recentCandidates = loadServingCandidates()
+	if !containsUintID(recentCandidateIDs(recentCandidates), postID) {
+		t.Fatalf("Post %d with current v2 projection is not eligible for ordinary recent recall after serving version switch: %v", postID, recentCandidateIDs(recentCandidates))
 	}
+	if got := loadServingSemanticCandidateIDs(query); !containsUintID(got, postID) {
+		t.Fatalf("Post %d with current v2 projection is not eligible for v2 semantic recall after serving version switch: %v", postID, got)
+	}
+	assertHydratedEmbedding(query, recentCandidates, []float32{0, 1})
 	post.SourceMetrics.LikeCount++
 	if _, err := SyncSnapshotWithOptions(context.Background(), db, data.Registry, data.snapshot(now.Add(2*time.Minute), post), nil, now.Add(2*time.Minute), devDataEmbeddingSyncOptions(true)); err != nil {
 		t.Fatalf("sync non-body Post metadata: %v", err)

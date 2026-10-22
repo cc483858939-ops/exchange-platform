@@ -172,9 +172,19 @@ func TestOnboardingInterestRecentRecallUsesUserChoicesAndExistingEligibilityInte
 			}
 		}
 	}
-	assertCandidateOrder("AI recent", aiCandidates, []uint{aiValid.ID, neutral.ID, spaceValid.ID})
+	assertCandidateOrder("AI recent", aiCandidates, []uint{aiValid.ID, neutral.ID, spaceValid.ID, aiReplyRoot.ID})
 	if !aiCandidates[0].FromOnboardingInterest {
 		t.Fatalf("AI recent candidates=%#v, want onboarding-interest Post %d first", aiCandidates, aiValid.ID)
+	}
+	for _, candidate := range aiCandidates {
+		if candidate.PostID == aiReplyRoot.ID {
+			if !candidate.FromRecent {
+				t.Fatalf("unmapped reply root candidate=%#v, want ordinary recent provenance", candidate)
+			}
+			if candidate.FromOnboardingInterest {
+				t.Fatalf("unmapped reply root candidate=%#v, must not carry onboarding-interest provenance", candidate)
+			}
+		}
 	}
 	assertUniqueRecommendationPostIDs(t, aiCandidates)
 	for _, candidate := range aiCandidates {

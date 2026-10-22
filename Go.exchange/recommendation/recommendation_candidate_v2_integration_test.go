@@ -209,6 +209,7 @@ func TestRecommendationCandidateSourcesRequireServingEmbeddingAcrossAllSourcesIn
 	}
 	allIDs := []uint{noEmbedding.ID, v1Only.ID, v2Only.ID, v1AndV2.ID, zeroVectorPost.ID}
 	allNonSemanticIDs := []uint{zeroVectorPost.ID, v1AndV2.ID, v2Only.ID, v1Only.ID, noEmbedding.ID}
+	expectedOnboardingIDs := map[uint]bool{zeroVectorPost.ID: true, v1AndV2.ID: true}
 	versions := []struct {
 		serving string
 		want    []uint
@@ -252,10 +253,22 @@ func TestRecommendationCandidateSourcesRequireServingEmbeddingAcrossAllSourcesIn
 			if err != nil || !equalCandidateIDs(candidateIDs(interest), allNonSemanticIDs) {
 				t.Fatalf("onboarding interest candidates=%v err=%v, want all public posts independent of embeddings %v", candidateIDs(interest), err, allNonSemanticIDs)
 			}
+			assertUniqueRecommendationPostIDs(t, interest)
+			markedOnboarding := 0
 			for _, candidate := range interest {
-				if !candidate.FromOnboardingInterest {
-					t.Fatalf("onboarding candidate lacks source flag: %#v", candidate)
+				if !candidate.FromRecent {
+					t.Fatalf("onboarding-query candidate lacks ordinary recent provenance: %#v", candidate)
 				}
+				wantOnboarding := expectedOnboardingIDs[candidate.PostID]
+				if candidate.FromOnboardingInterest != wantOnboarding {
+					t.Fatalf("candidate %d onboarding-interest provenance=%t, want %t for actual budgeted recall", candidate.PostID, candidate.FromOnboardingInterest, wantOnboarding)
+				}
+				if candidate.FromOnboardingInterest {
+					markedOnboarding++
+				}
+			}
+			if markedOnboarding != 2 {
+				t.Fatalf("onboarding-interest marked candidates=%d, want budgeted count 2: %#v", markedOnboarding, interest)
 			}
 
 			publicQuery := PublicCandidateQuery{
