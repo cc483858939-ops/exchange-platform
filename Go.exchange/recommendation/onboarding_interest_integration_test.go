@@ -205,7 +205,7 @@ func TestOnboardingInterestRecentRecallUsesUserChoicesAndExistingEligibilityInte
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertCandidateOrder("Space recent", spaceCandidates, []uint{spaceValid.ID, neutral.ID, aiInteracted.ID, aiNotInterested.ID})
+	assertCandidateOrder("Space recent", spaceCandidates, []uint{spaceValid.ID, neutral.ID, aiReplyRoot.ID, aiInteracted.ID})
 	if !spaceCandidates[0].FromOnboardingInterest {
 		t.Fatalf("Space recent candidates=%#v, want onboarding-interest Post %d first", spaceCandidates, spaceValid.ID)
 	}
