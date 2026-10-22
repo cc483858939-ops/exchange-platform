@@ -15,6 +15,8 @@ vi.mock('element-plus/es/components/skeleton/style/css', () => ({}));
 import router, { resolveAuthenticatedGuestOnlyDestination } from './index';
 import { routeScrollBehavior } from './scrollBehavior';
 
+const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(window, 'localStorage');
+
 const tokenFor = (userId: number, sessionId: string): string => {
   const payload = btoa(JSON.stringify({ sub: String(userId), sid: sessionId }))
     .replace(/=/g, '')
@@ -49,6 +51,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (originalLocalStorageDescriptor) {
+    Object.defineProperty(window, 'localStorage', originalLocalStorageDescriptor);
+  }
   localStorage.clear();
 });
 
@@ -210,6 +215,22 @@ describe('guest-only authentication routes', () => {
     await router.push('/register');
 
     expect(router.currentRoute.value.name).toBe('Register');
+  });
+
+  it('allows guest and public routes when localStorage access is unavailable', async () => {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get: () => { throw new DOMException('Blocked', 'SecurityError'); },
+    });
+
+    await router.push('/login');
+    expect(router.currentRoute.value.name).toBe('Login');
+
+    await router.push('/');
+    expect(router.currentRoute.value.name).toBe('Home');
+
+    await router.push('/topics');
+    expect(router.currentRoute.value.name).toBe('TopicDirectory');
   });
 
   it('redirects an authenticated user from Login to Home by default', async () => {

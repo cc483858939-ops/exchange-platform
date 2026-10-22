@@ -123,6 +123,9 @@ const deferred = <T>() => {
 };
 
 const originalLocksDescriptor = Object.getOwnPropertyDescriptor(navigator, 'locks');
+const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(window, 'localStorage');
+const originalStorageSetItem = Storage.prototype.setItem;
+const originalStorageRemoveItem = Storage.prototype.removeItem;
 let stores: Array<ReturnType<typeof useAuthStore>> = [];
 let lockRequest: ReturnType<typeof vi.fn>;
 
@@ -185,15 +188,126 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  if (originalLocalStorageDescriptor) {
+    Object.defineProperty(window, 'localStorage', originalLocalStorageDescriptor);
+  }
   stores.forEach(store => store.$dispose());
   if (originalLocksDescriptor) {
     Object.defineProperty(navigator, 'locks', originalLocksDescriptor);
   } else {
     Reflect.deleteProperty(navigator, 'locks');
   }
+  vi.restoreAllMocks();
 });
 
 describe('auth store cross-tab session coordination', () => {
+  it('starts as a guest when the localStorage getter throws', () => {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get: () => { throw new DOMException('Blocked', 'SecurityError'); },
+    });
+
+    expect(() => createAuthStore()).not.toThrow();
+    expect(stores[stores.length - 1]?.isAuthenticated).toBe(false);
+  });
+
+  it('starts as a guest when credential reads throw', () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementationOnce(() => {
+      throw new DOMException('Blocked', 'SecurityError');
+    });
+
+    expect(() => createAuthStore()).not.toThrow();
+    expect(stores[stores.length - 1]?.isAuthenticated).toBe(false);
+  });
+
+  it('starts as a guest when orphaned profile cleanup throws', () => {
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
+      if (key === AUTH_USER_STORAGE_KEY) throw new DOMException('Blocked', 'SecurityError');
+      return originalStorageRemoveItem.call(this, key);
+    });
+
+    expect(() => createAuthStore()).not.toThrow();
+    expect(stores[stores.length - 1]?.isAuthenticated).toBe(false);
+  });
+
+  it.each(['login', 'register'] as const)('%s does not commit if credential persistence fails', async method => {
+    mocks.post.mockResolvedValueOnce({ data: authResponse() });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key === AUTH_SESSION_STORAGE_KEY) throw new DOMException('Quota exceeded', 'QuotaExceededError');
+      return originalStorageSetItem.call(this, key, value);
+    });
+    const store = createAuthStore();
+
+    await expect(store[method]('alice', 'secret123')).rejects.toMatchObject({ code: 'AUTH_STORAGE_UNAVAILABLE' });
+    expect(store.isAuthenticated).toBe(false);
+    expect(store.currentIdentity).toBeNull();
+    expect(readStoredSession()).toBeNull();
+  });
+
+  it('finishes login when only the profile cache write fails and uses the new identity', async () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    mocks.post.mockResolvedValueOnce({ data: authResponse(otherIdentity, 'bob-access', 'bob-refresh') });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key === AUTH_USER_STORAGE_KEY) throw new DOMException('Quota exceeded', 'QuotaExceededError');
+      return originalStorageSetItem.call(this, key, value);
+    });
+
+    await expect(store.login('bob', 'secret123')).resolves.toBeUndefined();
+
+    expect(store.isAuthenticated).toBe(true);
+    expect(store.currentIdentity).toEqual(otherIdentity);
+    expect(readStoredSession()?.userId).toBe(otherIdentity.id);
+    expect(localStorage.getItem(AUTH_USER_STORAGE_KEY)).toEqual(JSON.stringify(fullIdentity));
+
+    window.dispatchEvent(new Event('pageshow'));
+    expect(store.currentIdentity).toEqual(otherIdentity);
+  });
+
+  it('does not interpret a transient read failure as a cross-tab logout', () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementationOnce(() => {
+      throw new DOMException('Blocked', 'SecurityError');
+    });
+
+    store.reconcilePersistedAuthState();
+
+    expect(store.isAuthenticated).toBe(true);
+    expect(store.sessionVersion).toBe(0);
+    expect(store.currentIdentity).toEqual(fullIdentity);
+  });
+
+  it('does not send refresh while the credential snapshot is unavailable', async () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementationOnce(() => {
+      throw new DOMException('Blocked', 'SecurityError');
+    });
+
+    await expect(store.refreshAccessToken()).rejects.toMatchObject({ code: 'AUTH_STORAGE_UNAVAILABLE' });
+
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(store.isAuthenticated).toBe(true);
+    expect(store.sessionVersion).toBe(0);
+  });
+
+  it('reconciles the current persisted session after storage access recovers', () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementationOnce(() => {
+      throw new DOMException('Blocked', 'SecurityError');
+    });
+
+    store.reconcilePersistedAuthState();
+    expect(store.sessionVersion).toBe(0);
+    expect(store.isAuthenticated).toBe(true);
+
+    store.reconcilePersistedAuthState();
+    expect(store.sessionVersion).toBe(0);
+    expect(store.currentIdentity).toEqual(fullIdentity);
+  });
+
   it('bounds refresh queue time without HTTP or credential mutation, then allows retry', async () => {
     vi.useFakeTimers();
     seedV2Auth();
@@ -318,7 +432,7 @@ describe('auth store cross-tab session coordination', () => {
       expect(store.isAuthenticated).toBe(false);
     } finally { holder.release(); await holder.promise; }
     const remove = vi.spyOn(Storage.prototype, 'removeItem').mockImplementationOnce(() => { throw new Error('Storage unavailable'); });
-    await expect(store.clearAuth()).rejects.toThrow('Storage unavailable');
+    await expect(store.clearAuth()).rejects.toMatchObject({ code: 'AUTH_STORAGE_UNAVAILABLE' });
     store.reconcilePersistedAuthState();
     expect(store.isAuthenticated).toBe(false);
     remove.mockRestore();
@@ -520,6 +634,26 @@ describe('auth store cross-tab session coordination', () => {
     expect(readStoredSession()?.tokenRevision).not.toBe(revisionBefore);
   });
 
+  it('completes token rotation when the noncritical profile cache write fails', async () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    const refreshedIdentity = { ...fullIdentity, display_name: 'Refreshed profile' };
+    mocks.post.mockResolvedValueOnce({
+      data: authResponse(refreshedIdentity, 'alice-access-v2', 'alice-refresh-v2'),
+    });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key === AUTH_USER_STORAGE_KEY) throw new DOMException('Quota exceeded', 'QuotaExceededError');
+      return originalStorageSetItem.call(this, key, value);
+    });
+
+    await expect(store.refreshAccessToken()).resolves.toBe(bearerFor('alice-access-v2'));
+
+    expect(store.currentIdentity).toEqual(refreshedIdentity);
+    expect(store.refreshToken).toBe('alice-refresh-v2');
+    expect(readStoredSession()?.refreshToken).toBe('alice-refresh-v2');
+    expect(readStoredSession()?.refreshRequestID).toBeUndefined();
+  });
+
   it('preserves credentials after timeout, network failure, and server failure', async () => {
     seedV2Auth();
     const store = createAuthStore();
@@ -562,7 +696,7 @@ describe('auth store cross-tab session coordination', () => {
     const store = createAuthStore();
     const saved = readStoredSession();
     vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => { throw new Error('Quota exceeded'); });
-    await expect(store.refreshAccessToken()).rejects.toThrow('Quota exceeded');
+    await expect(store.refreshAccessToken()).rejects.toMatchObject({ code: 'AUTH_STORAGE_UNAVAILABLE' });
     expect(mocks.post).not.toHaveBeenCalled();
     expect(readStoredSession()).toEqual(saved);
     expect(store.isAuthenticated).toBe(true);
@@ -575,7 +709,9 @@ describe('auth store cross-tab session coordination', () => {
       vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => { throw new Error('Storage unavailable'); });
       return { data: authResponse(fullIdentity, 'recovered-access', 'recovered-refresh') };
     });
-    await expect(store.refreshAccessToken()).rejects.toThrow('Storage unavailable');
+    await expect(store.refreshAccessToken()).rejects.toMatchObject({ code: 'AUTH_STORAGE_UNAVAILABLE' });
+    expect(store.token).toBe(bearerFor('alice-access'));
+    expect(store.refreshToken).toBe('alice-refresh');
     const firstRequest = mocks.post.mock.calls[0]?.[1];
     expect(readStoredSession()?.refreshToken).toBe('alice-refresh');
     expect(readStoredSession()?.refreshRequestID).toBe(firstRequest.request_id);
@@ -646,6 +782,43 @@ describe('auth store cross-tab session coordination', () => {
 
     expect(readStoredSession()).toBeNull();
     expect(localStorage.getItem(AUTH_USER_STORAGE_KEY)).toBeNull();
+  });
+
+  it('clears memory and reports a failed credential removal during logout', async () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
+      if (key === AUTH_SESSION_STORAGE_KEY) throw new DOMException('Blocked', 'SecurityError');
+      return originalStorageRemoveItem.call(this, key);
+    });
+
+    await expect(store.logout()).rejects.toMatchObject({ code: 'AUTH_LOGOUT_CLEANUP_PENDING' });
+
+    expect(store.isAuthenticated).toBe(false);
+    expect(mocks.post).toHaveBeenCalledWith('/auth/logout', { refresh_token: 'alice-refresh' });
+    expect(readStoredSession()?.sessionId).toBe('sid-7');
+    store.reconcilePersistedAuthState();
+    expect(store.isAuthenticated).toBe(false);
+  });
+
+  it('does not treat a blocked storage getter as successful logout cleanup', async () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    const descriptor = Object.getOwnPropertyDescriptor(window, 'localStorage');
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get: () => { throw new DOMException('Blocked', 'SecurityError'); },
+    });
+    let logoutError: unknown;
+    try {
+      logoutError = await store.logout().catch(error => error);
+    } finally {
+      if (descriptor) Object.defineProperty(window, 'localStorage', descriptor);
+    }
+
+    expect(logoutError).toMatchObject({ code: 'AUTH_LOGOUT_CLEANUP_PENDING' });
+    expect(store.isAuthenticated).toBe(false);
+    expect(readStoredSession()?.sessionId).toBe('sid-7');
   });
 
   it('revokes only the captured refresh credential after clearing local state', async () => {
@@ -914,6 +1087,38 @@ describe('auth store cross-tab session coordination', () => {
     expect(store.token).toBe(bearerFor('alice-access'));
     expect(store.refreshToken).toBe('alice-refresh');
     expect(readStoredSession()).toEqual(before);
+  });
+
+  it('keeps an accepted profile update in memory when its cache write fails', () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    const updated = { ...fullIdentity, display_name: 'Alice Updated in memory' };
+    const before = readStoredSession();
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key === AUTH_USER_STORAGE_KEY) throw new DOMException('Quota exceeded', 'QuotaExceededError');
+      return originalStorageSetItem.call(this, key, value);
+    });
+
+    expect(store.syncCurrentIdentityProfile(updated)).toBe(true);
+
+    expect(store.currentIdentity).toEqual(updated);
+    expect(readStoredSession()).toEqual(before);
+    expect(localStorage.getItem(AUTH_USER_STORAGE_KEY)).toEqual(JSON.stringify(fullIdentity));
+  });
+
+  it('does not create a session when storage recovers after a guest boot', () => {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get: () => { throw new DOMException('Blocked', 'SecurityError'); },
+    });
+    const store = createAuthStore();
+    Object.defineProperty(window, 'localStorage', originalLocalStorageDescriptor!);
+
+    window.dispatchEvent(new Event('pageshow'));
+
+    expect(store.isAuthenticated).toBe(false);
+    expect(store.sessionVersion).toBe(0);
+    expect(mocks.post).not.toHaveBeenCalled();
   });
 
   it('does not let another user replace current profile metadata', () => {

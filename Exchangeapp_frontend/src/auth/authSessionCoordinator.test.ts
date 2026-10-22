@@ -6,6 +6,7 @@ import {
   AUTH_MUTATION_LOCK_WAIT_TIMEOUT_MS,
   AUTH_SESSION_STORAGE_KEY,
   AUTH_USER_STORAGE_KEY,
+  AuthStorageUnavailableError,
   AuthRefreshCoordinationUnavailableError,
   AuthMutationLockTimeoutError,
   clearPersistedAuthSession,
@@ -38,6 +39,7 @@ const sessionFor = (
 });
 
 const originalLocksDescriptor = Object.getOwnPropertyDescriptor(navigator, 'locks');
+const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(window, 'localStorage');
 
 const setLocks = (locks: LockManager | undefined) => {
   if (locks) {
@@ -98,6 +100,9 @@ const installQueuedLocks = () => {
 
 afterEach(() => {
   vi.useRealTimers();
+  if (originalLocalStorageDescriptor) {
+    Object.defineProperty(window, 'localStorage', originalLocalStorageDescriptor);
+  }
   if (originalLocksDescriptor) {
     Object.defineProperty(navigator, 'locks', originalLocksDescriptor);
   } else {
@@ -111,17 +116,30 @@ beforeEach(() => {
 });
 
 describe('auth session persistence', () => {
+  it('returns an explicit unavailable state when localStorage cannot be read (A11 reproduction)', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, 'localStorage');
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get: () => { throw new DOMException('Blocked', 'SecurityError'); },
+    });
+    try {
+      expect(readPersistedAuthSession()).toEqual({ status: 'unavailable' });
+    } finally {
+      if (descriptor) Object.defineProperty(window, 'localStorage', descriptor);
+    }
+  });
+
   it('preserves a valid pending refresh request in the credential snapshot', () => {
     const session = sessionFor({ refreshRequestID: '550e8400-e29b-41d4-a716-446655440000' });
     writePersistedAuthSession(session);
-    expect(readPersistedAuthSession()).toEqual(session);
+    expect(readPersistedAuthSession()).toEqual({ status: 'valid', session });
   });
 
   it('reads an atomically persisted credential pair with matching JWT metadata', () => {
     const session = sessionFor();
     localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(session));
 
-    expect(readPersistedAuthSession()).toEqual(session);
+    expect(readPersistedAuthSession()).toEqual({ status: 'valid', session });
   });
 
   it.each([
@@ -135,7 +153,21 @@ describe('auth session persistence', () => {
   ])('rejects persisted state with %s', (_name, raw) => {
     localStorage.setItem(AUTH_SESSION_STORAGE_KEY, raw);
 
-    expect(readPersistedAuthSession()).toBeNull();
+    expect(readPersistedAuthSession()).toEqual({ status: 'invalid' });
+  });
+
+  it('reports missing separately from invalid snapshots', () => {
+    expect(readPersistedAuthSession()).toEqual({ status: 'missing' });
+    localStorage.setItem(AUTH_SESSION_STORAGE_KEY, '');
+    expect(readPersistedAuthSession()).toEqual({ status: 'invalid' });
+  });
+
+  it('reports getItem failures as unavailable', () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('Blocked', 'SecurityError');
+    });
+
+    expect(readPersistedAuthSession()).toEqual({ status: 'unavailable' });
   });
 
   it('writes the credential pair as one snapshot', () => {
@@ -146,13 +178,13 @@ describe('auth session persistence', () => {
 
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy).toHaveBeenCalledWith(AUTH_SESSION_STORAGE_KEY, JSON.stringify(session));
-    expect(readPersistedAuthSession()).toEqual(session);
+    expect(readPersistedAuthSession()).toEqual({ status: 'valid', session });
   });
 
   it('does not treat cached profile data as a persisted auth session', () => {
     localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify({ id: 7, username: 'alice' }));
 
-    expect(readPersistedAuthSession()).toBeNull();
+    expect(readPersistedAuthSession()).toEqual({ status: 'missing' });
     expect(localStorage.getItem(AUTH_SESSION_STORAGE_KEY)).toBeNull();
   });
 
@@ -173,6 +205,15 @@ describe('auth session persistence', () => {
 
     expect(localStorage.getItem(AUTH_SESSION_STORAGE_KEY)).toBeNull();
     expect(localStorage.getItem(AUTH_USER_STORAGE_KEY)).toBe('profile');
+  });
+
+  it('reports credential removal failures instead of claiming cleanup succeeded', () => {
+    localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(sessionFor()));
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new DOMException('Blocked', 'SecurityError');
+    });
+
+    expect(() => clearPersistedAuthSession()).toThrow(AuthStorageUnavailableError);
   });
 });
 

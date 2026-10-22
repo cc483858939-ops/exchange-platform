@@ -23,6 +23,22 @@ export type PersistedAuthSession = {
   refreshRequestID?: string;
 };
 
+export type AuthSessionReadResult =
+  | { status: 'valid'; session: PersistedAuthSession }
+  | { status: 'missing' }
+  | { status: 'invalid' }
+  | { status: 'unavailable' };
+
+export class AuthStorageUnavailableError extends AuthRequestError {
+  readonly cause: unknown;
+
+  constructor(cause?: unknown) {
+    super('Authentication storage is unavailable. Enable browser storage and try again.', 'AUTH_STORAGE_UNAVAILABLE');
+    this.name = 'AuthStorageUnavailableError';
+    this.cause = cause;
+  }
+}
+
 export class AuthRefreshCoordinationUnavailableError extends Error {
   constructor() {
     super('Secure cross-tab refresh coordination is unavailable');
@@ -32,11 +48,15 @@ export class AuthRefreshCoordinationUnavailableError extends Error {
 
 const storage = (): Storage | null => {
   try {
-    return typeof localStorage === 'undefined' ? null : localStorage;
+    return typeof window === 'undefined' ? null : window.localStorage;
   } catch {
     return null;
   }
 };
+
+const storageUnavailableError = (cause?: unknown): AuthStorageUnavailableError => (
+  cause instanceof AuthStorageUnavailableError ? cause : new AuthStorageUnavailableError(cause)
+);
 
 const isNonEmptyString = (value: unknown): value is string => (
   typeof value === 'string' && value.trim().length > 0
@@ -100,40 +120,51 @@ export const createTokenRevision = (): string => {
   throw new Error('Secure randomness is unavailable for auth token revision');
 };
 
-export const readPersistedAuthSession = (): PersistedAuthSession | null => {
+export const readPersistedAuthSession = (): AuthSessionReadResult => {
   const store = storage();
   if (!store) {
-    return null;
+    return { status: 'unavailable' };
   }
+
+  let raw: string | null;
   try {
-    const raw = store.getItem(AUTH_SESSION_STORAGE_KEY);
-    if (!raw) {
-      return null;
-    }
-    return validateSession(JSON.parse(raw));
+    raw = store.getItem(AUTH_SESSION_STORAGE_KEY);
   } catch {
-    return null;
+    return { status: 'unavailable' };
+  }
+
+  if (raw === null) return { status: 'missing' };
+
+  try {
+    const session = validateSession(JSON.parse(raw));
+    return session ? { status: 'valid', session } : { status: 'invalid' };
+  } catch {
+    return { status: 'invalid' };
   }
 };
 
 export const writePersistedAuthSession = (session: PersistedAuthSession): void => {
-  const store = storage();
-  if (!store) {
-    throw new Error('Auth session storage is unavailable');
-  }
   const validated = validateSession(session);
   if (!validated) {
     throw new Error('Invalid persisted auth session');
   }
-  store.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(validated));
+  const store = storage();
+  if (!store) throw new AuthStorageUnavailableError();
+  try {
+    store.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(validated));
+  } catch (error) {
+    throw storageUnavailableError(error);
+  }
 };
 
 export const clearPersistedAuthSession = (): void => {
   const store = storage();
-  if (!store) {
-    return;
+  if (!store) throw new AuthStorageUnavailableError();
+  try {
+    store.removeItem(AUTH_SESSION_STORAGE_KEY);
+  } catch (error) {
+    throw storageUnavailableError(error);
   }
-  store.removeItem(AUTH_SESSION_STORAGE_KEY);
 };
 
 export const runWithAuthMutationLock = async <T>(
@@ -194,7 +225,7 @@ export const runWithAuthMutationLock = async <T>(
   });
 };
 
-export const subscribeToPersistedAuthChanges = (callback: () => void): (() => void) => {
+export const subscribeToPersistedAuthChanges = (callback: (key: string | null) => void): (() => void) => {
   if (typeof window === 'undefined') {
     return () => undefined;
   }
@@ -204,7 +235,7 @@ export const subscribeToPersistedAuthChanges = (callback: () => void): (() => vo
       || event.key === AUTH_USER_STORAGE_KEY
       || event.key === null
     ) {
-      callback();
+      callback(event.key);
     }
   };
   window.addEventListener('storage', handleStorage);

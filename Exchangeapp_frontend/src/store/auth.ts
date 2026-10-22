@@ -6,6 +6,7 @@ import type { ApiErrorResponse } from '../api';
 import {
   AUTH_USER_STORAGE_KEY,
   AuthRefreshCoordinationUnavailableError,
+  AuthStorageUnavailableError,
   clearPersistedAuthSession,
   createTokenRevision,
   readPersistedAuthSession,
@@ -111,7 +112,7 @@ const minimalIdentity = (userId: number): AuthIdentity => ({
 
 const readStoredIdentity = (expectedUserId: number): AuthIdentity | null => {
   try {
-    const raw = localStorage.getItem(authUserKey);
+    const raw = typeof window === 'undefined' ? null : window.localStorage.getItem(authUserKey);
     if (!raw) return null;
     const normalized = normalizeAuthIdentity(JSON.parse(raw));
     return normalized?.id === expectedUserId ? normalized : null;
@@ -120,13 +121,28 @@ const readStoredIdentity = (expectedUserId: number): AuthIdentity | null => {
   }
 };
 
-const initializePersistedSession = (): PersistedAuthSession | null => {
-  const session = readPersistedAuthSession();
-  if (!session) {
-    clearPersistedAuthSession();
-    localStorage.removeItem(authUserKey);
+const persistIdentityCacheBestEffort = (next: AuthIdentity | null): boolean => {
+  try {
+    if (typeof window === 'undefined') return false;
+    const storage = window.localStorage;
+    if (next) storage.setItem(authUserKey, JSON.stringify(next));
+    else storage.removeItem(authUserKey);
+    return true;
+  } catch {
+    return false;
   }
-  return session;
+};
+
+const initializePersistedSession = (): PersistedAuthSession | null => {
+  const result = readPersistedAuthSession();
+  if (result.status === 'valid') return result.session;
+  if (result.status === 'missing') {
+    persistIdentityCacheBestEffort(null);
+  } else if (result.status === 'invalid') {
+    try { clearPersistedAuthSession(); } catch { /* Startup cleanup is best-effort. */ }
+    persistIdentityCacheBestEffort(null);
+  }
+  return null;
 };
 
 const validateAuthResponse = (
@@ -241,7 +257,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   const applyPersistedSession = (
     next: PersistedAuthSession | null,
-    options: { external?: boolean } = {},
+    options: { external?: boolean; identity?: AuthIdentity } = {},
   ) => {
     const currentSessionId = sessionId.value;
     const currentUserId = sessionUserId.value;
@@ -267,14 +283,23 @@ export const useAuthStore = defineStore('auth', () => {
     sessionId.value = next.sessionId;
     sessionUserId.value = next.userId;
     tokenRevision.value = next.tokenRevision;
-    identity.value = readStoredIdentity(next.userId) ?? minimalIdentity(next.userId);
+    identity.value = options.identity?.id === next.userId
+      ? options.identity
+      : readStoredIdentity(next.userId) ?? minimalIdentity(next.userId);
   };
 
-  const reconcilePersistedAuthState = () => {
-    const next = readPersistedAuthSession();
+  const reconcilePersistedAuthState = (changedStorageKey?: string | null) => {
+    const result = readPersistedAuthSession();
+    if (result.status === 'unavailable') return;
+
+    const next = result.status === 'valid' ? result.session : null;
     if (pendingLocalLogoutSessionId && next?.sessionId === pendingLocalLogoutSessionId) {
       return;
     }
+    if (result.status === 'invalid') {
+      try { clearPersistedAuthSession(); } catch { /* Invalid data must never block tab startup. */ }
+    }
+    if (!next) persistIdentityCacheBestEffort(null);
 
     const credentialStateChanged = sessionId.value !== (next?.sessionId ?? null)
       || sessionUserId.value !== (next?.userId ?? null)
@@ -285,17 +310,12 @@ export const useAuthStore = defineStore('auth', () => {
       applyPersistedSession(next, { external: true });
       return;
     }
-    identity.value = next
-      ? readStoredIdentity(next.userId) ?? minimalIdentity(next.userId)
-      : null;
-  };
-
-  const persistIdentity = (next: AuthIdentity | null) => {
-    identity.value = next;
-    if (next) {
-      localStorage.setItem(authUserKey, JSON.stringify(next));
-    } else {
-      localStorage.removeItem(authUserKey);
+    if (!next) {
+      identity.value = null;
+    } else if (changedStorageKey === authUserKey) {
+      identity.value = readStoredIdentity(next.userId) ?? minimalIdentity(next.userId);
+    } else if (!identity.value || identity.value.id !== next.userId) {
+      identity.value = readStoredIdentity(next.userId) ?? minimalIdentity(next.userId);
     }
   };
 
@@ -311,8 +331,8 @@ export const useAuthStore = defineStore('auth', () => {
       }
       const validated = validateAuthResponse(response);
       writePersistedAuthSession(validated.session);
-      persistIdentity(validated.identity);
-      applyPersistedSession(validated.session);
+      applyPersistedSession(validated.session, { identity: validated.identity });
+      persistIdentityCacheBestEffort(validated.identity);
     });
   };
 
@@ -324,18 +344,22 @@ export const useAuthStore = defineStore('auth', () => {
     if (!shouldClearAuthAfterRefreshFailure(error)) {
       return false;
     }
-    const latest = readPersistedAuthSession();
-    if (latest?.sessionId !== sessionIdAtStart) {
+    const result = readPersistedAuthSession();
+    if (result.status === 'unavailable') throw new AuthStorageUnavailableError();
+    const latest = result.status === 'valid' ? result.session : null;
+    if (latest?.sessionId !== sessionIdAtStart || latest.userId !== sessionUserId.value) {
       reconcilePersistedAuthState();
       throw new AuthSessionChangedError();
     }
 
-    clearPersistedAuthSession();
-    localStorage.removeItem(authUserKey);
-    if (sessionVersion.value === versionAtStart) {
-      advanceSessionVersion();
-    }
+    // The server has confirmed this session is no longer refreshable. Remove it
+    // from memory immediately, and retain the guard if strict storage cleanup fails.
+    pendingLocalLogoutSessionId = sessionIdAtStart;
+    if (sessionVersion.value === versionAtStart) advanceSessionVersion();
     applyPersistedSession(null);
+    clearPersistedAuthSession();
+    persistIdentityCacheBestEffort(null);
+    if (pendingLocalLogoutSessionId === sessionIdAtStart) pendingLocalLogoutSessionId = null;
     return true;
   };
 
@@ -359,7 +383,9 @@ export const useAuthStore = defineStore('auth', () => {
         throw new AuthSessionChangedError();
       }
 
-      const latest = readPersistedAuthSession();
+      const result = readPersistedAuthSession();
+      if (result.status === 'unavailable') throw new AuthStorageUnavailableError();
+      const latest = result.status === 'valid' ? result.session : null;
       if (!latest || latest.sessionId !== sessionIdAtStart || latest.userId !== userIdAtStart) {
         reconcilePersistedAuthState();
         throw new AuthSessionChangedError();
@@ -391,7 +417,9 @@ export const useAuthStore = defineStore('auth', () => {
           throw new AuthSessionChangedError();
         }
 
-        const persistedBeforeCommit = readPersistedAuthSession();
+        const persistedResult = readPersistedAuthSession();
+        if (persistedResult.status === 'unavailable') throw new AuthStorageUnavailableError();
+        const persistedBeforeCommit = persistedResult.status === 'valid' ? persistedResult.session : null;
         if (
           !persistedBeforeCommit
           || persistedBeforeCommit.sessionId !== sessionIdAtStart
@@ -416,8 +444,8 @@ export const useAuthStore = defineStore('auth', () => {
           userIdAtStart,
         );
         writePersistedAuthSession(validated.session);
-        persistIdentity(validated.identity);
-        applyPersistedSession(validated.session);
+        applyPersistedSession(validated.session, { identity: validated.identity });
+        persistIdentityCacheBestEffort(validated.identity);
         return asAuthorizationHeader(validated.session.accessToken) as string;
       } catch (error) {
         if (error instanceof AuthSessionChangedError) {
@@ -438,10 +466,15 @@ export const useAuthStore = defineStore('auth', () => {
     }
 
     return runWithAuthMutationLock(() => {
-      const latest = readPersistedAuthSession();
+      const result = readPersistedAuthSession();
+      if (result.status === 'unavailable') throw new AuthStorageUnavailableError();
+      if (result.status === 'invalid') {
+        throw new AuthStorageUnavailableError(new Error('Cannot verify the stored session owner.'));
+      }
+      const latest = result.status === 'valid' ? result.session : null;
       if (!latest || latest.sessionId === loggedOutSessionId) {
         clearPersistedAuthSession();
-        localStorage.removeItem(authUserKey);
+        persistIdentityCacheBestEffort(null);
       }
     }, { signal: options.signal }).then(() => {
       // Keep the guard if acquisition or storage cleanup fails. A retry must
@@ -456,7 +489,8 @@ export const useAuthStore = defineStore('auth', () => {
     // Capture before clearing memory. Never use a later login's credentials.
     // The server accepts this family's consumed secret if an in-flight refresh
     // already rotated it, and revocation cannot restore credentials locally.
-    const pendingSession = readPersistedAuthSession();
+    const pendingResult = readPersistedAuthSession();
+    const pendingSession = pendingResult.status === 'valid' ? pendingResult.session : null;
     const loggedOutRefreshToken = refreshToken.value ?? (
       pendingLocalLogoutSessionId && pendingSession?.sessionId === pendingLocalLogoutSessionId
         ? pendingSession.refreshToken : null
@@ -472,7 +506,9 @@ export const useAuthStore = defineStore('auth', () => {
       if (response.status !== 204) throw new Error('Server sign-out was not confirmed');
     } catch {
       throw new AuthRequestError(
-        'Signed out on this browser, but server sign-out could not be confirmed. The session may still be active.',
+        cleanupFailed
+          ? 'Signed out in memory, but saved credentials could not be cleared and server sign-out could not be confirmed.'
+          : 'Signed out on this browser, but server sign-out could not be confirmed. The session may still be active.',
         'AUTH_LOGOUT_UNCONFIRMED',
       );
     }
@@ -487,7 +523,8 @@ export const useAuthStore = defineStore('auth', () => {
     if (!normalized || !sessionUserId.value || normalized.id !== sessionUserId.value) {
       return false;
     }
-    persistIdentity(normalized);
+    identity.value = normalized;
+    persistIdentityCacheBestEffort(normalized);
     return true;
   };
 
