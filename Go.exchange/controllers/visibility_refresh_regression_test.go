@@ -358,9 +358,9 @@ func TestRefreshRecoversCommittedRotationAfterProfileFailureIntegration(t *testi
 				if queryError != nil {
 					return nil, queryError
 				}
-				rows := &visibilityRefreshRows{columns: []string{"id", "username", "display_name", "avatar_url"}}
+				rows := &visibilityRefreshRows{columns: []string{"id", "username", "display_name", "avatar_url", "auth_version"}}
 				if userAvailable {
-					rows.values = [][]driver.Value{{int64(42), "alice", "Alice", "/avatar.webp"}}
+					rows.values = [][]driver.Value{{int64(42), "alice", "Alice", "/avatar.webp", int64(1)}}
 				}
 				return rows, nil
 			})

@@ -180,7 +180,7 @@ class ServerTest(unittest.TestCase):
 
     def test_schema_contract_includes_published_floor(self):
         with patch.object(server, "git", return_value=(ROOT / "Go.exchange/initialize/runtime_schema.go").read_text()):
-            self.assertEqual(server.schema_contract(SHA), {"required": 20, "current": 20, "floor": 20})
+            self.assertEqual(server.schema_contract(SHA), {"required": 21, "current": 21, "floor": 21})
 
 
 class GitWorkspaceTest(unittest.TestCase):
