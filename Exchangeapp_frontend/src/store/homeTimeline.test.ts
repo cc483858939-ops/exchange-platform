@@ -318,7 +318,7 @@ describe('home timeline session store', () => {
 
   it('keeps the existing feed when paging fails and retries separately', async () => {
     mocks.getPostRecommendations
-      .mockResolvedValueOnce(recommendationPage([recommendation(1)]))
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)], false, 'stable-cursor'))
       .mockRejectedValueOnce(new Error('offline'))
       .mockResolvedValueOnce(recommendationPage([recommendation(2)]));
     const store = useHomeTimelineStore();
@@ -330,10 +330,12 @@ describe('home timeline session store', () => {
     expect(store.forYou.loadMoreError).toBe(true);
     expect(store.forYou.error).toBe(false);
     expect(store.forYou.depleted).toBe(false);
+    expect(store.forYou.nextCursor).toBe('stable-cursor');
 
     store.retryForYouLoadMore();
     await settle();
 
+    expect(mocks.getPostRecommendations).toHaveBeenNthCalledWith(3, 20, 'stable-cursor');
     expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2]);
     expect(store.forYou.loadMoreError).toBe(false);
   });
@@ -353,10 +355,10 @@ describe('home timeline session store', () => {
     expect(mocks.getPostRecommendations).toHaveBeenCalledTimes(2);
   });
 
-  it('does not restart page one when a non-depleted response has no cursor', async () => {
-    mocks.getPostRecommendations.mockResolvedValueOnce(
-      recommendationPage([recommendation(1)], false, null),
-    );
+  it('keeps a non-depleted page without a cursor retryable', async () => {
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)], false, null))
+      .mockResolvedValueOnce(recommendationPage([recommendation(1), recommendation(2)], false, 'recovered-cursor'));
     const store = useHomeTimelineStore();
 
     await store.loadForYou();
@@ -366,6 +368,16 @@ describe('home timeline session store', () => {
     expect(store.forYou.items.map(item => item.post.id)).toEqual([1]);
     expect(store.forYou.depleted).toBe(false);
     expect(store.forYou.loadMoreError).toBe(true);
+    expect(store.forYou.needsCursorRebuild).toBe(true);
+
+    store.retryForYouLoadMore();
+    await settle();
+
+    expect(mocks.getPostRecommendations).toHaveBeenNthCalledWith(2, 20);
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2]);
+    expect(store.forYou.nextCursor).toBe('recovered-cursor');
+    expect(store.forYou.needsCursorRebuild).toBe(false);
+    expect(store.forYou.loadMoreError).toBe(false);
   });
 
   it('replaces the accumulated For You feed on force refresh', async () => {
@@ -383,6 +395,7 @@ describe('home timeline session store', () => {
     expect(store.forYou.loaded).toBe(true);
     expect(store.forYou.loadingMore).toBe(false);
     expect(store.forYou.loadMoreError).toBe(false);
+    expect(store.forYou.needsCursorRebuild).toBe(false);
   });
 
   it('refreshes after onboarding without cancelling Like mutations or accepting an older response', async () => {
@@ -506,7 +519,147 @@ describe('home timeline session store', () => {
     expect(mocks.getPostRecommendations).toHaveBeenNthCalledWith(3, 20);
     expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2]);
     expect(store.forYou.nextCursor).toBe('replacement-cursor');
+    expect(store.forYou.needsCursorRebuild).toBe(false);
     expect(store.forYou.loadMoreError).toBe(false);
+  });
+
+  it('retries a failed For You cursor rebuild with a fresh request and preserves loaded posts', async () => {
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1), recommendation(2)], false, 'expired-cursor'))
+      .mockRejectedValueOnce({ response: { status: 410 } })
+      .mockRejectedValueOnce(new Error('temporary rebuild failure'))
+      .mockRejectedValueOnce(new Error('second temporary rebuild failure'))
+      .mockResolvedValueOnce(recommendationPage([recommendation(2), recommendation(3)], false, 'replacement-cursor'));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await settle();
+    mocks.getPostEngagementStates.mockClear();
+    await store.loadMoreForYou();
+
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2]);
+    expect(store.forYou.loaded).toBe(true);
+    expect(store.forYou.depleted).toBe(false);
+    expect(store.forYou.nextCursor).toBeNull();
+    expect(store.forYou.needsCursorRebuild).toBe(true);
+    expect(store.forYou.loadMoreError).toBe(true);
+
+    store.retryForYouLoadMore();
+    await settle();
+
+    expect(mocks.getPostRecommendations).toHaveBeenNthCalledWith(4, 20);
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2]);
+    expect(store.forYou.nextCursor).toBeNull();
+    expect(store.forYou.needsCursorRebuild).toBe(true);
+    expect(store.forYou.loadMoreError).toBe(true);
+
+    store.retryForYouLoadMore();
+    await settle();
+
+    expect(mocks.getPostRecommendations).toHaveBeenNthCalledWith(5, 20);
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2, 3]);
+    expect(store.forYou.nextCursor).toBe('replacement-cursor');
+    expect(store.forYou.needsCursorRebuild).toBe(false);
+    expect(store.forYou.loadMoreError).toBe(false);
+    expect(mocks.getPostEngagementStates).toHaveBeenLastCalledWith([3]);
+  });
+
+  it('does not auto-rebuild again when a rebuild request also returns 410', async () => {
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)], false, 'expired-cursor'))
+      .mockRejectedValueOnce({ response: { status: 410 } })
+      .mockRejectedValueOnce({ response: { status: 410 } });
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await store.loadMoreForYou();
+
+    expect(mocks.getPostRecommendations).toHaveBeenCalledTimes(3);
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1]);
+    expect(store.forYou.needsCursorRebuild).toBe(true);
+    expect(store.forYou.nextCursor).toBeNull();
+    expect(store.forYou.loadMoreError).toBe(true);
+  });
+
+  it('drops a late cursor rebuild response after an account switch', async () => {
+    const rebuild = deferred<ReturnType<typeof recommendationPage>>();
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)], false, 'expired-cursor'))
+      .mockRejectedValueOnce({ response: { status: 410 } })
+      .mockReturnValueOnce(rebuild.promise)
+      .mockResolvedValueOnce(recommendationPage([recommendation(9)], false, 'viewer-8-cursor'));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    const oldPagingRequest = store.loadMoreForYou();
+    await settle();
+    expect(store.forYou.loadingMore).toBe(true);
+
+    mocks.authStore!.currentIdentity = { id: 8 };
+    mocks.feedStore!.viewerID = 8;
+    store.setViewer(8);
+    await store.loadForYou();
+
+    rebuild.resolve(recommendationPage([recommendation(2)], false, 'stale-cursor'));
+    await oldPagingRequest;
+
+    expect(store.viewerID).toBe(8);
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([9]);
+    expect(store.forYou.nextCursor).toBe('viewer-8-cursor');
+    expect(store.forYou.needsCursorRebuild).toBe(false);
+    expect(store.forYou.loadMoreError).toBe(false);
+    expect(store.forYou.loadingMore).toBe(false);
+  });
+
+  it('drops a late cursor rebuild response after a force refresh', async () => {
+    const rebuild = deferred<ReturnType<typeof recommendationPage>>();
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)], false, 'expired-cursor'))
+      .mockRejectedValueOnce({ response: { status: 410 } })
+      .mockReturnValueOnce(rebuild.promise)
+      .mockResolvedValueOnce(recommendationPage([recommendation(9)], false, 'refreshed-cursor'));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    const oldPagingRequest = store.loadMoreForYou();
+    await settle();
+    expect(store.forYou.loadingMore).toBe(true);
+
+    await store.loadForYou(true);
+    rebuild.resolve(recommendationPage([recommendation(2)], false, 'stale-cursor'));
+    await oldPagingRequest;
+
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([9]);
+    expect(store.forYou.nextCursor).toBe('refreshed-cursor');
+    expect(store.forYou.needsCursorRebuild).toBe(false);
+    expect(store.forYou.loadMoreError).toBe(false);
+    expect(store.forYou.loadingMore).toBe(false);
+  });
+
+  it('does not start a second rebuild while a Retry request is pending', async () => {
+    const retry = deferred<ReturnType<typeof recommendationPage>>();
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)], false, 'expired-cursor'))
+      .mockRejectedValueOnce({ response: { status: 410 } })
+      .mockRejectedValueOnce(new Error('automatic rebuild failed'))
+      .mockReturnValueOnce(retry.promise);
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await store.loadMoreForYou();
+    store.retryForYouLoadMore();
+    await settle();
+    store.retryForYouLoadMore();
+
+    expect(mocks.getPostRecommendations).toHaveBeenCalledTimes(4);
+    expect(store.forYou.loadingMore).toBe(true);
+
+    retry.resolve(recommendationPage([recommendation(2)], false, 'replacement-cursor'));
+    await settle();
+
+    expect(mocks.getPostRecommendations).toHaveBeenCalledTimes(4);
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2]);
+    expect(store.forYou.loadingMore).toBe(false);
   });
 
   it('clears the For You cursor when force refreshing', async () => {
@@ -791,6 +944,153 @@ describe('home timeline session store', () => {
     expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2]);
     expect(store.forYou.nextCursor).toBe('replacement-guest-cursor');
     expect(store.forYou.loadMoreError).toBe(false);
+    expect(store.forYou.needsCursorRebuild).toBe(false);
+  });
+
+  it('retries a failed guest cursor rebuild with the same session and no cursor', async () => {
+    mocks.authStore!.isAuthenticated = false;
+    mocks.authStore!.currentIdentity = null;
+    mocks.feedStore!.viewerID = null;
+    mocks.getPublicPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1), recommendation(2)], false, 'expired-guest-cursor'))
+      .mockRejectedValueOnce({ response: { status: 410 } })
+      .mockRejectedValueOnce(new Error('temporary rebuild failure'))
+      .mockResolvedValueOnce(recommendationPage([recommendation(2), recommendation(3)], false, 'replacement-guest-cursor'));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await store.loadMoreForYou();
+
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2]);
+    expect(store.forYou.needsCursorRebuild).toBe(true);
+    expect(store.forYou.loadMoreError).toBe(true);
+    expect(store.forYou.nextCursor).toBeNull();
+
+    store.retryForYouLoadMore();
+    await settle();
+
+    expect(mocks.getPublicPostRecommendations).toHaveBeenNthCalledWith(1, {
+      limit: 20,
+      guestSessionId: guestSessionID,
+    });
+    expect(mocks.getPublicPostRecommendations).toHaveBeenNthCalledWith(2, {
+      limit: 20,
+      cursor: 'expired-guest-cursor',
+      guestSessionId: guestSessionID,
+    });
+    expect(mocks.getPublicPostRecommendations).toHaveBeenNthCalledWith(3, {
+      limit: 20,
+      guestSessionId: guestSessionID,
+    });
+    expect(mocks.getPublicPostRecommendations).toHaveBeenNthCalledWith(4, {
+      limit: 20,
+      guestSessionId: guestSessionID,
+    });
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2, 3]);
+    expect(store.forYou.nextCursor).toBe('replacement-guest-cursor');
+    expect(store.forYou.needsCursorRebuild).toBe(false);
+    expect(store.forYou.loadMoreError).toBe(false);
+    expect(mocks.getPostLikeStates).not.toHaveBeenCalled();
+    expect(mocks.getPostRepostStates).not.toHaveBeenCalled();
+    expect(mocks.getPostBookmarkStates).not.toHaveBeenCalled();
+    expect(mocks.getPostEngagementStates).not.toHaveBeenCalled();
+  });
+
+  it('stops a rebuilt exhausted session without leaving a retry state', async () => {
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)], false, 'expired-cursor'))
+      .mockRejectedValueOnce({ response: { status: 410 } })
+      .mockResolvedValueOnce(recommendationPage([], true));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await store.loadMoreForYou();
+
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1]);
+    expect(store.forYou.depleted).toBe(true);
+    expect(store.forYou.nextCursor).toBeNull();
+    expect(store.forYou.needsCursorRebuild).toBe(false);
+    expect(store.forYou.loadMoreError).toBe(false);
+  });
+
+  it('keeps a missing-cursor rebuild retryable', async () => {
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)], false, 'expired-cursor'))
+      .mockRejectedValueOnce({ response: { status: 410 } })
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)], false, null))
+      .mockResolvedValueOnce(recommendationPage([recommendation(1), recommendation(2)], false, 'replacement-cursor'));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await store.loadMoreForYou();
+
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1]);
+    expect(store.forYou.nextCursor).toBeNull();
+    expect(store.forYou.needsCursorRebuild).toBe(true);
+    expect(store.forYou.loadMoreError).toBe(true);
+
+    store.retryForYouLoadMore();
+    await settle();
+
+    expect(mocks.getPostRecommendations).toHaveBeenNthCalledWith(4, 20);
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2]);
+    expect(store.forYou.nextCursor).toBe('replacement-cursor');
+    expect(store.forYou.needsCursorRebuild).toBe(false);
+    expect(store.forYou.loadMoreError).toBe(false);
+  });
+
+  it('pauses after a duplicate rebuild page and retries with its replacement cursor', async () => {
+    mocks.getPostRecommendations
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)], false, 'expired-cursor'))
+      .mockRejectedValueOnce({ response: { status: 410 } })
+      .mockResolvedValueOnce(recommendationPage([recommendation(1)], false, 'replacement-cursor'))
+      .mockResolvedValueOnce(recommendationPage([recommendation(2)], false, 'next-cursor'));
+    const store = useHomeTimelineStore();
+
+    await store.loadForYou();
+    await store.loadMoreForYou();
+
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1]);
+    expect(store.forYou.nextCursor).toBe('replacement-cursor');
+    expect(store.forYou.needsCursorRebuild).toBe(false);
+    expect(store.forYou.loadMoreError).toBe(true);
+
+    store.retryForYouLoadMore();
+    await settle();
+
+    expect(mocks.getPostRecommendations).toHaveBeenNthCalledWith(4, 20, 'replacement-cursor');
+    expect(store.forYou.items.map(item => item.post.id)).toEqual([1, 2]);
+    expect(store.forYou.nextCursor).toBe('next-cursor');
+    expect(store.forYou.loadMoreError).toBe(false);
+  });
+
+  it('keeps the expired-cursor rebuild state when the guest session is unavailable', async () => {
+    const setItem = vi.spyOn(testSessionStorage, 'setItem').mockImplementation(() => {
+      throw new Error('storage unavailable');
+    });
+    mocks.authStore!.isAuthenticated = false;
+    mocks.authStore!.currentIdentity = null;
+    mocks.feedStore!.viewerID = null;
+    const store = useHomeTimelineStore();
+    store.forYou.loaded = true;
+    store.forYou.items.push({} as never);
+    store.forYou.needsCursorRebuild = true;
+    store.forYou.loadMoreError = true;
+
+    try {
+      store.retryForYouLoadMore();
+      await settle();
+
+      expect(mocks.getPublicPostRecommendations).not.toHaveBeenCalled();
+      expect(store.forYou.loaded).toBe(true);
+      expect(store.forYou.items).toHaveLength(1);
+      expect(store.forYou.nextCursor).toBeNull();
+      expect(store.forYou.needsCursorRebuild).toBe(true);
+      expect(store.forYou.loadMoreError).toBe(true);
+      expect(setItem).toHaveBeenCalled();
+    } finally {
+      setItem.mockRestore();
+    }
   });
 
   it('keeps authenticated recommendations independent from guest storage', async () => {

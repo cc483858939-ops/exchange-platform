@@ -192,10 +192,14 @@ const makeTimeline = ({
   forYouItems = [],
   followingItems = [],
   forYouLoading = false,
+  forYouLoadMoreError = false,
+  forYouDepleted = true,
 }: {
   forYouItems?: any[];
   followingItems?: FeedPost[];
   forYouLoading?: boolean;
+  forYouLoadMoreError?: boolean;
+  forYouDepleted?: boolean;
 } = {}) => {
   const scrollTop = reactive<Record<FeedTab, number>>({
     'for-you': 0,
@@ -210,8 +214,8 @@ const makeTimeline = ({
       error: false,
       loaded: true,
       loadingMore: false,
-      loadMoreError: false,
-      depleted: true,
+      loadMoreError: forYouLoadMoreError,
+      depleted: forYouDepleted,
     }),
     following: reactive({
       items: followingItems,
@@ -592,6 +596,23 @@ describe('HomeView virtualization', () => {
     wrapper = null;
     restoreGeometry();
     document.body.innerHTML = '';
+  });
+
+  it('shows the For You paging Retry and sends its click to the store', async () => {
+    const timeline = makeTimeline({
+      forYouItems: [makeRecommendation(880)],
+      forYouLoadMoreError: true,
+      forYouDepleted: false,
+    });
+    mocks.homeTimeline = timeline;
+    wrapper = mountHome();
+    await settle();
+
+    const retry = wrapper.get('.home-feed-sentinel .home-state__primary');
+    expect(retry.text()).toBe('Retry');
+    await retry.trigger('click');
+
+    expect(timeline.retryForYouLoadMore).toHaveBeenCalledOnce();
   });
 
   describe('Following discovery empty state', () => {
