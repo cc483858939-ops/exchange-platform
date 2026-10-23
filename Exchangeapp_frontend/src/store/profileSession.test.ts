@@ -8,6 +8,7 @@ import type { ProfileTimelineItem } from './profileSession';
 import { engagementResponseFromBatchMocks } from '../test-utils/engagementServiceMock';
 import {
   captureBookmarkStateSyncVersion,
+  markOwnProfileTimelineStale,
   registerHomeTimelineSync,
   syncHydratedPostBookmarkState,
 } from './sessionSync';
@@ -351,6 +352,41 @@ describe('profile session store', () => {
     expect(session.timelineItems.map(item => item.post.id)).toEqual([1, 2]);
     expect(session.nextCursor).toBeNull();
     expect(session.hasMore).toBe(false);
+  });
+
+  it('drops a pending old page after invalidation, then continues from the rebuilt cursor', async () => {
+    const pendingOldPage = deferred<{
+      items: TimelineItem[];
+      next_cursor: string | null;
+    }>();
+    mocks.getUserTimeline
+      .mockResolvedValueOnce({ items: [timelineItem(1)], next_cursor: 'old-cursor' })
+      .mockReturnValueOnce(pendingOldPage.promise)
+      .mockResolvedValueOnce({ items: [timelineItem(2)], next_cursor: 'new-cursor' })
+      .mockResolvedValueOnce({ items: [timelineItem(3)], next_cursor: null });
+    const store = useProfileSessionStore();
+    await store.loadTimeline(7);
+
+    const session = store.getSession(7)!;
+    const oldPage = store.loadMoreTimeline(7);
+    expect(mocks.getUserTimeline).toHaveBeenNthCalledWith(2, '7', { limit: 20, cursor: 'old-cursor' });
+
+    expect(markOwnProfileTimelineStale()).toBe(true);
+    await store.loadTimeline(7, true);
+    expect(mocks.getUserTimeline).toHaveBeenNthCalledWith(3, '7', { limit: 20 });
+    expect(session.timelineItems.map(item => item.post.id)).toEqual([2]);
+    expect(session.nextCursor).toBe('new-cursor');
+
+    pendingOldPage.resolve({ items: [timelineItem(99)], next_cursor: null });
+    await oldPage;
+    expect(session.timelineItems.map(item => item.post.id)).toEqual([2]);
+    expect(session.loadedActivityKeys).toEqual(new Set(['post:2']));
+    expect(session.nextCursor).toBe('new-cursor');
+    expect(session.timelineLoadingMore).toBe(false);
+
+    await store.loadMoreTimeline(7);
+    expect(mocks.getUserTimeline).toHaveBeenNthCalledWith(4, '7', { limit: 20, cursor: 'new-cursor' });
+    expect(session.timelineItems.map(item => item.post.id)).toEqual([2, 3]);
   });
 
   it('keeps previous Profile page interaction hydration valid when the next page starts', async () => {

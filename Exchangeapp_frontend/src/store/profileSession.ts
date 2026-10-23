@@ -724,6 +724,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
     try {
       const page = await getUserTimeline(String(userID), { limit: pageSize });
       if (!currentTimelineRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration)) return session;
+      if (session.timelineStaleVersion !== capturedTimelineStaleVersion) return session;
       const newItems = appendTimelineItems(session, page.items);
       session.nextCursor = page.next_cursor;
       session.hasMore = page.next_cursor !== null;
@@ -787,6 +788,7 @@ export const useProfileSessionStore = defineStore('profileSession', () => {
         !currentTimelineRequest(userID, session, requestVersion, capturedViewerID, capturedViewerGeneration)
         || session.nextCursor !== requestedCursor
       ) return session;
+      if (session.timelineStaleVersion !== capturedTimelineStaleVersion) return session;
       const newItems = appendTimelineItems(session, page.items);
       session.nextCursor = page.next_cursor;
       session.hasMore = page.next_cursor !== null;

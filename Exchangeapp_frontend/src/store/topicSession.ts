@@ -26,6 +26,7 @@ import {
   invalidateFeedPostReferences,
 } from '../utils/feedPost';
 import {
+  markOwnProfileTimelineStale,
   registerTopicSessionSync,
   syncTopicBookmarkState,
   syncTopicLikeState,
@@ -416,6 +417,7 @@ export const useTopicSessionStore = defineStore('topicSession', () => {
         applyFeedRepostStateUpdate(post, update);
         engagementMutations.settle(token);
         syncTopicRepostState(update);
+        markOwnProfileTimelineStale();
         return 'succeeded';
       } catch {
         if (!slug || !isCurrentMutation(token, slug, request, viewer, viewerGenerationSnapshot)) return 'ignored';

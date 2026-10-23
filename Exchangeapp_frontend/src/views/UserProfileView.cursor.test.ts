@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 
 import { flushPromises, mount } from '@vue/test-utils';
-import { nextTick } from 'vue';
+import { KeepAlive, defineComponent, h, nextTick, ref } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import UserProfileView from './UserProfileView.vue';
+import { useProfileSessionStore } from '../store/profileSession';
+import { markOwnProfileTimelineStale } from '../store/sessionSync';
 
 vi.mock('element-plus/es/components/message/style/css', () => ({}));
 
@@ -169,6 +171,34 @@ const mountProfile = () => mount(UserProfileView, {
   },
 });
 
+const mountKeepAliveProfile = () => {
+  let setVisible!: (visible: boolean) => void;
+  const AwayView = defineComponent({ template: '<div class="away-view" />' });
+  const Host = defineComponent({
+    setup() {
+      const visible = ref(true);
+      setVisible = (value: boolean) => { visible.value = value; };
+      return () => h(KeepAlive, null, [
+        visible.value
+          ? h(UserProfileView, { key: 'profile' })
+          : h(AwayView, { key: 'away' }),
+      ]);
+    },
+  });
+  return {
+    wrapper: mount(Host, {
+      global: {
+        stubs: {
+          AppIcon: { template: '<span />' },
+          PostCard: PostCardStub,
+          RouterLink: { template: '<a><slot /></a>' },
+        },
+      },
+    }),
+    setVisible,
+  };
+};
+
 describe('UserProfileView cursor pagination', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -208,6 +238,122 @@ describe('UserProfileView cursor pagination', () => {
 
     await mounted.vm.$nextTick();
     expect(mocks.getUserTimeline).toHaveBeenCalledTimes(2);
+    mounted.unmount();
+  });
+
+  it('rebuilds an invalidated own timeline when a KeepAlive profile is reactivated', async () => {
+    mocks.getUserTimeline
+      .mockResolvedValueOnce({ items: [timelineItem(1, 7)], next_cursor: 'old-cursor' })
+      .mockResolvedValueOnce({ items: [timelineItem(2, 7)], next_cursor: 'new-cursor' });
+    const { wrapper, setVisible } = mountKeepAliveProfile();
+    await settle();
+
+    const store = useProfileSessionStore();
+    const session = store.getSession(7)!;
+    expect(session.nextCursor).toBe('old-cursor');
+    expect(session.loadedActivityKeys).toEqual(new Set(['post:1']));
+
+    setVisible(false);
+    await nextTick();
+    expect(markOwnProfileTimelineStale()).toBe(true);
+    await settle();
+    expect(mocks.getUserTimeline).toHaveBeenCalledTimes(1);
+
+    setVisible(true);
+    await settle();
+    expect(mocks.getUserTimeline).toHaveBeenNthCalledWith(2, '7', { limit: 20 });
+    expect(session.timelineItems.map(item => item.post.id)).toEqual([2]);
+    expect(session.loadedActivityKeys).toEqual(new Set(['post:2']));
+    expect(session.nextCursor).toBe('new-cursor');
+    expect(session.timelineStale).toBe(false);
+
+    setVisible(false);
+    await nextTick();
+    setVisible(true);
+    await settle();
+    expect(mocks.getUserTimeline).toHaveBeenCalledTimes(2);
+    wrapper.unmount();
+  });
+
+  it('does not rebuild another user timeline when the viewer own timeline becomes stale', async () => {
+    mocks.setRouteID('8');
+    mocks.getUserTimeline.mockResolvedValueOnce({
+      items: [timelineItem(8, 8)],
+      next_cursor: null,
+    });
+    const mounted = mountProfile();
+    await settle();
+
+    const store = useProfileSessionStore();
+    store.ensureSession(7);
+    expect(markOwnProfileTimelineStale()).toBe(true);
+    await settle();
+
+    expect(mocks.getUserTimeline).toHaveBeenCalledTimes(1);
+    expect(mocks.getUserTimeline).toHaveBeenCalledWith('8', { limit: 20 });
+    expect(mounted.find('.post-card__id').text()).toBe('8');
+    mounted.unmount();
+  });
+
+  it('keeps a stale refresh version from committing and follows the latest repost event', async () => {
+    let resolveFirstRefresh!: (value: { items: ReturnType<typeof timelineItem>[]; next_cursor: string | null }) => void;
+    const firstRefresh = new Promise<{ items: ReturnType<typeof timelineItem>[]; next_cursor: string | null }>((resolve) => {
+      resolveFirstRefresh = resolve;
+    });
+    mocks.getUserTimeline
+      .mockResolvedValueOnce({ items: [timelineItem(1, 7)], next_cursor: 'old-cursor' })
+      .mockReturnValueOnce(firstRefresh)
+      .mockResolvedValueOnce({ items: [timelineItem(3, 7), timelineItem(4, 7)], next_cursor: 'latest-cursor' });
+    const mounted = mountProfile();
+    await settle();
+
+    const store = useProfileSessionStore();
+    const session = store.getSession(7)!;
+    expect(markOwnProfileTimelineStale()).toBe(true);
+    await nextTick();
+    expect(mocks.getUserTimeline).toHaveBeenCalledTimes(2);
+
+    expect(markOwnProfileTimelineStale()).toBe(true);
+    await nextTick();
+    expect(mocks.getUserTimeline).toHaveBeenCalledTimes(2);
+
+    resolveFirstRefresh({ items: [timelineItem(2, 7)], next_cursor: 'stale-cursor' });
+    await settle();
+    expect(mocks.getUserTimeline).toHaveBeenNthCalledWith(3, '7', { limit: 20 });
+    expect(session.timelineItems.map(item => item.post.id)).toEqual([3, 4]);
+    expect(session.loadedActivityKeys).toEqual(new Set(['post:3', 'post:4']));
+    expect(session.nextCursor).toBe('latest-cursor');
+    expect(session.timelineStale).toBe(false);
+    mounted.unmount();
+  });
+
+  it('does not retry a failed stale refresh automatically and allows the existing manual retry', async () => {
+    mocks.getUserTimeline
+      .mockResolvedValueOnce({ items: [timelineItem(1, 7)], next_cursor: 'old-cursor' })
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({ items: [timelineItem(2, 7)], next_cursor: 'new-cursor' });
+    const mounted = mountProfile();
+    await settle();
+
+    const store = useProfileSessionStore();
+    const session = store.getSession(7)!;
+    expect(markOwnProfileTimelineStale()).toBe(true);
+    await settle();
+    expect(mocks.getUserTimeline).toHaveBeenCalledTimes(2);
+    expect(session.timelineStale).toBe(true);
+    expect(session.timelineInitialError).toBeTruthy();
+    await nextTick();
+    expect(mocks.getUserTimeline).toHaveBeenCalledTimes(2);
+
+    const retryButton = mounted.findAll('button.profile-action')
+      .find(button => button.text().trim() === 'Retry timeline');
+    expect(retryButton).toBeDefined();
+    await retryButton!.trigger('click');
+    await settle();
+    expect(mocks.getUserTimeline).toHaveBeenNthCalledWith(3, '7', { limit: 20 });
+    expect(session.timelineItems.map(item => item.post.id)).toEqual([2]);
+    expect(session.nextCursor).toBe('new-cursor');
+    expect(session.timelineStale).toBe(false);
     mounted.unmount();
   });
 

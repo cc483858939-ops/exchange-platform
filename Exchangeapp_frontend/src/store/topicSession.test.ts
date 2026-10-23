@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   syncTopicLikeState: vi.fn(),
   syncTopicRepostState: vi.fn(),
   syncTopicBookmarkState: vi.fn(),
+  markOwnProfileTimelineStale: vi.fn(),
   beginBookmarkStateMutation: vi.fn(),
 }));
 
@@ -60,6 +61,7 @@ vi.mock('./sessionSync', () => ({
   syncTopicLikeState: mocks.syncTopicLikeState,
   syncTopicRepostState: mocks.syncTopicRepostState,
   syncTopicBookmarkState: mocks.syncTopicBookmarkState,
+  markOwnProfileTimelineStale: mocks.markOwnProfileTimelineStale,
   beginBookmarkStateMutation: mocks.beginBookmarkStateMutation,
 }));
 
@@ -299,10 +301,15 @@ describe('topicSession store', () => {
     await expect(mutation).resolves.toBe('succeeded');
     expect(store.items[0].likeCount).toBe(11);
     expect(mocks.syncTopicLikeState).toHaveBeenCalledWith({ postId: 1, likes: 11, liked: true, status: 'ready' });
+    expect(mocks.markOwnProfileTimelineStale).not.toHaveBeenCalled();
 
     await expect(store.toggleRepost(1)).resolves.toBe('succeeded');
     expect(store.items[0].repostCount).toBe(5);
     expect(mocks.syncTopicRepostState).toHaveBeenCalledWith({ postId: 1, reposts: 5, reposted: true, status: 'ready' });
+    expect(mocks.markOwnProfileTimelineStale).toHaveBeenCalledTimes(1);
+    await expect(store.toggleRepost(1)).resolves.toBe('succeeded');
+    expect(store.items[0]).toMatchObject({ repostCount: 3, reposted: false });
+    expect(mocks.markOwnProfileTimelineStale).toHaveBeenCalledTimes(2);
     await expect(store.toggleBookmark(1)).resolves.toBe('succeeded');
     expect(store.items[0].bookmarked).toBe(true);
     expect(mocks.syncTopicBookmarkState).toHaveBeenCalledWith({ postId: 1, bookmarked: true, status: 'ready' });
@@ -421,9 +428,12 @@ describe('topicSession store', () => {
     await store.setTopic('japan');
     await settle();
     const likeResult = deferred<{ likes: number; liked: boolean }>();
+    const repostResult = deferred<{ reposts: number; reposted: boolean }>();
     mocks.likePost.mockReturnValueOnce(likeResult.promise);
+    mocks.repostPost.mockReturnValueOnce(repostResult.promise);
 
     const mutation = store.toggleLike(1);
+    const repostMutation = store.toggleRepost(1);
     mocks.getPostLikeStates.mockResolvedValueOnce({ items: [{ post_id: 1, likes: 8, liked: false }], unavailable_post_ids: [] });
     mocks.getPostRepostStates.mockResolvedValueOnce({ items: [{ post_id: 1, reposts: 4, reposted: false }], unavailable_post_ids: [] });
     mocks.getPostBookmarkStates.mockResolvedValueOnce({ items: [{ post_id: 1, bookmarked: false }], unavailable_post_ids: [] });
@@ -432,11 +442,15 @@ describe('topicSession store', () => {
     await settle();
     expect(store.viewerID).toBe(8);
     likeResult.resolve({ likes: 99, liked: true });
+    repostResult.resolve({ reposts: 99, reposted: true });
 
-    await expect(mutation).resolves.toBe('ignored');
+    await expect(Promise.all([mutation, repostMutation])).resolves.toEqual(['ignored', 'ignored']);
     expect(store.viewerID).toBe(8);
     expect(store.items[0]).toMatchObject({ likeCount: 8, liked: false });
+    expect(store.items[0]).toMatchObject({ repostCount: 4, reposted: false });
     expect(store.likePendingPostIDs.has(1)).toBe(false);
+    expect(store.repostPendingPostIDs.has(1)).toBe(false);
+    expect(mocks.markOwnProfileTimelineStale).not.toHaveBeenCalled();
   });
 
   it('invalidates all engagement mutations when removing a post and blocks a cursor duplicate', async () => {
@@ -538,15 +552,22 @@ describe('topicSession store', () => {
     mocks.getPostLikeStates.mockResolvedValueOnce({
       items: [{ post_id: 1, likes: 3, liked: false }], unavailable_post_ids: [],
     });
+    mocks.getPostRepostStates.mockResolvedValueOnce({
+      items: [{ post_id: 1, reposts: 4, reposted: false }], unavailable_post_ids: [],
+    });
     const store = createStore(true);
     await store.setTopic('japan');
     await settle();
     mocks.likePost.mockRejectedValueOnce(new Error('offline'));
+    mocks.repostPost.mockRejectedValueOnce(new Error('offline'));
 
     await expect(store.toggleLike(1)).resolves.toBe('failed');
     expect(store.items[0].liked).toBe(false);
     expect(store.items[0].likeCount).toBe(3);
     expect(store.likePendingPostIDs.has(1)).toBe(false);
     expect(store.mutationErrors.get(1)).toBe('Could not update like.');
+    await expect(store.toggleRepost(1)).resolves.toBe('failed');
+    expect(store.items[0]).toMatchObject({ reposted: false, repostCount: 4 });
+    expect(mocks.markOwnProfileTimelineStale).not.toHaveBeenCalled();
   });
 });

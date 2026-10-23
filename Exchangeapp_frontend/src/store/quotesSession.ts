@@ -25,6 +25,7 @@ import {
 import { normalizePostQuoteCountUpdate } from '../utils/quoteCount';
 import {
   beginBookmarkStateMutation,
+  markOwnProfileTimelineStale,
   registerQuotesSessionSync,
   syncQuotesBookmarkState,
   syncQuotesLikeState,
@@ -334,6 +335,7 @@ export const useQuotesSessionStore = defineStore('quotesSession', () => {
         applyFeedRepostStateUpdate(post, update);
         engagementMutations.settle(token);
         syncQuotesRepostState(update);
+        markOwnProfileTimelineStale();
         return 'succeeded';
       } catch {
         if (!isCurrentMutation(token, target, request, viewer, generation)) return 'ignored';

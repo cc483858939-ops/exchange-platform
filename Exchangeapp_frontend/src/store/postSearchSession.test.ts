@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   executeLikeToggle: vi.fn(),
   executeRepostToggle: vi.fn(),
   executeBookmarkToggle: vi.fn(),
+  markOwnProfileTimelineStale: vi.fn(),
   syncPostSearchLikeState: vi.fn(),
   syncPostSearchRepostState: vi.fn(),
   syncPostSearchBookmarkState: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock('./sessionSync', () => ({
   syncPostSearchLikeState: mocks.syncPostSearchLikeState,
   syncPostSearchRepostState: mocks.syncPostSearchRepostState,
   syncPostSearchBookmarkState: mocks.syncPostSearchBookmarkState,
+  markOwnProfileTimelineStale: mocks.markOwnProfileTimelineStale,
 }));
 vi.mock('./engagementOperations', () => ({
   createOptimisticLikeUpdate: (post: any) => ({ postId: post.id, likes: post.likeCount + (post.liked ? -1 : 1), liked: !post.liked, status: 'ready' }),
@@ -288,6 +290,33 @@ describe('postSearchSession', () => {
     expect(mocks.syncPostSearchLikeState).toHaveBeenCalledWith({ postId: 1, likes: 5, liked: true, status: 'ready' });
   });
 
+  it('invalidates the own Profile timeline only after current Repost and undo responses succeed', async () => {
+    mocks.searchPosts.mockResolvedValueOnce(page([1]));
+    mocks.getPostEngagementStates.mockResolvedValueOnce({ items: [{
+      post_id: 1,
+      like: { status: 'ready', likes: 4, liked: false },
+      repost: { status: 'ready', reposts: 2, reposted: false },
+      bookmark: { status: 'ready', bookmarked: false },
+    }] });
+    const store = usePostSearchSessionStore();
+    store.activateCriteria(criteria('yen'));
+    await settle();
+
+    await expect(store.toggleRepost(1)).resolves.toBe('succeeded');
+    expect(store.items[0]).toMatchObject({ repostCount: 3, reposted: true });
+    expect(mocks.markOwnProfileTimelineStale).toHaveBeenCalledTimes(1);
+
+    mocks.executeRepostToggle.mockResolvedValueOnce({ reposts: 2, reposted: false });
+    await expect(store.toggleRepost(1)).resolves.toBe('succeeded');
+    expect(store.items[0]).toMatchObject({ repostCount: 2, reposted: false });
+    expect(mocks.markOwnProfileTimelineStale).toHaveBeenCalledTimes(2);
+
+    mocks.executeRepostToggle.mockRejectedValueOnce(new Error('offline'));
+    await expect(store.toggleRepost(1)).resolves.toBe('failed');
+    expect(store.items[0]).toMatchObject({ repostCount: 2, reposted: false });
+    expect(mocks.markOwnProfileTimelineStale).toHaveBeenCalledTimes(2);
+  });
+
   it('ignores an old viewer result after account switch', async () => {
     const oldViewer = deferred<ReturnType<typeof page>>();
     mocks.searchPosts.mockReturnValueOnce(oldViewer.promise).mockResolvedValueOnce(page([8]));
@@ -302,5 +331,19 @@ describe('postSearchSession', () => {
 
     expect(store.viewerID).toBe(8);
     expect(store.items.map(post => post.id)).toEqual([8]);
+
+    const repostResult = deferred<{ reposts: number; reposted: boolean }>();
+    store.items[0].repostStatus = 'ready';
+    store.items[0].repostCount = 2;
+    store.items[0].reposted = false;
+    mocks.executeRepostToggle.mockReturnValueOnce(repostResult.promise);
+    const mutation = store.toggleRepost(8);
+    mocks.authStore.currentIdentity = { id: 9 };
+    await nextTick();
+    repostResult.resolve({ reposts: 3, reposted: true });
+
+    await expect(mutation).resolves.toBe('ignored');
+    expect(store.viewerID).toBe(9);
+    expect(mocks.markOwnProfileTimelineStale).not.toHaveBeenCalled();
   });
 });

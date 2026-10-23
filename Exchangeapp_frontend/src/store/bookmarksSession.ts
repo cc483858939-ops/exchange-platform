@@ -26,6 +26,7 @@ import { normalizePostQuoteCountUpdate } from '../utils/quoteCount';
 import { useAuthStore } from './auth';
 import { useFeedStore } from './feed';
 import {
+  markOwnProfileTimelineStale,
   registerBookmarksSessionSync,
   syncExternalPostBookmarkState,
   syncExternalPostLikeState,
@@ -534,6 +535,7 @@ export const useBookmarksSessionStore = defineStore('bookmarksSession', () => {
         applyFeedRepostStateUpdate(post, { postId: postID, reposts: result.reposts, reposted: result.reposted, status: 'ready' });
         engagementMutations.settle(token);
         syncExternalPostRepostState({ postId: postID, reposts: result.reposts, reposted: result.reposted, status: 'ready' });
+        markOwnProfileTimelineStale();
         return true;
       } catch {
         if (!current()) return false;

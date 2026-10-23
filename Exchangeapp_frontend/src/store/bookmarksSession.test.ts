@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   repostPost: vi.fn(),
   undoRepostPost: vi.fn(),
   beginBookmarkStateMutation: vi.fn(),
+  markOwnProfileTimelineStale: vi.fn(),
 }));
 
 vi.mock('./auth', () => ({ useAuthStore: () => mocks.authStore }));
@@ -54,6 +55,7 @@ vi.mock('./sessionSync', () => ({
   syncExternalPostBookmarkState: vi.fn(),
   syncExternalPostLikeState: vi.fn(),
   syncExternalPostRepostState: vi.fn(),
+  markOwnProfileTimelineStale: mocks.markOwnProfileTimelineStale,
 }));
 
 import { useBookmarksSessionStore } from './bookmarksSession';
@@ -404,6 +406,27 @@ describe('bookmarksSession store', () => {
     });
     expect(store.likePendingPostIDs.has(1)).toBe(false);
     expect(store.repostPendingPostIDs.has(1)).toBe(false);
+    expect(mocks.markOwnProfileTimelineStale).not.toHaveBeenCalled();
+  });
+
+  it('marks the own Profile timeline stale after successful repost and undo responses', async () => {
+    mocks.getBookmarks.mockResolvedValueOnce({ items: [post(1)], next_cursor: null });
+    mocks.getPostRepostStates.mockResolvedValueOnce({
+      items: [{ post_id: 1, reposts: 0, reposted: false }], unavailable_post_ids: [],
+    });
+    mocks.repostPost.mockResolvedValueOnce({ reposts: 1, reposted: true });
+    mocks.undoRepostPost.mockResolvedValueOnce({ reposts: 0, reposted: false });
+    const store = createStore();
+    await store.loadInitial();
+    await settle();
+
+    await expect(store.toggleRepost(1)).resolves.toBe(true);
+    expect(store.items[0]).toMatchObject({ repostCount: 1, reposted: true });
+    expect(mocks.markOwnProfileTimelineStale).toHaveBeenCalledTimes(1);
+
+    await expect(store.toggleRepost(1)).resolves.toBe(true);
+    expect(store.items[0]).toMatchObject({ repostCount: 0, reposted: false });
+    expect(mocks.markOwnProfileTimelineStale).toHaveBeenCalledTimes(2);
   });
 
   it('ignores pending Like and Repost results after external state updates', async () => {
@@ -433,6 +456,7 @@ describe('bookmarksSession store', () => {
     expect(store.items[0]).toMatchObject({ likeCount: 8, liked: true, repostCount: 7, reposted: true });
     expect(store.likePendingPostIDs.has(1)).toBe(false);
     expect(store.repostPendingPostIDs.has(1)).toBe(false);
+    expect(mocks.markOwnProfileTimelineStale).not.toHaveBeenCalled();
   });
 
   it('keeps newer local Like state when an older hydration response arrives', async () => {
@@ -499,19 +523,28 @@ describe('bookmarksSession store', () => {
     mocks.getPostLikeStates.mockResolvedValueOnce({
       items: [{ post_id: 1, likes: 3, liked: false }], unavailable_post_ids: [],
     });
+    mocks.getPostRepostStates.mockResolvedValueOnce({
+      items: [{ post_id: 1, reposts: 0, reposted: false }], unavailable_post_ids: [],
+    });
     const store = createStore();
     await store.loadInitial();
     await settle();
     const likeResult = deferred<{ likes: number; liked: boolean }>();
+    const repostResult = deferred<{ reposts: number; reposted: boolean }>();
     mocks.likePost.mockReturnValueOnce(likeResult.promise);
+    mocks.repostPost.mockReturnValueOnce(repostResult.promise);
 
     const mutation = store.toggleLike(1);
+    const repostMutation = store.toggleRepost(1);
     store.setViewer(8);
     likeResult.resolve({ likes: 4, liked: true });
+    repostResult.resolve({ reposts: 1, reposted: true });
 
-    await expect(mutation).resolves.toBe(false);
+    await expect(Promise.all([mutation, repostMutation])).resolves.toEqual([false, false]);
     expect(store.items).toEqual([]);
     expect(store.likePendingPostIDs.has(1)).toBe(false);
+    expect(store.repostPendingPostIDs.has(1)).toBe(false);
+    expect(mocks.markOwnProfileTimelineStale).not.toHaveBeenCalled();
   });
 
   it('begins the shared bookmark fence before optimistic removal settles', async () => {

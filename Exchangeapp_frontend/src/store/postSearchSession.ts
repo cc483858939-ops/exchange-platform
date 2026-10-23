@@ -26,6 +26,7 @@ import {
 import { normalizePostQuoteCountUpdate } from '../utils/quoteCount';
 import {
   beginBookmarkStateMutation,
+  markOwnProfileTimelineStale,
   registerPostSearchSessionSync,
   syncPostSearchBookmarkState,
   syncPostSearchLikeState,
@@ -522,6 +523,7 @@ export const usePostSearchSessionStore = defineStore('postSearchSession', () => 
         applyFeedRepostStateUpdate(post, update);
         engagementMutations.settle(token);
         syncPostSearchRepostState(update);
+        markOwnProfileTimelineStale();
         return 'succeeded';
       } catch {
         if (!isCurrentMutation(token, request, key, viewer, generation)) return 'ignored';

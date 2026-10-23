@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   syncQuotesLikeState: vi.fn(),
   syncQuotesRepostState: vi.fn(),
   syncQuotesBookmarkState: vi.fn(),
+  markOwnProfileTimelineStale: vi.fn(),
 }));
 
 vi.mock('./auth', () => ({ useAuthStore: () => mocks.authStore }));
@@ -44,6 +45,7 @@ vi.mock('./sessionSync', () => ({
   syncQuotesLikeState: mocks.syncQuotesLikeState,
   syncQuotesRepostState: mocks.syncQuotesRepostState,
   syncQuotesBookmarkState: mocks.syncQuotesBookmarkState,
+  markOwnProfileTimelineStale: mocks.markOwnProfileTimelineStale,
 }));
 
 import { useQuotesSessionStore } from './quotesSession';
@@ -436,6 +438,7 @@ describe('quotesSession store', () => {
     expect(mocks.beginBookmarkStateMutation).toHaveBeenCalledWith(1);
     expect(mocks.syncQuotesLikeState).toHaveBeenCalledWith({ postId: 1, likes: 4, liked: true, status: 'ready' });
     expect(mocks.syncQuotesRepostState).toHaveBeenCalledWith({ postId: 1, reposts: 5, reposted: true, status: 'ready' });
+    expect(mocks.markOwnProfileTimelineStale).toHaveBeenCalledTimes(1);
     expect(mocks.syncQuotesBookmarkState).toHaveBeenCalledWith({ postId: 1, bookmarked: true, status: 'ready' });
     expect(store.items[0]).toMatchObject({ liked: true, likeCount: 4, reposted: true, repostCount: 5, bookmarked: true });
   });
@@ -455,6 +458,7 @@ describe('quotesSession store', () => {
 
     expect(mocks.executeLikeToggle).toHaveBeenCalledWith(1, true);
     expect(mocks.executeRepostToggle).toHaveBeenCalledWith(1, true);
+    expect(mocks.markOwnProfileTimelineStale).toHaveBeenCalledTimes(1);
     expect(mocks.executeBookmarkToggle).toHaveBeenCalledWith(1, true);
     expect(store.items[0]).toMatchObject({
       liked: false,
@@ -554,6 +558,7 @@ describe('quotesSession store', () => {
     expect(store.items[0]).toMatchObject({ reposted: false, repostCount: 4, repostStatus: 'ready' });
     expect(store.mutationErrors.get(1)).toBe('Could not update repost.');
     expect(mocks.syncQuotesRepostState).not.toHaveBeenCalled();
+    expect(mocks.markOwnProfileTimelineStale).not.toHaveBeenCalled();
   });
 
   it('rolls Bookmark back and keeps its error when the shared executor fails', async () => {
@@ -574,24 +579,29 @@ describe('quotesSession store', () => {
 
   it('ignores a successful mutation after the target changes and does not fan it out', async () => {
     const request = deferred<{ likes: number; liked: boolean }>();
+    const repostRequest = deferred<{ reposts: number; reposted: boolean }>();
     mocks.getPostQuotes
       .mockResolvedValueOnce({ items: [post(1)], next_cursor: null })
       .mockResolvedValueOnce({ items: [post(99)], next_cursor: null });
     hydrateAllUnengaged();
     mocks.executeLikeToggle.mockReturnValueOnce(request.promise);
+    mocks.executeRepostToggle.mockReturnValueOnce(repostRequest.promise);
     const store = createStore(true);
     await store.setTarget(42);
     await settle();
 
     const mutation = store.toggleLike(1);
+    const repostMutation = store.toggleRepost(1);
     await store.setTarget(99);
     request.resolve({ likes: 50, liked: true });
+    repostRequest.resolve({ reposts: 88, reposted: true });
 
-    expect(await mutation).toBe('ignored');
+    expect(await Promise.all([mutation, repostMutation])).toEqual(['ignored', 'ignored']);
     expect(store.targetPostID).toBe(99);
     expect(store.items).toHaveLength(1);
     expect(store.items[0]).toMatchObject({ id: 99, liked: false, likeCount: 3 });
     expect(mocks.syncQuotesLikeState).not.toHaveBeenCalled();
+    expect(mocks.markOwnProfileTimelineStale).not.toHaveBeenCalled();
   });
 
   it('rejects a Like when another surface already holds the mutation lease', async () => {

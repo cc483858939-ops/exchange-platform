@@ -596,9 +596,12 @@ const intersectionObserverAvailable = typeof IntersectionObserver !== 'undefined
 let observer: IntersectionObserver | null = null;
 let profileEntryVersion = 0;
 let restoredEntryVersion = -1;
+const profileTimelineRefreshEpoch = ref(0);
+let lastOwnTimelineRefreshKey: string | null = null;
 
 const beginProfileRestoreEpoch = () => {
   profileEntryVersion += 1;
+  profileTimelineRefreshEpoch.value += 1;
   restoredEntryVersion = -1;
 };
 
@@ -607,6 +610,41 @@ const currentViewerID = computed(() => {
   const id = authStore.currentIdentity?.id;
   return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id : null;
 });
+
+const refreshStaleOwnTimeline = () => {
+  const userID = numericUserID.value;
+  const session = activeSession.value;
+  if (
+    !profileViewActive.value
+    || route.name !== 'UserProfile'
+    || userID === null
+    || currentViewerID.value !== userID
+    || !session?.profileLoaded
+    || !session.timelineStale
+  ) return;
+
+  const refreshKey = `${userID}:${session.timelineStaleVersion}:${profileTimelineRefreshEpoch.value}`;
+  if (lastOwnTimelineRefreshKey === refreshKey || session.timelineInitialLoading) return;
+  lastOwnTimelineRefreshKey = refreshKey;
+  void profileStore.loadTimeline(userID, true);
+};
+
+watch(
+  [
+    profileViewActive,
+    () => route.name,
+    numericUserID,
+    currentViewerID,
+    () => activeSession.value?.profileLoaded,
+    () => activeSession.value?.timelineStale,
+    () => activeSession.value?.timelineStaleVersion,
+    () => activeSession.value?.timelineInitialLoading,
+    profileTimelineRefreshEpoch,
+  ],
+  refreshStaleOwnTimeline,
+  { flush: 'post', immediate: true },
+);
+
 const profileDisplayName = computed(() => {
   const displayName = user.value?.display_name?.trim() ?? '';
   return displayName || user.value?.username || 'Profile';
