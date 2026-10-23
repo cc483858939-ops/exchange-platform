@@ -143,6 +143,7 @@ type RecommendationDiversityConfig struct {
 	Enabled                    bool    `mapstructure:"enabled"`
 	AuthorWindowSize           int     `mapstructure:"author_window_size"`
 	MaxSameAuthorInWindow      int     `mapstructure:"max_same_author_in_window"`
+	SemanticHistoryWindowSize  int     `mapstructure:"semantic_history_window_size"`
 	SemanticDuplicateThreshold float64 `mapstructure:"semantic_duplicate_threshold"`
 	SemanticDuplicatePenalty   float64 `mapstructure:"semantic_duplicate_penalty"`
 }
@@ -436,6 +437,7 @@ var recommendationPresenceKeys = []string{
 	"out_of_network_min_ratio",
 
 	"diversity.enabled",
+	"diversity.semantic_history_window_size",
 	"diversity.semantic_duplicate_threshold",
 	"diversity.semantic_duplicate_penalty",
 	"language_affinity.enabled",

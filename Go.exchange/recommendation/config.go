@@ -31,6 +31,7 @@ func DefaultConfig() config.RecommendationConfig {
 		ServedHardExclusionMinutes: 30, ServedSoftLookbackDays: 7, ServedHistoryLimit: 1000, GuestServedHistoryLimit: 2000, GuestServedHistoryTTLHours: 24,
 		Diversity: config.RecommendationDiversityConfig{
 			Enabled: true, AuthorWindowSize: 8, MaxSameAuthorInWindow: 2,
+			SemanticHistoryWindowSize:  128,
 			SemanticDuplicateThreshold: 0.92, SemanticDuplicatePenalty: 1,
 		},
 		Trace: config.RecommendationTraceConfig{
@@ -175,6 +176,9 @@ func NormalizeConfig(configured config.RecommendationConfig, presence map[string
 	if set.Diversity.AuthorWindowSize > 0 {
 		cfg.Diversity.AuthorWindowSize = set.Diversity.AuthorWindowSize
 	}
+	if set.Diversity.SemanticHistoryWindowSize > 0 {
+		cfg.Diversity.SemanticHistoryWindowSize = set.Diversity.SemanticHistoryWindowSize
+	}
 	if set.Diversity.MaxSameAuthorInWindow > 0 {
 		cfg.Diversity.MaxSameAuthorInWindow = set.Diversity.MaxSameAuthorInWindow
 	}
@@ -253,6 +257,9 @@ func NormalizeConfig(configured config.RecommendationConfig, presence map[string
 	if set.Snapshot.PreselectPages > 0 {
 		cfg.Snapshot.PreselectPages = set.Snapshot.PreselectPages
 	}
+	if cfg.Snapshot.PreselectPages > maxSnapshotInitialPages {
+		cfg.Snapshot.PreselectPages = maxSnapshotInitialPages
+	}
 	if set.Snapshot.DefaultPageSize > 0 {
 		cfg.Snapshot.DefaultPageSize = set.Snapshot.DefaultPageSize
 	}
@@ -322,6 +329,15 @@ func NormalizeConfig(configured config.RecommendationConfig, presence map[string
 	}
 	if cfg.Diversity.AuthorWindowSize <= 0 {
 		cfg.Diversity.AuthorWindowSize = 8
+	}
+	if cfg.Diversity.SemanticHistoryWindowSize <= 0 {
+		cfg.Diversity.SemanticHistoryWindowSize = 128
+	}
+	if cfg.Diversity.SemanticHistoryWindowSize > maxSnapshotContextEntries {
+		cfg.Diversity.SemanticHistoryWindowSize = maxSnapshotContextEntries
+	}
+	if cfg.Diversity.AuthorWindowSize > maxSnapshotContextEntries {
+		cfg.Diversity.AuthorWindowSize = maxSnapshotContextEntries
 	}
 	if cfg.Diversity.MaxSameAuthorInWindow <= 0 {
 		cfg.Diversity.MaxSameAuthorInWindow = 2

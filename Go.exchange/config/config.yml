@@ -112,6 +112,7 @@ recommendation:
     enabled: true
     author_window_size: 8
     max_same_author_in_window: 2
+    semantic_history_window_size: 128
     semantic_duplicate_threshold: 0.92
     semantic_duplicate_penalty: 1
   trace:

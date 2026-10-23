@@ -51,6 +51,9 @@ func TestRecommendationSnapshotConfigDefaultsAndBounds(t *testing.T) {
 		defaults.PreselectPages != 2 || defaults.DefaultPageSize != 20 || defaults.MaxPageSize != 50 {
 		t.Fatalf("snapshot defaults=%#v", defaults)
 	}
+	if got := NormalizeConfig(config.RecommendationConfig{}, nil).Diversity.SemanticHistoryWindowSize; got != defaultSemanticHistoryWindowSize {
+		t.Fatalf("semantic history window default=%d want %d", got, defaultSemanticHistoryWindowSize)
+	}
 
 	configured := config.RecommendationConfig{Snapshot: config.RecommendationSnapshotConfig{
 		Enabled: true, TTLSeconds: 30, MaxCandidates: 900, PreselectPages: 4,
@@ -66,6 +69,12 @@ func TestRecommendationSnapshotConfigDefaultsAndBounds(t *testing.T) {
 	got = NormalizeConfig(configured, nil).Snapshot
 	if got.TTLSeconds != 120 || got.MaxCandidates != 500 || got.PreselectPages != 2 || got.DefaultPageSize != 20 || got.MaxPageSize != 50 {
 		t.Fatalf("invalid snapshot settings did not use defaults: %#v", got)
+	}
+	configured.Diversity = config.RecommendationDiversityConfig{AuthorWindowSize: 900, SemanticHistoryWindowSize: 900}
+	configured.Snapshot.PreselectPages = 900
+	bounded := NormalizeConfig(configured, nil)
+	if bounded.Snapshot.PreselectPages != maxSnapshotInitialPages || bounded.Diversity.AuthorWindowSize != maxSnapshotContextEntries || bounded.Diversity.SemanticHistoryWindowSize != maxSnapshotContextEntries {
+		t.Fatalf("snapshot/context bounds=%#v diversity=%#v", bounded.Snapshot, bounded.Diversity)
 	}
 }
 

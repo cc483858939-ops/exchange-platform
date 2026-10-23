@@ -2,6 +2,7 @@ package recommendation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -21,6 +22,9 @@ import (
 type memorySnapshotStore struct {
 	mu        sync.Mutex
 	snapshots map[string]CandidatePoolSnapshot
+	contexts  map[string][]SnapshotContextEntry
+	postState map[string]map[uint]string
+	pending   map[string][]int
 }
 
 func equalFloat32Slices(left, right []float32) bool {
@@ -36,10 +40,13 @@ func equalFloat32Slices(left, right []float32) bool {
 }
 
 func newMemorySnapshotStore() *memorySnapshotStore {
-	return &memorySnapshotStore{snapshots: make(map[string]CandidatePoolSnapshot)}
+	return &memorySnapshotStore{
+		snapshots: make(map[string]CandidatePoolSnapshot), contexts: make(map[string][]SnapshotContextEntry),
+		postState: make(map[string]map[uint]string), pending: make(map[string][]int),
+	}
 }
 
-func (store *memorySnapshotStore) Create(_ context.Context, snapshot CandidatePoolSnapshot, _ time.Duration, _ int) error {
+func (store *memorySnapshotStore) Create(_ context.Context, snapshot CandidatePoolSnapshot, pages []CachedPage, selectionContext []SnapshotContextEntry, _ time.Duration) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if _, exists := store.snapshots[snapshot.ID]; exists {
@@ -47,6 +54,30 @@ func (store *memorySnapshotStore) Create(_ context.Context, snapshot CandidatePo
 	}
 	snapshot.Version = candidatePoolSnapshotVersion
 	snapshot.Revision = 1
+	snapshot.PageCount = len(pages)
+	snapshot.Pages = append([]CachedPage(nil), pages...)
+	store.postState[snapshot.ID] = make(map[uint]string)
+	store.pending[snapshot.ID] = nil
+	for _, postID := range snapshot.UsedPostIDs {
+		if postID != 0 {
+			store.postState[snapshot.ID][postID] = snapshotPostState("used", 0)
+		}
+	}
+	for _, postID := range snapshot.MapperRejectedPostIDs {
+		if postID != 0 {
+			store.postState[snapshot.ID][postID] = snapshotPostState("rejected", 0)
+		}
+	}
+	for _, page := range pages {
+		for _, state := range mustPageInitialPostStates(page) {
+			store.postState[snapshot.ID][state.PostID] = state.Next
+		}
+		if snapshotPageCommitted(page) && !page.HistoryRecorded {
+			store.pending[snapshot.ID] = append(store.pending[snapshot.ID], page.Index)
+		}
+	}
+	store.contexts[snapshot.ID] = append([]SnapshotContextEntry(nil), selectionContext...)
+	refreshMemorySnapshotViews(&snapshot, store.postState[snapshot.ID])
 	store.snapshots[snapshot.ID] = cloneSnapshot(snapshot)
 	return nil
 }
@@ -61,7 +92,68 @@ func (store *memorySnapshotStore) Load(_ context.Context, id string) (CandidateP
 	return cloneSnapshot(snapshot), nil
 }
 
-func (store *memorySnapshotStore) CompareAndSwap(_ context.Context, id string, expected int64, snapshot CandidatePoolSnapshot, _ int) (bool, error) {
+func (store *memorySnapshotStore) LoadPage(_ context.Context, id string, pageIndex int) (CachedPage, bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	snapshot, exists := store.snapshots[id]
+	if !exists {
+		return CachedPage{}, false, ErrCursorExpired
+	}
+	page, found := snapshotPageAt(snapshot, pageIndex)
+	return page, found, nil
+}
+
+func (store *memorySnapshotStore) LoadContext(_ context.Context, id string, beforePageIndex int) ([]SnapshotContextEntry, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if _, exists := store.snapshots[id]; !exists {
+		return nil, ErrCursorExpired
+	}
+	entries := make([]SnapshotContextEntry, 0)
+	for _, entry := range store.contexts[id] {
+		if entry.PageIndex < beforePageIndex {
+			entries = append(entries, entry)
+		}
+	}
+	return entries, nil
+}
+
+func (store *memorySnapshotStore) LoadPendingHistory(_ context.Context, id string, limit int) ([]CachedPage, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	snapshot, exists := store.snapshots[id]
+	if !exists {
+		return nil, ErrCursorExpired
+	}
+	indexes := store.pending[id]
+	if limit > 0 && len(indexes) > limit {
+		indexes = indexes[:limit]
+	}
+	pages := make([]CachedPage, 0, len(indexes))
+	for _, pageIndex := range indexes {
+		if page, found := snapshotPageAt(snapshot, pageIndex); found {
+			pages = append(pages, page)
+		}
+	}
+	return pages, nil
+}
+
+func (store *memorySnapshotStore) KnownPostIDs(_ context.Context, id string, postIDs []uint) (map[uint]struct{}, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if _, exists := store.snapshots[id]; !exists {
+		return nil, ErrCursorExpired
+	}
+	known := make(map[uint]struct{})
+	for _, postID := range postIDs {
+		if store.postState[id][postID] != "" {
+			known[postID] = struct{}{}
+		}
+	}
+	return known, nil
+}
+
+func (store *memorySnapshotStore) Apply(_ context.Context, id string, expected int64, mutation SnapshotMutation) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	current, exists := store.snapshots[id]
@@ -71,11 +163,102 @@ func (store *memorySnapshotStore) CompareAndSwap(_ context.Context, id string, e
 	if current.Revision != expected {
 		return false, nil
 	}
+	snapshot := mutation.Snapshot
 	if snapshot.Revision != expected+1 {
 		return false, ErrSnapshotUnavailable
 	}
+	for _, change := range mutation.PostStates {
+		if store.postState[id][change.PostID] != change.Expected {
+			return false, nil
+		}
+	}
+	pages := append([]CachedPage(nil), current.Pages...)
+	for _, pageIndex := range mutation.DeletePageIndices {
+		for index := range pages {
+			if pages[index].Index == pageIndex {
+				pages = append(pages[:index], pages[index+1:]...)
+				break
+			}
+		}
+	}
+	if mutation.Page != nil {
+		updated := false
+		for index := range pages {
+			if pages[index].Index == mutation.Page.Index {
+				pages[index] = *mutation.Page
+				updated = true
+				break
+			}
+		}
+		if !updated {
+			pages = append(pages, *mutation.Page)
+		}
+	}
+	sort.Slice(pages, func(i, j int) bool { return pages[i].Index < pages[j].Index })
+	snapshot.Pages = pages
+	for _, change := range mutation.PostStates {
+		if change.Next == "" {
+			delete(store.postState[id], change.PostID)
+		} else {
+			store.postState[id][change.PostID] = change.Next
+		}
+	}
+	if mutation.Context != nil {
+		store.contexts[id] = append([]SnapshotContextEntry(nil), (*mutation.Context)...)
+	}
+	switch mutation.PendingHistoryChange {
+	case SnapshotPendingHistoryAdd:
+		store.pending[id] = appendUniqueInt(store.pending[id], mutation.PendingHistoryPage)
+	case SnapshotPendingHistoryRemove:
+		store.pending[id] = removeInt(store.pending[id], mutation.PendingHistoryPage)
+	}
+	refreshMemorySnapshotViews(&snapshot, store.postState[id])
 	store.snapshots[id] = cloneSnapshot(snapshot)
 	return true, nil
+}
+
+func mustPageInitialPostStates(page CachedPage) []SnapshotPostStateUpdate {
+	states, err := pageInitialPostStates(page)
+	if err != nil {
+		panic(err)
+	}
+	return states
+}
+
+func refreshMemorySnapshotViews(snapshot *CandidatePoolSnapshot, states map[uint]string) {
+	snapshot.UsedPostIDs = snapshot.UsedPostIDs[:0]
+	snapshot.MapperRejectedPostIDs = snapshot.MapperRejectedPostIDs[:0]
+	for _, page := range snapshot.Pages {
+		for _, item := range page.Items {
+			state := states[item.PostID]
+			if strings.HasPrefix(state, "rejected:") {
+				snapshot.MapperRejectedPostIDs = appendUniqueIDs(snapshot.MapperRejectedPostIDs, item.PostID)
+			} else if strings.HasPrefix(state, "reserved:") || strings.HasPrefix(state, "used:") {
+				snapshot.UsedPostIDs = appendUniqueIDs(snapshot.UsedPostIDs, item.PostID)
+			}
+		}
+	}
+}
+
+func appendUniqueInt(values []int, value int) []int {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	values = append(values, value)
+	sort.Ints(values)
+	return values
+}
+
+func removeInt(values []int, value int) []int {
+	result := values[:0]
+	for _, existing := range values {
+		if existing != value {
+			result = append(result, existing)
+		}
+	}
+	return result
 }
 
 func (repository *serviceTestCandidateRepository) LoadEligibleSnapshotCandidates(ctx context.Context, query CandidateQuery, candidates []Candidate) ([]RankedCandidate, error) {
@@ -238,12 +421,22 @@ type snapshotCASRevisionConflictOnce struct {
 	SnapshotStore
 	once     sync.Once
 	mu       sync.Mutex
-	proposed []CandidatePoolSnapshot
+	proposed []SnapshotMutation
 }
 
-func (store *snapshotCASRevisionConflictOnce) CompareAndSwap(ctx context.Context, id string, revision int64, snapshot CandidatePoolSnapshot, maxBytes int) (bool, error) {
+func (store *snapshotCASRevisionConflictOnce) Apply(ctx context.Context, id string, revision int64, mutation SnapshotMutation) (bool, error) {
 	store.mu.Lock()
-	store.proposed = append(store.proposed, cloneSnapshot(snapshot))
+	proposed := mutation
+	proposed.Snapshot = cloneSnapshot(mutation.Snapshot)
+	if mutation.Page != nil {
+		page := *mutation.Page
+		page.Items = append([]CachedCandidate(nil), mutation.Page.Items...)
+		page.ReturnedPostIDs = append([]uint(nil), mutation.Page.ReturnedPostIDs...)
+		proposed.Page = &page
+	}
+	proposed.DeletePageIndices = append([]int(nil), mutation.DeletePageIndices...)
+	proposed.PostStates = append([]SnapshotPostStateUpdate(nil), mutation.PostStates...)
+	store.proposed = append(store.proposed, proposed)
 	store.mu.Unlock()
 	conflicted := false
 	store.once.Do(func() { conflicted = true })
@@ -254,7 +447,7 @@ func (store *snapshotCASRevisionConflictOnce) CompareAndSwap(ctx context.Context
 		}
 		updated := cloneSnapshot(current)
 		updated.Revision = current.Revision + 1
-		if committed, err := store.SnapshotStore.CompareAndSwap(ctx, id, current.Revision, updated, maxBytes); err != nil || !committed {
+		if committed, err := store.SnapshotStore.Apply(ctx, id, current.Revision, SnapshotMutation{Snapshot: updated}); err != nil || !committed {
 			if err != nil {
 				return false, err
 			}
@@ -262,10 +455,10 @@ func (store *snapshotCASRevisionConflictOnce) CompareAndSwap(ctx context.Context
 		}
 		return false, nil
 	}
-	return store.SnapshotStore.CompareAndSwap(ctx, id, revision, snapshot, maxBytes)
+	return store.SnapshotStore.Apply(ctx, id, revision, mutation)
 }
 
-func (store *snapshotCASConflictOnce) CompareAndSwap(ctx context.Context, id string, revision int64, snapshot CandidatePoolSnapshot, maxBytes int) (bool, error) {
+func (store *snapshotCASConflictOnce) Apply(ctx context.Context, id string, revision int64, mutation SnapshotMutation) (bool, error) {
 	store.mu.Lock()
 	if store.conflicts == 0 {
 		store.conflicts++
@@ -273,7 +466,7 @@ func (store *snapshotCASConflictOnce) CompareAndSwap(ctx context.Context, id str
 		return false, nil
 	}
 	store.mu.Unlock()
-	return store.SnapshotStore.CompareAndSwap(ctx, id, revision, snapshot, maxBytes)
+	return store.SnapshotStore.Apply(ctx, id, revision, mutation)
 }
 
 type snapshotCASFailure struct {
@@ -281,7 +474,7 @@ type snapshotCASFailure struct {
 	err error
 }
 
-func (store snapshotCASFailure) CompareAndSwap(context.Context, string, int64, CandidatePoolSnapshot, int) (bool, error) {
+func (store snapshotCASFailure) Apply(context.Context, string, int64, SnapshotMutation) (bool, error) {
 	return false, store.err
 }
 
@@ -506,6 +699,76 @@ func TestRecommendationSnapshotPreselectsFullSecondPage(t *testing.T) {
 	}
 }
 
+func TestRecommendationSnapshotSemanticContextKeepsOnlyLatestWindow(t *testing.T) {
+	service, repository, _ := newSnapshotTestService(t, newMemorySnapshotStore())
+	repository.embeddings = make(map[uint][]float32)
+	var entries []SnapshotContextEntry
+	for index := 0; index < 160; index++ {
+		id := uint(index + 1)
+		page := CachedPage{Index: index, Items: []CachedCandidate{{
+			PostID: id, AuthorID: id + 1000, Candidate: Candidate{PostID: id},
+		}}}
+		entries = appendSnapshotContext(entries, page, snapshotContextWindow(service.config.Recommendation.Diversity))
+		repository.embeddings[id] = []float32{float32(id), 1}
+	}
+	if len(entries) != defaultSemanticHistoryWindowSize {
+		t.Fatalf("stored selection context=%d want %d", len(entries), defaultSemanticHistoryWindowSize)
+	}
+	if got := entries[0].Candidate.PostID; got != 33 {
+		t.Fatalf("oldest semantic context post=%d want 33", got)
+	}
+	selected, err := service.selectedSnapshotContext(context.Background(), entries, 160, "embedding-v1")
+	if err != nil {
+		t.Fatalf("load bounded selection context: %v", err)
+	}
+	if len(selected) != defaultSemanticHistoryWindowSize || selected[0].Post.ID != 33 || selected[len(selected)-1].Post.ID != 160 {
+		t.Fatalf("selection context range=%d..%d count=%d", selected[0].Post.ID, selected[len(selected)-1].Post.ID, len(selected))
+	}
+	if ids := selectedSnapshotContextIDs(entries, 160); len(ids) != defaultSemanticHistoryWindowSize || ids[0] != 33 || ids[len(ids)-1] != 160 {
+		t.Fatalf("semantic context IDs=%d..%d count=%d", ids[0], ids[len(ids)-1], len(ids))
+	}
+}
+
+func TestRecommendationSnapshotCapacityRotatesAsExpiredCursorWithoutDepletion(t *testing.T) {
+	store := newMemorySnapshotStore()
+	service, _, now := newSnapshotTestService(t, store)
+	first := firstSnapshotResult(t, service, now)
+	snapshot, err := store.Load(context.Background(), first.PoolID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.PageCount = defaultSnapshotMaxPages
+	snapshot.Revision++
+	store.mu.Lock()
+	store.snapshots[snapshot.ID] = cloneSnapshot(snapshot)
+	store.mu.Unlock()
+	codec, err := service.cursorCodec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewer := Viewer{Kind: ViewerAuthenticated, UserID: 42}
+	cursor, err := codec.Encode(snapshot.ID, defaultSnapshotMaxPages, snapshot.PageSize, viewer, snapshot.ExpiresAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Serve(context.Background(), ServeRequest{
+		Viewer: viewer, Limit: snapshot.PageSize, RequestID: "capacity-rotation", Cursor: cursor, Now: now.Add(time.Second),
+	})
+	if !errors.Is(err, ErrSnapshotCapacity) || !errors.Is(err, ErrCursorExpired) {
+		t.Fatalf("capacity cursor error=%v want capacity rotation surfaced as cursor expired", err)
+	}
+	if result.Depleted {
+		t.Fatal("capacity rotation reported recommendations depleted")
+	}
+	current, err := store.Load(context.Background(), snapshot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.PageCount != defaultSnapshotMaxPages || current.Exhausted {
+		t.Fatalf("capacity modified snapshot lifecycle: page_count=%d exhausted=%t", current.PageCount, current.Exhausted)
+	}
+}
+
 func TestRecommendationSnapshotDoesNotPreselectEmptyPageBeforeHistoricalBackfill(t *testing.T) {
 	viewer := Viewer{Kind: ViewerAuthenticated, UserID: 42}
 	service, historical, now := newHistoricalSnapshotBackfillFixture(t, 20, 100, false)
@@ -692,18 +955,18 @@ func TestRecommendationPreselectedPageInvalidationIsAtomic(t *testing.T) {
 		t.Fatal("dependent page 1 survived the same-CAS invalidation")
 	}
 	store.mu.Lock()
-	proposed := append([]CandidatePoolSnapshot(nil), store.proposed...)
+	proposed := append([]SnapshotMutation(nil), store.proposed...)
 	store.mu.Unlock()
 	if len(proposed) < 2 {
 		t.Fatalf("CAS attempts=%d, want retry after injected conflict", len(proposed))
 	}
 	atomicState := proposed[1]
-	atomicZero, zeroExists := snapshotPageAt(atomicState, 0)
-	if !zeroExists || !snapshotPageCommitted(atomicZero) {
-		t.Fatalf("retry CAS did not include committed page 0: %#v", atomicZero)
+	if atomicState.Page == nil || atomicState.Page.Index != 0 || !snapshotPageCommitted(*atomicState.Page) ||
+		!samePostIDs(atomicState.Page.ReturnedPostIDs, selectedPostIDs(returned)) {
+		t.Fatalf("retry CAS did not include committed page 0: %#v", atomicState.Page)
 	}
-	if _, exists := snapshotPageAt(atomicState, 1); exists || !samePostIDs(atomicState.UsedPostIDs, selectedPostIDs(returned)) {
-		t.Fatalf("retry CAS did not atomically invalidate page 1 and rebuild reservations: pages=%v used=%v", atomicState.Pages, atomicState.UsedPostIDs)
+	if !containsInt(atomicState.DeletePageIndices, 1) {
+		t.Fatalf("retry CAS did not atomically invalidate page 1: deleted=%v", atomicState.DeletePageIndices)
 	}
 	if !samePostIDs(after.UsedPostIDs, selectedPostIDs(returned)) {
 		t.Fatalf("used IDs=%v want committed IDs=%v", after.UsedPostIDs, selectedPostIDs(returned))
@@ -764,7 +1027,7 @@ func TestRecommendationPreselectionRejectsInvalidationAfterLaterPageCommit(t *te
 		}
 	}
 	updated.Revision++
-	if committed, err := store.CompareAndSwap(context.Background(), snapshot.ID, snapshot.Revision, updated, defaultSnapshotMaxBytes); err != nil || !committed {
+	if committed, err := store.Apply(context.Background(), snapshot.ID, snapshot.Revision, SnapshotMutation{Snapshot: updated, Page: &pageOne}); err != nil || !committed {
 		t.Fatalf("inject later committed page: committed=%v err=%v", committed, err)
 	}
 	returned := append([]SelectedCandidate(nil), result.Selected[:len(result.Selected)-1]...)
@@ -976,6 +1239,15 @@ func TestRecommendationCommittedPageMaterializationUsesReturnedOrder(t *testing.
 func containsUint(ids []uint, want uint) bool {
 	for _, id := range ids {
 		if id == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsInt(values []int, want int) bool {
+	for _, value := range values {
+		if value == want {
 			return true
 		}
 	}
@@ -1411,11 +1683,18 @@ func TestRecommendationSnapshotRefillsHistoricalCandidatesAfterCachedPoolIsConsu
 	}
 	snapshot := CandidatePoolSnapshot{
 		ID: "consumed-pool", PageSize: 20, Candidates: pool, UsedPostIDs: used,
-		RecentCutoff: now.AddDate(0, 0, -7), SoftExhausted: true,
+		RecentCutoff: now.AddDate(0, 0, -7), SoftExhausted: true, ExpiresAt: now.Add(2 * time.Minute),
+	}
+	if err := store.Create(context.Background(), snapshot, nil, nil, 2*time.Minute); err != nil {
+		t.Fatalf("create consumed snapshot state: %v", err)
+	}
+	snapshot, err := store.Load(context.Background(), snapshot.ID)
+	if err != nil {
+		t.Fatalf("load consumed snapshot state: %v", err)
 	}
 	page, err := service.selectSnapshotPage(context.Background(), ServeRequest{
 		Viewer: Viewer{Kind: ViewerAuthenticated, UserID: 42}, Limit: 20, RequestID: "historical-refill", Now: now,
-	}, "embedding-v1", Profile{PositiveVector: []float32{1}, ProfileStatus: ProfileStatusHit}, &snapshot, 0, "historical-refill", ServedHistory{})
+	}, "embedding-v1", Profile{PositiveVector: []float32{1}, ProfileStatus: ProfileStatusHit}, &snapshot, 0, "historical-refill", ServedHistory{}, nil)
 	if err != nil {
 		t.Fatalf("select page after cached pool exhaustion: %v", err)
 	}
@@ -1535,16 +1814,56 @@ func TestRecommendationSnapshotReuses500CandidatePoolAcrossFivePages(t *testing.
 	if err != nil {
 		t.Fatalf("load measured snapshot: %v", err)
 	}
-	snapshotBytes, err := marshalSnapshot(snapshot, defaultSnapshotMaxBytes)
+	measuredContext, err := store.LoadContext(context.Background(), snapshotID, defaultSnapshotMaxPages)
 	if err != nil {
-		t.Fatalf("marshal measured snapshot: %v", err)
+		t.Fatalf("load measured snapshot context: %v", err)
 	}
-	encodedSnapshotBytes := len(snapshotBytes)
+	encodedSnapshotBytes, err := snapshotLogicalBytesForTest(snapshot, measuredContext)
+	if err != nil {
+		t.Fatalf("measure split snapshot state: %v", err)
+	}
 	t.Logf("simulated 5-page latency: candidate-pool p50=%s p95=%s total=%s; full-recompute p50=%s p95=%s total=%s; dynamic-page eligible candidate IDs=%v total-read=%d; embedding rows=%d in %d batches; modeled DB queries=%d; Redis snapshot bytes=%d",
 		medianDuration(snapshotPageDurations), percentileDuration(snapshotPageDurations, .95), sumDurations(snapshotPageDurations),
 		medianDuration(legacyPageDurations), percentileDuration(legacyPageDurations, .95), sumDurations(legacyPageDurations),
 		candidates.snapshotPageCandidateIDs, candidates.snapshotCandidateIDsRead, candidates.snapshotEmbeddingIDsRead,
 		candidates.embeddingReadCalls, candidates.snapshotDatabaseQueries, encodedSnapshotBytes)
+}
+
+func snapshotLogicalBytesForTest(snapshot CandidatePoolSnapshot, entries []SnapshotContextEntry) (int, error) {
+	meta, pool, err := marshalSnapshotState(snapshot)
+	if err != nil {
+		return 0, err
+	}
+	contextJSON, err := marshalSnapshotContext(entries)
+	if err != nil {
+		return 0, err
+	}
+	pending := make([]int, 0)
+	fields := []string{"meta", meta, "pool", pool, "context", contextJSON}
+	for _, page := range snapshot.Pages {
+		pageJSON, err := marshalSnapshotPage(page)
+		if err != nil {
+			return 0, err
+		}
+		fields = append(fields, snapshotPageField(page.Index), pageJSON)
+		if snapshotPageCommitted(page) && !page.HistoryRecorded {
+			pending = append(pending, page.Index)
+		}
+		states, err := pageInitialPostStates(page)
+		if err != nil {
+			return 0, err
+		}
+		for _, state := range states {
+			fields = append(fields, snapshotPostField(state.PostID), state.Next)
+		}
+	}
+	sort.Ints(pending)
+	pendingJSON, err := json.Marshal(pending)
+	if err != nil {
+		return 0, err
+	}
+	fields = append(fields, "pending_history", string(pendingJSON))
+	return snapshotFieldBytes(fields), nil
 }
 
 func BenchmarkRecommendationSnapshotDynamicNextPages(b *testing.B) {

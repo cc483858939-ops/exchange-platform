@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -196,15 +198,47 @@ func (controllerRecommendationVersion) LoadServingVersion(context.Context) (stri
 type controllerMemorySnapshotStore struct {
 	mu        sync.Mutex
 	snapshots map[string]recommendation.CandidatePoolSnapshot
+	contexts  map[string][]recommendation.SnapshotContextEntry
+	postState map[string]map[uint]string
+	pending   map[string][]int
 }
 
 func newControllerMemorySnapshotStore() *controllerMemorySnapshotStore {
-	return &controllerMemorySnapshotStore{snapshots: make(map[string]recommendation.CandidatePoolSnapshot)}
+	return &controllerMemorySnapshotStore{
+		snapshots: make(map[string]recommendation.CandidatePoolSnapshot),
+		contexts:  make(map[string][]recommendation.SnapshotContextEntry),
+		postState: make(map[string]map[uint]string), pending: make(map[string][]int),
+	}
 }
-func (store *controllerMemorySnapshotStore) Create(_ context.Context, snapshot recommendation.CandidatePoolSnapshot, _ time.Duration, _ int) error {
+func (store *controllerMemorySnapshotStore) Create(_ context.Context, snapshot recommendation.CandidatePoolSnapshot, pages []recommendation.CachedPage, entries []recommendation.SnapshotContextEntry, _ time.Duration) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	snapshot.Version = 5
 	snapshot.Revision = 1
+	snapshot.PageCount = len(pages)
+	snapshot.Pages = append([]recommendation.CachedPage(nil), pages...)
+	store.postState[snapshot.ID] = make(map[uint]string)
+	store.pending[snapshot.ID] = nil
+	for _, page := range pages {
+		for _, item := range page.Items {
+			state := fmt.Sprintf("reserved:%d", page.Index)
+			if page.Committed {
+				state = fmt.Sprintf("rejected:%d", page.Index)
+				for _, id := range page.ReturnedPostIDs {
+					if id == item.PostID {
+						state = fmt.Sprintf("used:%d", page.Index)
+						break
+					}
+				}
+			}
+			store.postState[snapshot.ID][item.PostID] = state
+		}
+		if page.Committed && !page.HistoryRecorded {
+			store.pending[snapshot.ID] = append(store.pending[snapshot.ID], page.Index)
+		}
+	}
+	store.contexts[snapshot.ID] = append([]recommendation.SnapshotContextEntry(nil), entries...)
+	refreshControllerSnapshotViews(&snapshot, store.postState[snapshot.ID])
 	store.snapshots[snapshot.ID] = snapshot
 	return nil
 }
@@ -217,7 +251,71 @@ func (store *controllerMemorySnapshotStore) Load(_ context.Context, id string) (
 	}
 	return cloneControllerSnapshot(snapshot), nil
 }
-func (store *controllerMemorySnapshotStore) CompareAndSwap(_ context.Context, id string, expected int64, snapshot recommendation.CandidatePoolSnapshot, _ int) (bool, error) {
+func (store *controllerMemorySnapshotStore) LoadPage(_ context.Context, id string, pageIndex int) (recommendation.CachedPage, bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	snapshot, exists := store.snapshots[id]
+	if !exists {
+		return recommendation.CachedPage{}, false, recommendation.ErrCursorExpired
+	}
+	for _, page := range snapshot.Pages {
+		if page.Index == pageIndex {
+			return page, true, nil
+		}
+	}
+	return recommendation.CachedPage{}, false, nil
+}
+func (store *controllerMemorySnapshotStore) LoadContext(_ context.Context, id string, beforePage int) ([]recommendation.SnapshotContextEntry, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if _, exists := store.snapshots[id]; !exists {
+		return nil, recommendation.ErrCursorExpired
+	}
+	entries := make([]recommendation.SnapshotContextEntry, 0)
+	for _, entry := range store.contexts[id] {
+		if entry.PageIndex < beforePage {
+			entries = append(entries, entry)
+		}
+	}
+	return entries, nil
+}
+func (store *controllerMemorySnapshotStore) LoadPendingHistory(_ context.Context, id string, limit int) ([]recommendation.CachedPage, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	snapshot, exists := store.snapshots[id]
+	if !exists {
+		return nil, recommendation.ErrCursorExpired
+	}
+	indexes := store.pending[id]
+	if limit > 0 && len(indexes) > limit {
+		indexes = indexes[:limit]
+	}
+	pages := make([]recommendation.CachedPage, 0, len(indexes))
+	for _, index := range indexes {
+		for _, page := range snapshot.Pages {
+			if page.Index == index {
+				pages = append(pages, page)
+				break
+			}
+		}
+	}
+	return pages, nil
+}
+func (store *controllerMemorySnapshotStore) KnownPostIDs(_ context.Context, id string, postIDs []uint) (map[uint]struct{}, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if _, exists := store.snapshots[id]; !exists {
+		return nil, recommendation.ErrCursorExpired
+	}
+	known := make(map[uint]struct{})
+	for _, postID := range postIDs {
+		if store.postState[id][postID] != "" {
+			known[postID] = struct{}{}
+		}
+	}
+	return known, nil
+}
+func (store *controllerMemorySnapshotStore) Apply(_ context.Context, id string, expected int64, mutation recommendation.SnapshotMutation) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	current, exists := store.snapshots[id]
@@ -227,9 +325,96 @@ func (store *controllerMemorySnapshotStore) CompareAndSwap(_ context.Context, id
 	if current.Revision != expected {
 		return false, nil
 	}
+	snapshot := mutation.Snapshot
+	for _, change := range mutation.PostStates {
+		if store.postState[id][change.PostID] != change.Expected {
+			return false, nil
+		}
+	}
+	pages := append([]recommendation.CachedPage(nil), current.Pages...)
+	for _, pageIndex := range mutation.DeletePageIndices {
+		for index := range pages {
+			if pages[index].Index == pageIndex {
+				pages = append(pages[:index], pages[index+1:]...)
+				break
+			}
+		}
+	}
+	if mutation.Page != nil {
+		found := false
+		for index := range pages {
+			if pages[index].Index == mutation.Page.Index {
+				pages[index] = *mutation.Page
+				found = true
+				break
+			}
+		}
+		if !found {
+			pages = append(pages, *mutation.Page)
+		}
+	}
+	sort.Slice(pages, func(i, j int) bool { return pages[i].Index < pages[j].Index })
+	snapshot.Pages = pages
+	for _, change := range mutation.PostStates {
+		if change.Next == "" {
+			delete(store.postState[id], change.PostID)
+		} else {
+			store.postState[id][change.PostID] = change.Next
+		}
+	}
+	if mutation.Context != nil {
+		store.contexts[id] = append([]recommendation.SnapshotContextEntry(nil), (*mutation.Context)...)
+	}
+	switch mutation.PendingHistoryChange {
+	case recommendation.SnapshotPendingHistoryAdd:
+		found := false
+		for _, index := range store.pending[id] {
+			if index == mutation.PendingHistoryPage {
+				found = true
+			}
+		}
+		if !found {
+			store.pending[id] = append(store.pending[id], mutation.PendingHistoryPage)
+			sort.Ints(store.pending[id])
+		}
+	case recommendation.SnapshotPendingHistoryRemove:
+		pending := store.pending[id][:0]
+		for _, index := range store.pending[id] {
+			if index != mutation.PendingHistoryPage {
+				pending = append(pending, index)
+			}
+		}
+		store.pending[id] = pending
+	}
+	refreshControllerSnapshotViews(&snapshot, store.postState[id])
 	store.snapshots[id] = cloneControllerSnapshot(snapshot)
 	return true, nil
 }
+
+func refreshControllerSnapshotViews(snapshot *recommendation.CandidatePoolSnapshot, states map[uint]string) {
+	snapshot.UsedPostIDs = snapshot.UsedPostIDs[:0]
+	snapshot.MapperRejectedPostIDs = snapshot.MapperRejectedPostIDs[:0]
+	for _, page := range snapshot.Pages {
+		for _, item := range page.Items {
+			switch {
+			case strings.HasPrefix(states[item.PostID], "rejected:"):
+				snapshot.MapperRejectedPostIDs = appendUniqueControllerIDs(snapshot.MapperRejectedPostIDs, item.PostID)
+			case strings.HasPrefix(states[item.PostID], "reserved:") || strings.HasPrefix(states[item.PostID], "used:"):
+				snapshot.UsedPostIDs = appendUniqueControllerIDs(snapshot.UsedPostIDs, item.PostID)
+			}
+		}
+	}
+}
+
+func appendUniqueControllerIDs(ids []uint, id uint) []uint {
+	for _, current := range ids {
+		if current == id {
+			return ids
+		}
+	}
+	return append(ids, id)
+}
+
 func cloneControllerSnapshot(snapshot recommendation.CandidatePoolSnapshot) recommendation.CandidatePoolSnapshot {
 	snapshot.Candidates = append([]recommendation.CachedCandidate(nil), snapshot.Candidates...)
 	snapshot.UsedPostIDs = append([]uint(nil), snapshot.UsedPostIDs...)

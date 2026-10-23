@@ -20,6 +20,8 @@ type historicalScanState struct {
 	oldestCreatedAt time.Time
 }
 
+type knownPostIDLookup func(context.Context, []uint) (map[uint]struct{}, error)
+
 // supplementRecallTier scans a bounded keyset source until the page is filled,
 // the source reaches its end, or the request budget is consumed. Both unseen
 // history and soft revisits use the ordinary hydrator, ranker, and selector.
@@ -41,6 +43,7 @@ func (service *RecommendationService) supplementRecallTier(
 	extraExcluded map[uint]struct{},
 	ranked []RankedCandidate,
 	selected []SelectedCandidate,
+	knownPostIDs knownPostIDLookup,
 ) ([]RankedCandidate, []SelectedCandidate, CandidateSetSummary, historicalScanState, error) {
 	scanStarted := time.Now()
 	state := historicalScanState{cursor: cloneHistoricalCursor(startCursor)}
@@ -116,11 +119,13 @@ func (service *RecommendationService) supplementRecallTier(
 			scanned = len(page.Candidates)
 		}
 		state.scanned += max(0, scanned)
+		cursorAdvanced := false
 		if !page.Cursor.CreatedAt.IsZero() && page.Cursor.PostID != 0 {
 			if state.cursor != nil && sameHistoricalCursor(*state.cursor, page.Cursor) {
 				return ranked, selected, summary, state, fmt.Errorf("historical keyset cursor did not advance")
 			}
 			state.cursor = &HistoricalCursor{CreatedAt: page.Cursor.CreatedAt.UTC(), PostID: page.Cursor.PostID}
+			cursorAdvanced = true
 			if state.oldestCreatedAt.IsZero() || state.cursor.CreatedAt.Before(state.oldestCreatedAt) {
 				state.oldestCreatedAt = state.cursor.CreatedAt
 			}
@@ -133,6 +138,34 @@ func (service *RecommendationService) supplementRecallTier(
 				return ranked, selected, summary, state, fmt.Errorf("historical repository returned an empty non-terminal batch")
 			}
 			break
+		}
+		if knownPostIDs != nil {
+			ids := make([]uint, 0, len(page.Candidates))
+			for _, candidate := range page.Candidates {
+				ids = append(ids, candidate.PostID)
+			}
+			known, err := knownPostIDs(ctx, ids)
+			if err != nil {
+				return ranked, selected, summary, state, err
+			}
+			filtered := make([]Candidate, 0, len(page.Candidates))
+			for _, candidate := range page.Candidates {
+				if _, exists := known[candidate.PostID]; exists {
+					excluded[candidate.PostID] = struct{}{}
+					continue
+				}
+				filtered = append(filtered, candidate)
+			}
+			page.Candidates = filtered
+			if len(page.Candidates) == 0 && !state.exhausted && !cursorAdvanced {
+				return ranked, selected, summary, state, fmt.Errorf("historical repository did not advance beyond snapshot duplicates")
+			}
+		}
+		if len(page.Candidates) == 0 {
+			if state.exhausted {
+				break
+			}
+			continue
 		}
 		for index := range page.Candidates {
 			candidate := page.Candidates[index]

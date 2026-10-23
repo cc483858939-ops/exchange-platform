@@ -9,5 +9,6 @@
 !/docs/runbooks/post-embedding-provider.md
 !/docs/like-persistence-v4.md
 !/docs/like-state-recovery.md
+!/docs/recommendation-snapshot-v5.md
 /.codex/
 /.devdata/

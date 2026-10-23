@@ -3,6 +3,7 @@ package recommendation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -50,47 +51,202 @@ func TestRecommendationCursorCodecBindsOwnerPageSizeAndSignature(t *testing.T) {
 	}
 }
 
+func TestRedisSnapshotStoreDeepPaginationUsesBoundedHashFieldsIntegration(t *testing.T) {
+	client := openHistoryIntegrationRedis(t)
+	store, err := NewRedisSnapshotStore(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	snapshot := CandidatePoolSnapshot{
+		ID: uuid.NewString(), OwnerDigest: "deep-pagination-owner", CreatedAt: now,
+		ExpiresAt: now.Add(10 * time.Minute), PageSize: defaultSnapshotMaxPageSize,
+		RankerConfigHash: "ranker-v1", EmbeddingVersion: "embedding-v1", StrategyVersion: "strategy-v3",
+	}
+	key := snapshotRedisKey(snapshot.ID)
+	t.Cleanup(func() {
+		if err := client.Del(key).Err(); err != nil {
+			t.Errorf("delete deep-pagination snapshot: %v", err)
+		}
+	})
+	if err := store.Create(context.Background(), snapshot, nil, nil, 10*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	createdTTL, err := client.PTTL(key).Result()
+	if err != nil || createdTTL <= 0 {
+		t.Fatalf("initial snapshot TTL=%s err=%v", createdTTL, err)
+	}
+	var contextEntries []SnapshotContextEntry
+	const pageCount = 100
+	const pageSize = defaultSnapshotMaxPageSize
+	for pageIndex := 0; pageIndex < pageCount; pageIndex++ {
+		state, err := store.Load(context.Background(), snapshot.ID)
+		if err != nil {
+			t.Fatalf("load before page %d: %v", pageIndex, err)
+		}
+		page := CachedPage{Index: pageIndex, RequestID: fmt.Sprintf("deep-page-%03d", pageIndex), ServedAt: now.Add(time.Duration(pageIndex) * time.Second), Items: make([]CachedCandidate, 0, pageSize)}
+		postStates := make([]SnapshotPostStateUpdate, 0, pageSize)
+		for offset := 0; offset < pageSize; offset++ {
+			id := uint(pageIndex*pageSize + offset + 1)
+			item := CachedCandidate{
+				PostID: id, AuthorID: id%97 + 1, CreatedAt: now.Add(-time.Duration(id) * time.Second),
+				Candidate: Candidate{PostID: id, RecallTier: RecallTierHistoricalUnseen, RecentRank: offset + 1, FromHistorical: true},
+				Breakdown: ScoreBreakdown{FinalScore: float64(pageSize - offset)}, Phase: SelectionPhaseFresh,
+			}
+			page.Items = append(page.Items, item)
+			postStates = append(postStates, SnapshotPostStateUpdate{PostID: id, Next: snapshotPostState("reserved", pageIndex)})
+		}
+		contextEntries = appendSnapshotContext(contextEntries, page, defaultSemanticHistoryWindowSize)
+		state.PageCount = pageIndex + 1
+		state.Revision++
+		applied, err := store.Apply(context.Background(), snapshot.ID, state.Revision-1, SnapshotMutation{
+			Snapshot: state, Page: &page, PostStates: postStates, Context: &contextEntries,
+		})
+		if err != nil || !applied {
+			t.Fatalf("apply page %d: applied=%t err=%v", pageIndex, applied, err)
+		}
+		firstRead, found, err := store.LoadPage(context.Background(), snapshot.ID, pageIndex)
+		if err != nil || !found || len(firstRead.Items) != pageSize {
+			t.Fatalf("page %d read: found=%t items=%d err=%v", pageIndex, found, len(firstRead.Items), err)
+		}
+		replayed, found, err := store.LoadPage(context.Background(), snapshot.ID, pageIndex)
+		if err != nil || !found || replayed.RequestID != firstRead.RequestID || !equalUintSlices(cachedPagePostIDs(replayed), cachedPagePostIDs(firstRead)) {
+			t.Fatalf("page %d replay changed stable record: request=%q want=%q err=%v", pageIndex, replayed.RequestID, firstRead.RequestID, err)
+		}
+	}
+	loaded, err := store.Load(context.Background(), snapshot.ID)
+	if err != nil || loaded.PageCount != pageCount {
+		t.Fatalf("deep snapshot state=%#v err=%v", loaded, err)
+	}
+	if entries, err := store.LoadContext(context.Background(), snapshot.ID, pageCount); err != nil || len(entries) != defaultSemanticHistoryWindowSize {
+		t.Fatalf("deep context entries=%d err=%v want=%d", len(entries), err, defaultSemanticHistoryWindowSize)
+	}
+	knownCount := 0
+	for start := uint(1); start <= pageCount*pageSize; {
+		end := start + uint(maxSnapshotKnownPostIDsPerOperation)
+		if end > pageCount*pageSize+1 {
+			end = pageCount*pageSize + 1
+		}
+		ids := make([]uint, 0, end-start)
+		for id := start; id < end; id++ {
+			ids = append(ids, id)
+		}
+		known, err := store.KnownPostIDs(context.Background(), snapshot.ID, ids)
+		if err != nil {
+			t.Fatalf("load exact known IDs %d..%d: %v", start, end-1, err)
+		}
+		knownCount += len(known)
+		start = end
+	}
+	if knownCount != pageCount*pageSize {
+		t.Fatalf("exact known post IDs=%d want %d", knownCount, pageCount*pageSize)
+	}
+	bytesUsed, err := client.HGet(key, "_bytes").Int()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytesUsed <= 1<<20 || bytesUsed > defaultSnapshotMaxStorageBytes {
+		t.Fatalf("100-page split snapshot bytes=%d want >1 MiB and <=%d", bytesUsed, defaultSnapshotMaxStorageBytes)
+	}
+	remainingTTL, err := client.PTTL(key).Result()
+	if err != nil || remainingTTL <= 0 || remainingTTL >= createdTTL {
+		t.Fatalf("snapshot TTL refreshed or missing: initial=%s remaining=%s err=%v", createdTTL, remainingTTL, err)
+	}
+	fieldCount, err := client.HLen(key).Result()
+	if err != nil || fieldCount > maxSnapshotHashFields {
+		t.Fatalf("snapshot hash fields=%d err=%v max=%d", fieldCount, err, maxSnapshotHashFields)
+	}
+	tooLarge := loaded
+	tooLarge.PageCount = defaultSnapshotMaxPages + 1
+	tooLarge.Revision++
+	if _, err := store.Apply(context.Background(), snapshot.ID, loaded.Revision, SnapshotMutation{Snapshot: tooLarge}); !errors.Is(err, ErrSnapshotCapacity) {
+		t.Fatalf("over-budget page count error=%v want ErrSnapshotCapacity", err)
+	}
+	t.Logf("100-page Redis hash bytes=%d fields=%d exact IDs=%d context=%d TTL remaining=%s", bytesUsed, fieldCount, knownCount, defaultSemanticHistoryWindowSize, remainingTTL)
+}
+
 func TestRedisSnapshotStoreCreateLoadCASAndExpiryIntegration(t *testing.T) {
 	client := openHistoryIntegrationRedis(t)
 	store, err := NewRedisSnapshotStore(client)
 	if err != nil {
 		t.Fatal(err)
 	}
+	now := time.Now().UTC()
 	snapshot := CandidatePoolSnapshot{
 		Version: candidatePoolSnapshotVersion, ID: uuid.NewString(), OwnerDigest: "owner",
-		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(3 * time.Second), PageSize: 20,
-		Revision: 1, Candidates: []CachedCandidate{{PostID: 9, Candidate: Candidate{PostID: 9}}},
+		CreatedAt: now, ExpiresAt: now.Add(2 * time.Second), PageSize: 20,
+		Candidates: []CachedCandidate{{PostID: 9, Candidate: Candidate{PostID: 9}}},
 	}
+	page := CachedPage{Index: 0, RequestID: "request-0", ServedAt: now, Items: []CachedCandidate{{PostID: 9, Candidate: Candidate{PostID: 9}}}}
+	selectionContext := []SnapshotContextEntry{{PageIndex: 0, Candidate: page.Items[0]}}
 	key := snapshotRedisKey(snapshot.ID)
 	t.Cleanup(func() {
 		if err := client.Del(key).Err(); err != nil {
 			t.Errorf("delete recommendation snapshot integration key: %v", err)
 		}
 	})
-	if err := store.Create(context.Background(), snapshot, 3*time.Second, defaultSnapshotMaxBytes); err != nil {
+	if err := store.Create(context.Background(), snapshot, []CachedPage{page}, selectionContext, 2*time.Second); err != nil {
 		t.Fatal(err)
+	}
+	if kind, err := client.Type(key).Result(); err != nil || kind != "hash" {
+		t.Fatalf("snapshot Redis type=%q err=%v, want hash", kind, err)
+	}
+	for _, field := range []string{"meta", "pool", "context", "pending_history", "page:0", "post:9", "_bytes"} {
+		if exists, err := client.HExists(key, field).Result(); err != nil || !exists {
+			t.Fatalf("snapshot field %q exists=%v err=%v", field, exists, err)
+		}
 	}
 	loaded, err := store.Load(context.Background(), snapshot.ID)
-	if err != nil || loaded.Revision != 1 || len(loaded.Candidates) != 1 {
+	if err != nil || loaded.Revision != 1 || loaded.PageCount != 1 || len(loaded.Candidates) != 1 || len(loaded.Pages) != 0 {
 		t.Fatalf("loaded=%#v err=%v", loaded, err)
 	}
+	loadedPage, exists, err := store.LoadPage(context.Background(), snapshot.ID, 0)
+	if err != nil || !exists || loadedPage.RequestID != page.RequestID {
+		t.Fatalf("page=%#v exists=%t err=%v", loadedPage, exists, err)
+	}
+	updatedPage := loadedPage
+	updatedPage.Committed = true
+	updatedPage.ReturnedPostIDs = []uint{9}
 	updated := cloneSnapshot(loaded)
 	updated.Revision = 2
-	updated.UsedPostIDs = []uint{9}
-	if committed, err := store.CompareAndSwap(context.Background(), snapshot.ID, 1, updated, defaultSnapshotMaxBytes); err != nil || !committed {
-		t.Fatalf("CAS committed=%v err=%v", committed, err)
+	mutation := SnapshotMutation{
+		Snapshot: updated, Page: &updatedPage,
+		PostStates:           []SnapshotPostStateUpdate{{PostID: 9, Expected: snapshotPostState("reserved", 0), Next: snapshotPostState("used", 0)}},
+		PendingHistoryChange: SnapshotPendingHistoryAdd, PendingHistoryPage: 0,
 	}
-	if committed, err := store.CompareAndSwap(context.Background(), snapshot.ID, 1, updated, defaultSnapshotMaxBytes); err != nil || committed {
-		t.Fatalf("stale CAS committed=%v err=%v", committed, err)
+	if committed, err := store.Apply(context.Background(), snapshot.ID, 1, mutation); err != nil || !committed {
+		t.Fatalf("page commit applied=%v err=%v", committed, err)
+	}
+	if committed, err := store.Apply(context.Background(), snapshot.ID, 1, mutation); err != nil || committed {
+		t.Fatalf("stale mutation applied=%v err=%v", committed, err)
 	}
 	loaded, err = store.Load(context.Background(), snapshot.ID)
-	if err != nil || loaded.Revision != 2 || len(loaded.UsedPostIDs) != 1 {
+	if err != nil || loaded.Revision != 2 {
 		t.Fatalf("updated snapshot=%#v err=%v", loaded, err)
 	}
-	if err := client.Del(key).Err(); err != nil {
-		t.Fatal(err)
+	known, err := store.KnownPostIDs(context.Background(), snapshot.ID, []uint{9, 10})
+	if err != nil || len(known) != 1 {
+		t.Fatalf("known IDs=%v err=%v", known, err)
 	}
+	pending, err := store.LoadPendingHistory(context.Background(), snapshot.ID, 1)
+	if err != nil || len(pending) != 1 || pending[0].Index != 0 {
+		t.Fatalf("pending history=%#v err=%v", pending, err)
+	}
+	updated.Revision = 3
+	completedPage := updatedPage
+	completedPage.HistoryRecorded = true
+	if committed, err := store.Apply(context.Background(), snapshot.ID, 2, SnapshotMutation{
+		Snapshot: updated, Page: &completedPage,
+		PendingHistoryChange: SnapshotPendingHistoryRemove, PendingHistoryPage: 0,
+	}); err != nil || !committed {
+		t.Fatalf("history receipt applied=%v err=%v", committed, err)
+	}
+	pending, err = store.LoadPendingHistory(context.Background(), snapshot.ID, 1)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("completed pending history=%#v err=%v", pending, err)
+	}
+	time.Sleep(2100 * time.Millisecond)
 	if _, err := store.Load(context.Background(), snapshot.ID); !errors.Is(err, ErrCursorExpired) {
-		t.Fatalf("missing snapshot error=%v want cursor expired", err)
+		t.Fatalf("expired snapshot error=%v want cursor expired", err)
 	}
 }

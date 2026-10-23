@@ -134,7 +134,9 @@ func (service *RecommendationService) Serve(ctx context.Context, request ServeRe
 	if request.Cursor != "" {
 		result, request, err = service.serveSnapshotCursor(ctx, request, servingVersion, served)
 		if err != nil {
-			if errors.Is(err, ErrInvalidCursor) {
+			if errors.Is(err, ErrSnapshotCapacity) {
+				service.metrics.RecordSnapshotOutcome("capacity_rotation")
+			} else if errors.Is(err, ErrInvalidCursor) {
 				service.metrics.RecordSnapshotOutcome("invalid_cursor")
 			} else if errors.Is(err, ErrCursorExpired) {
 				service.metrics.RecordSnapshotOutcome("expired")
@@ -373,7 +375,7 @@ func (service *RecommendationService) executeUser(ctx context.Context, request S
 				ctx, request, servingVersion, &profile, languageContext, served, loadedAuthors,
 				CandidateRangeHistorical, time.Time{}, false, nil,
 				backfill.MaxScanPerRequest,
-				remainingPool, nil, nil, rankedFresh, selected,
+				remainingPool, nil, nil, rankedFresh, selected, nil,
 			)
 			if err != nil {
 				return result, err
@@ -395,7 +397,7 @@ func (service *RecommendationService) executeUser(ctx context.Context, request S
 			if softCapacity > 0 {
 				rankedSoft, softSelected, softSet, softState, softErr := service.supplementRecallTier(
 					ctx, request, servingVersion, &profile, languageContext, served, loadedAuthors,
-					CandidateRangeAny, time.Time{}, true, nil, softBudget, softCapacity, nil, nil, nil, selected,
+					CandidateRangeAny, time.Time{}, true, nil, softBudget, softCapacity, nil, nil, nil, selected, nil,
 				)
 				if softErr != nil {
 					return result, softErr
@@ -484,7 +486,7 @@ func (service *RecommendationService) executeGuest(ctx context.Context, request 
 			result.freshRankedCandidates, selected, historicalSet, historicalState, err = service.supplementRecallTier(
 				ctx, request, servingVersion, nil, languageContext, served, nil,
 				CandidateRangeHistorical, time.Time{}, false, nil, backfill.MaxScanPerRequest,
-				remainingPool, nil, nil, result.freshRankedCandidates, selected,
+				remainingPool, nil, nil, result.freshRankedCandidates, selected, nil,
 			)
 			if err != nil {
 				return result, err
@@ -506,7 +508,7 @@ func (service *RecommendationService) executeGuest(ctx context.Context, request 
 			if softCapacity > 0 {
 				rankedSoft, softSelected, softSet, softState, softErr := service.supplementRecallTier(
 					ctx, request, servingVersion, nil, languageContext, served, nil,
-					CandidateRangeAny, time.Time{}, true, nil, softBudget, softCapacity, nil, nil, nil, selected,
+					CandidateRangeAny, time.Time{}, true, nil, softBudget, softCapacity, nil, nil, nil, selected, nil,
 				)
 				if softErr != nil {
 					return result, softErr
