@@ -668,6 +668,9 @@ func TestRedisSnapshotStoreCreateLoadCASAndExpiryIntegration(t *testing.T) {
 	if err != nil || len(pending) != 1 || pending[0].Index != 0 {
 		t.Fatalf("pending history=%#v err=%v", pending, err)
 	}
+	if raw, err := client.HGet(key, "pending_history").Result(); err != nil || raw != "[0]" {
+		t.Fatalf("pending history JSON=%q err=%v, want [0]", raw, err)
+	}
 	updated.Revision = 3
 	completedPage := updatedPage
 	completedPage.HistoryRecorded = true
@@ -680,6 +683,9 @@ func TestRedisSnapshotStoreCreateLoadCASAndExpiryIntegration(t *testing.T) {
 	pending, err = store.LoadPendingHistory(context.Background(), snapshot.ID, 1)
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("completed pending history=%#v err=%v", pending, err)
+	}
+	if raw, err := client.HGet(key, "pending_history").Result(); err != nil || raw != "[]" {
+		t.Fatalf("completed pending history JSON=%q err=%v, want []", raw, err)
 	}
 	loaded, err = store.Load(context.Background(), snapshot.ID)
 	completedPage, exists, pageErr := store.LoadPage(context.Background(), snapshot.ID, 0)

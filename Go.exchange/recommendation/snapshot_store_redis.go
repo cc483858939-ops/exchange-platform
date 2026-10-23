@@ -699,7 +699,12 @@ if pendingOp ~= 0 then
   if pendingOp == 1 and not found then pending[#pending + 1] = pageIndex end
   if #pending > 128 then return -4 end
   table.sort(pending)
-  setField('pending_history', cjson.encode(pending))
+  -- Redis cjson encodes an empty Lua table as {}, so preserve the array shape.
+  if #pending == 0 then
+    setField('pending_history', '[]')
+  else
+    setField('pending_history', cjson.encode(pending))
+  end
 end
 if bytes < 0 or bytes > tonumber(ARGV[13]) or fieldCount > tonumber(ARGV[14]) then return -4 end
 for _, field in ipairs(deletes) do redis.call('HDEL', KEYS[1], field) end
