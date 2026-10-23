@@ -165,6 +165,90 @@ func TestRedisSnapshotStoreDeepPaginationUsesBoundedHashFieldsIntegration(t *tes
 	t.Logf("100-page Redis hash bytes=%d fields=%d exact IDs=%d context=%d TTL remaining=%s", bytesUsed, fieldCount, knownCount, defaultSemanticHistoryWindowSize, remainingTTL)
 }
 
+func TestRedisSnapshotStoreInitialEightPagePreselectionIntegration(t *testing.T) {
+	client := openHistoryIntegrationRedis(t)
+	store, err := NewRedisSnapshotStore(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, result, snapshot, contextEntries := createInitialPreselectionSnapshotWithStore(
+		t, 500, 50, 8, 128, 8, nil, nil, store,
+	)
+	key := snapshotRedisKey(result.PoolID)
+	t.Cleanup(func() {
+		if err := client.Del(key).Err(); err != nil {
+			t.Errorf("delete initial preselection snapshot: %v", err)
+		}
+	})
+	if snapshot.PageCount != 8 || len(contextEntries) != 128 {
+		t.Fatalf("initial Redis snapshot pages=%d context=%d, want 8 pages and 128 context entries", snapshot.PageCount, len(contextEntries))
+	}
+	initialTTL, err := client.PTTL(key).Result()
+	if err != nil || initialTTL <= 0 {
+		t.Fatalf("initial Redis snapshot TTL=%s err=%v", initialTTL, err)
+	}
+	allIDs := make([]uint, 0, 400)
+	for pageIndex := 0; pageIndex < 8; pageIndex++ {
+		page, exists, err := store.LoadPage(context.Background(), result.PoolID, pageIndex)
+		if err != nil || !exists || len(page.Items) != 50 {
+			t.Fatalf("load preselected page %d: exists=%t items=%d err=%v", pageIndex, exists, len(page.Items), err)
+		}
+		allIDs = append(allIDs, cachedPagePostIDs(page)...)
+	}
+	seen := make(map[uint]struct{}, len(allIDs))
+	for _, id := range allIDs {
+		if _, duplicate := seen[id]; duplicate {
+			t.Fatalf("Post %d appears in more than one Redis preselection page", id)
+		}
+		seen[id] = struct{}{}
+	}
+	if len(seen) != 400 {
+		t.Fatalf("Redis preselection unique IDs=%d want 400", len(seen))
+	}
+	known, err := store.KnownPostIDs(context.Background(), result.PoolID, allIDs)
+	if err != nil || len(known) != 400 {
+		t.Fatalf("Redis preselection known IDs=%d err=%v want 400", len(known), err)
+	}
+	remainingTTL, err := client.PTTL(key).Result()
+	if err != nil || remainingTTL <= 0 || remainingTTL > initialTTL {
+		t.Fatalf("Redis preselection reads changed TTL: initial=%s remaining=%s err=%v", initialTTL, remainingTTL, err)
+	}
+	if exists, err := client.Exists(key).Result(); err != nil || exists != 1 {
+		t.Fatalf("Redis preselection hash exists=%d err=%v", exists, err)
+	}
+}
+
+func TestRedisSnapshotStoreCreateRejectsDuplicatePostAcrossPagesIntegration(t *testing.T) {
+	client := openHistoryIntegrationRedis(t)
+	store, err := NewRedisSnapshotStore(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	snapshot := CandidatePoolSnapshot{
+		ID: uuid.NewString(), OwnerDigest: "duplicate-preselection-owner", CreatedAt: now,
+		ExpiresAt: now.Add(time.Minute), PageSize: 20, EmbeddingVersion: "embedding-v1",
+		RankerConfigHash: "ranker-v1", StrategyVersion: "strategy-v3",
+	}
+	key := snapshotRedisKey(snapshot.ID)
+	t.Cleanup(func() {
+		if err := client.Del(key).Err(); err != nil {
+			t.Errorf("delete rejected duplicate snapshot key: %v", err)
+		}
+	})
+	item := CachedCandidate{PostID: 44, Candidate: Candidate{PostID: 44}}
+	pages := []CachedPage{
+		{Index: 0, RequestID: "duplicate-page-0", ServedAt: now, Items: []CachedCandidate{item}},
+		{Index: 1, RequestID: "duplicate-page-1", ServedAt: now, Items: []CachedCandidate{item}},
+	}
+	if err := store.Create(context.Background(), snapshot, pages, nil, time.Minute); !errors.Is(err, ErrSnapshotUnavailable) {
+		t.Fatalf("duplicate preselection create error=%v, want ErrSnapshotUnavailable", err)
+	}
+	if exists, err := client.Exists(key).Result(); err != nil || exists != 0 {
+		t.Fatalf("rejected duplicate snapshot left a Redis key: exists=%d err=%v", exists, err)
+	}
+}
+
 func TestRedisSnapshotStoreCreateLoadCASAndExpiryIntegration(t *testing.T) {
 	client := openHistoryIntegrationRedis(t)
 	store, err := NewRedisSnapshotStore(client)

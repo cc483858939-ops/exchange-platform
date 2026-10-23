@@ -94,6 +94,12 @@ func (service *RecommendationService) createInitialSnapshot(ctx context.Context,
 	}
 	pageZero := cachedPageFromSelected(0, request.RequestID, now, generationDuration, result.Selected)
 	initialPages := []CachedPage{pageZero}
+	preselectedPostIDs := make(map[uint]struct{}, maxCandidates)
+	for _, item := range pageZero.Items {
+		if item.PostID != 0 {
+			preselectedPostIDs[item.PostID] = struct{}{}
+		}
+	}
 	contextEntries := appendSnapshotContext(nil, pageZero, snapshotContextWindow(service.config.Recommendation.Diversity))
 	embeddings := make(map[uint][]float32, len(result.freshRankedCandidates)+len(result.softRankedCandidates))
 	for _, item := range result.freshRankedCandidates {
@@ -113,9 +119,11 @@ func (service *RecommendationService) createInitialSnapshot(ctx context.Context,
 	}
 	for pageIndex := 1; pageIndex < preselect && pageIndex*request.Limit < maxCandidates; pageIndex++ {
 		prior := selectedContextFromEntries(contextEntries, embeddings)
+		availableFresh := excludePreselectedRankedCandidates(result.freshRankedCandidates, preselectedPostIDs)
+		availableSoft := excludePreselectedRankedCandidates(result.softRankedCandidates, preselectedPostIDs)
 		pageRequestID := uuid.NewString()
 		selected := selectRankedPage(
-			result.freshRankedCandidates, result.softRankedCandidates, prior,
+			availableFresh, availableSoft, prior,
 			request.Limit, now, pageRequestID, selectionConfig(service.config.Recommendation),
 		)
 		// Preselection cannot refill historical or soft candidates. Leave
@@ -126,6 +134,11 @@ func (service *RecommendationService) createInitialSnapshot(ctx context.Context,
 		}
 		page := cachedPageFromSelected(pageIndex, pageRequestID, now, generationDuration, selected)
 		initialPages = append(initialPages, page)
+		for _, item := range page.Items {
+			if item.PostID != 0 {
+				preselectedPostIDs[item.PostID] = struct{}{}
+			}
+		}
 		contextEntries = appendSnapshotContext(contextEntries, page, snapshotContextWindow(service.config.Recommendation.Diversity))
 	}
 	snapshot.PageCount = len(initialPages)
@@ -1124,6 +1137,20 @@ func selectRankedPage(fresh, soft []RankedCandidate, prior []SelectedCandidate, 
 		}, prior)
 	}
 	return selected
+}
+
+func excludePreselectedRankedCandidates(candidates []RankedCandidate, preselectedPostIDs map[uint]struct{}) []RankedCandidate {
+	available := make([]RankedCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Post.ID == 0 {
+			continue
+		}
+		if _, preselected := preselectedPostIDs[candidate.Post.ID]; preselected {
+			continue
+		}
+		available = append(available, candidate)
+	}
+	return available
 }
 
 func cachedRankedCandidate(item RankedCandidate, phase SelectionPhase) CachedCandidate {

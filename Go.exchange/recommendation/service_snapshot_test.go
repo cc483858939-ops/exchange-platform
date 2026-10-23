@@ -699,6 +699,271 @@ func TestRecommendationSnapshotPreselectsFullSecondPage(t *testing.T) {
 	}
 }
 
+func TestRecommendationInitialPreselectionUsesExactIDsAcrossEightPages(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		pageSize int
+	}{
+		{name: "20_per_page", pageSize: 20},
+		{name: "50_per_page", pageSize: 50},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, result, snapshot, contextEntries := createInitialPreselectionSnapshot(t, 500, test.pageSize, 8, 128, 8, nil, nil)
+			assertPreselectedPagesUnique(t, snapshot, 8, test.pageSize, 8*test.pageSize)
+			if len(snapshot.Pages) != 8 || snapshot.HistoricalCursor != nil || snapshot.HistoricalCandidatesScanned != 0 {
+				t.Fatalf("initial preselection unexpectedly invoked historical refill: pages=%d cursor=%v scanned=%d", len(snapshot.Pages), snapshot.HistoricalCursor, snapshot.HistoricalCandidatesScanned)
+			}
+			if result.Depleted || result.NextCursor == "" {
+				t.Fatalf("initial result depleted=%t cursor=%q, want an available continuation", result.Depleted, result.NextCursor)
+			}
+			if len(contextEntries) != 128 {
+				t.Fatalf("selection context entries=%d want 128", len(contextEntries))
+			}
+		})
+	}
+}
+
+func TestRecommendationInitialPreselectionDedupIsIndependentOfSemanticWindow(t *testing.T) {
+	_, _, snapshot, contextEntries := createInitialPreselectionSnapshot(t, 100, 10, 4, 2, 2, nil, nil)
+	assertPreselectedPagesUnique(t, snapshot, 4, 10, 40)
+	if len(contextEntries) != 2 {
+		t.Fatalf("selection context entries=%d want 2", len(contextEntries))
+	}
+}
+
+func TestRecommendationInitialPreselectionDeduplicatesFreshAndSoftCandidates(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	fresh := makePreselectionCandidates(now, 1, 20, false)
+	soft := makePreselectionCandidates(now, 1, 40, true)
+	_, _, snapshot, _ := createInitialPreselectionSnapshot(t, 40, 20, 2, 2, 2, fresh, soft)
+	assertPreselectedPagesUnique(t, snapshot, 2, 20, 40)
+	for index, item := range snapshot.Pages[1].Items {
+		if !item.Candidate.WasSoftServed || item.PostID != uint(21+index) {
+			t.Fatalf("page 1 item %d=%+v; want soft Post %d in preserved order", index, item, 21+index)
+		}
+	}
+}
+
+func TestRecommendationInitialPreselectionLeavesIncompletePageForDynamicPaging(t *testing.T) {
+	_, result, snapshot, _ := createInitialPreselectionSnapshot(t, 65, 20, 8, 128, 8, nil, nil)
+	assertPreselectedPagesUnique(t, snapshot, 3, 20, 60)
+	if snapshot.PageCount != 3 || snapshot.Exhausted || result.Depleted || result.NextCursor == "" || len(snapshot.Candidates) != 65 {
+		t.Fatalf("underfilled preselection state: pages=%d exhausted=%t depleted=%t cursor=%q candidates=%d", snapshot.PageCount, snapshot.Exhausted, result.Depleted, result.NextCursor, len(snapshot.Candidates))
+	}
+}
+
+func TestRecommendationServiceSnapshotPaginatesAndReplaysOneHundredPages(t *testing.T) {
+	const (
+		pageSize       = 20
+		pageCount      = 100
+		historyCount   = pageSize * (pageCount - 1)
+		historyBatch   = 200
+		semanticWindow = 128
+	)
+	service, historical, now := newHistoricalSnapshotBackfillFixture(t, pageSize, historyCount, false)
+	service.config.Recommendation.Snapshot.PreselectPages = 1
+	service.config.Recommendation.Diversity.SemanticHistoryWindowSize = semanticWindow
+	trace := &serviceTestTraceEnqueuer{}
+	service.dependencies.TraceEnqueuer = trace
+
+	historical.pages = make([]HistoricalCandidatePage, 0, (historyCount+historyBatch-1)/historyBatch)
+	for start := 0; start < historyCount; start += historyBatch {
+		end := min(start+historyBatch, historyCount)
+		page := HistoricalCandidatePage{Candidates: make([]Candidate, 0, end-start), Scanned: end - start, Exhausted: end == historyCount}
+		for offset := start; offset < end; offset++ {
+			id := uint(1001 + offset)
+			page.Candidates = append(page.Candidates, Candidate{PostID: id})
+			createdAt := now.AddDate(0, 0, -30).Add(-time.Duration(offset) * time.Second)
+			page.Cursor = HistoricalCursor{CreatedAt: createdAt, PostID: id}
+		}
+		historical.pages = append(historical.pages, page)
+	}
+
+	viewer := Viewer{Kind: ViewerAuthenticated, UserID: 42}
+	var current ServeResult
+	var cursor string
+	allIDs := make([][]uint, 0, pageCount)
+	lastPageCursor := ""
+	for pageIndex := 0; pageIndex < pageCount; pageIndex++ {
+		lastPageCursor = cursor
+		if pageIndex == 0 {
+			var err error
+			current, err = service.Serve(context.Background(), ServeRequest{
+				Viewer: viewer, Limit: pageSize, RequestID: uuid.NewString(), Now: now,
+			})
+			if err != nil {
+				t.Fatalf("serve page %d: %v", pageIndex, err)
+			}
+		} else {
+			current = serveHistoricalSnapshotTestPage(t, service, viewer, cursor, now.Add(time.Duration(pageIndex)*time.Second))
+		}
+		ids := selectedPostIDs(current.Selected)
+		if len(ids) != pageSize {
+			t.Fatalf("page %d contains %d posts, want %d; depleted=%t cursor=%q", pageIndex, len(ids), pageSize, current.Depleted, current.NextCursor)
+		}
+		if current.Depleted {
+			t.Fatalf("snapshot declared depletion after page %d despite more fixture history", pageIndex)
+		}
+		allIDs = append(allIDs, ids)
+		if pageIndex < pageCount-1 && current.NextCursor == "" {
+			t.Fatalf("snapshot stopped at page %d before %d full pages", pageIndex, pageCount)
+		}
+		finalizeServiceTestResult(t, service, current)
+		if current.NextCursor != "" {
+			cursor = current.NextCursor
+		}
+	}
+	assertNoRepeatedPostIDs(t, allIDs...)
+	if got := len(uniquePostIDs(allIDs...)); got != pageSize*pageCount {
+		t.Fatalf("unique page IDs=%d want %d", got, pageSize*pageCount)
+	}
+
+	snapshot, err := service.dependencies.Snapshots.Load(context.Background(), current.PoolID)
+	if err != nil || snapshot.PageCount != pageCount {
+		t.Fatalf("long snapshot page count=%d err=%v want %d", snapshot.PageCount, err, pageCount)
+	}
+	if snapshot.Exhausted {
+		t.Fatal("snapshot declared depletion before requesting beyond the 100 full pages")
+	}
+	contextEntries, err := service.dependencies.Snapshots.LoadContext(context.Background(), snapshot.ID, pageCount)
+	if err != nil || len(contextEntries) != semanticWindow {
+		t.Fatalf("long snapshot context=%d err=%v want %d", len(contextEntries), err, semanticWindow)
+	}
+	if len(historical.queries) == 0 || historical.pageCursor != len(historical.pages) {
+		t.Fatalf("historical batches read=%d consumed=%d; want all batches consumed", len(historical.queries), historical.pageCursor)
+	}
+	if trace.enqueueCalls != pageCount {
+		t.Fatalf("trace attempts=%d want %d", trace.enqueueCalls, pageCount)
+	}
+
+	history := service.dependencies.History.(*serviceTestHistoryStore)
+	history.mu.Lock()
+	historyAttempts := history.pageRecordAttempts
+	history.mu.Unlock()
+	replay, err := service.Serve(context.Background(), ServeRequest{
+		Viewer: viewer, Limit: pageSize, Cursor: lastPageCursor,
+		RequestID: uuid.NewString(), Now: now.Add(time.Duration(pageCount) * time.Second),
+	})
+	if err != nil || !replay.CacheHit || replay.RequestID != current.RequestID || !equalUintSlices(selectedPostIDs(replay.Selected), selectedPostIDs(current.Selected)) {
+		t.Fatalf("last-page replay cache=%t request=%q/%q IDs=%v/%v err=%v", replay.CacheHit, replay.RequestID, current.RequestID, selectedPostIDs(replay.Selected), selectedPostIDs(current.Selected), err)
+	}
+	finalizeServiceTestResult(t, service, replay)
+	history.mu.Lock()
+	defer history.mu.Unlock()
+	if history.pageRecordAttempts != historyAttempts || trace.enqueueCalls != pageCount {
+		t.Fatalf("replaying last page repeated side effects: history attempts=%d/%d trace attempts=%d", history.pageRecordAttempts, historyAttempts, trace.enqueueCalls)
+	}
+}
+
+func uniquePostIDs(pages ...[]uint) map[uint]struct{} {
+	ids := make(map[uint]struct{})
+	for _, page := range pages {
+		for _, id := range page {
+			ids[id] = struct{}{}
+		}
+	}
+	return ids
+}
+
+func createInitialPreselectionSnapshot(
+	t *testing.T,
+	candidateCount, pageSize, preselectPages, semanticWindow, authorWindow int,
+	fresh, soft []RankedCandidate,
+) (*RecommendationService, ServeResult, CandidatePoolSnapshot, []SnapshotContextEntry) {
+	t.Helper()
+	return createInitialPreselectionSnapshotWithStore(
+		t, candidateCount, pageSize, preselectPages, semanticWindow, authorWindow, fresh, soft, newMemorySnapshotStore(),
+	)
+}
+
+func createInitialPreselectionSnapshotWithStore(
+	t *testing.T,
+	candidateCount, pageSize, preselectPages, semanticWindow, authorWindow int,
+	fresh, soft []RankedCandidate,
+	store SnapshotStore,
+) (*RecommendationService, ServeResult, CandidatePoolSnapshot, []SnapshotContextEntry) {
+	t.Helper()
+	service, _, now := newSnapshotTestService(t, store)
+	service.config.Recommendation.Snapshot = config.RecommendationSnapshotConfig{
+		Enabled: true, TTLSeconds: 120, MaxCandidates: 500, PreselectPages: preselectPages,
+		DefaultPageSize: pageSize, MaxPageSize: 50,
+	}
+	service.config.Recommendation.Diversity = config.RecommendationDiversityConfig{
+		Enabled: true, AuthorWindowSize: authorWindow, MaxSameAuthorInWindow: 3,
+		SemanticHistoryWindowSize: semanticWindow, SemanticDuplicateThreshold: .9,
+	}
+	service.config.Recommendation.Exploration.Ratio = 0
+	if fresh == nil {
+		fresh = makePreselectionCandidates(now, 1, candidateCount, false)
+	}
+	requestID := uuid.NewString()
+	viewer := Viewer{Kind: ViewerAuthenticated, UserID: 42}
+	selected := selectRankedPage(fresh, soft, nil, pageSize, now, requestID, selectionConfig(service.config.Recommendation))
+	if len(selected) != pageSize {
+		t.Fatalf("test fixture initial page contains %d candidates, want %d", len(selected), pageSize)
+	}
+	result := ServeResult{
+		Viewer: viewer, RequestID: requestID, Now: now, Limit: pageSize,
+		Profile: Profile{ComputedAt: now.Add(-time.Hour)}, Selected: selected,
+		freshRankedCandidates: fresh, softRankedCandidates: soft,
+		historicalExhausted: true, softExhausted: true,
+	}
+	request := ServeRequest{Viewer: viewer, RequestID: requestID, Limit: pageSize, Now: now}
+	if err := service.createInitialSnapshot(context.Background(), request, "embedding-v1", &result, 0); err != nil {
+		t.Fatalf("create initial preselection snapshot: %v", err)
+	}
+	snapshot, err := store.Load(context.Background(), result.PoolID)
+	if err != nil {
+		t.Fatalf("load initial preselection snapshot: %v", err)
+	}
+	contextEntries, err := store.LoadContext(context.Background(), result.PoolID, preselectPages)
+	if err != nil {
+		t.Fatalf("load initial preselection context: %v", err)
+	}
+	return service, result, snapshot, contextEntries
+}
+
+func makePreselectionCandidates(now time.Time, firstID, count int, soft bool) []RankedCandidate {
+	items := make([]RankedCandidate, 0, count)
+	for offset := 0; offset < count; offset++ {
+		id := uint(firstID + offset)
+		candidate := testCandidate(id, CandidateSourceRecent)
+		candidate.WasSoftServed = soft
+		items = append(items, RankedCandidate{
+			Candidate:   candidate,
+			Post:        models.Post{Model: gorm.Model{ID: id, CreatedAt: now.Add(-time.Duration(offset+1) * time.Minute)}, AuthorID: id + 10000},
+			Breakdown:   ScoreBreakdown{BaseScore: float64(count - offset), FinalScore: float64(count - offset)},
+			IsInNetwork: true,
+		})
+	}
+	return items
+}
+
+func assertPreselectedPagesUnique(t *testing.T, snapshot CandidatePoolSnapshot, wantPages, pageSize, wantUnique int) {
+	t.Helper()
+	if len(snapshot.Pages) != wantPages {
+		t.Fatalf("preselected pages=%d want %d", len(snapshot.Pages), wantPages)
+	}
+	seen := make(map[uint]struct{}, wantUnique)
+	for _, page := range snapshot.Pages {
+		if len(page.Items) != pageSize {
+			t.Fatalf("page %d item count=%d want %d", page.Index, len(page.Items), pageSize)
+		}
+		for _, item := range page.Items {
+			if _, duplicate := seen[item.PostID]; duplicate {
+				t.Fatalf("Post %d was preselected more than once", item.PostID)
+			}
+			seen[item.PostID] = struct{}{}
+		}
+	}
+	if len(seen) != wantUnique {
+		t.Fatalf("unique preselected Post IDs=%d want %d", len(seen), wantUnique)
+	}
+	if len(snapshot.UsedPostIDs) != wantUnique {
+		t.Fatalf("reserved preselected Post IDs=%d want %d", len(snapshot.UsedPostIDs), wantUnique)
+	}
+}
+
 func TestRecommendationSnapshotSemanticContextKeepsOnlyLatestWindow(t *testing.T) {
 	service, repository, _ := newSnapshotTestService(t, newMemorySnapshotStore())
 	repository.embeddings = make(map[uint][]float32)
