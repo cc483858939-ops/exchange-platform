@@ -579,10 +579,17 @@ export const useAuthStore = defineStore('auth', () => {
     }, { requireLock: true });
   };
 
-  const changePassword = async (currentPassword: string, newPassword: string): Promise<void> => {
-    const binding = captureRequestAuthBinding();
+  const changePassword = async (
+    currentPassword: string,
+    newPassword: string,
+    expectedBinding: AuthRequestBinding,
+  ): Promise<void> => {
+    reconcilePersistedAuthState(undefined, 'require-readable');
+    if (!expectedBinding || !matchesRequestAuthBinding(expectedBinding)) {
+      throw new AuthSessionChangedError();
+    }
     const authorization = token.value;
-    if (!binding || !authorization) throw new AuthSessionChangedError();
+    if (!authorization) throw new AuthSessionChangedError();
 
     try {
       const response = await authClient.put('/me/password', {
@@ -596,15 +603,15 @@ export const useAuthStore = defineStore('auth', () => {
     }
 
     try {
-      await clearChangedPasswordSession(binding);
+      await clearChangedPasswordSession(expectedBinding);
     } catch (error) {
       if (error instanceof AuthSessionChangedError) throw error;
       if (error instanceof AuthRequestError && error.code === 'AUTH_PASSWORD_CHANGED_CLEANUP_FAILED') throw error;
-      if (matchesRequestAuthBinding(binding)) {
-        pendingLocalLogoutSessionId = binding.sessionID;
+      if (matchesRequestAuthBinding(expectedBinding)) {
+        pendingLocalLogoutSessionId = expectedBinding.sessionID;
         advanceSessionVersion();
         applyPersistedSession(null);
-        notifyAuthSessionInvalidated({ sessionId: binding.sessionID, userId: binding.userID });
+        notifyAuthSessionInvalidated({ sessionId: expectedBinding.sessionID, userId: expectedBinding.userID });
       }
       throw new AuthRequestError(
         'Password changed, but browser session cleanup could not be confirmed. Close other tabs and sign in again.',

@@ -9,6 +9,7 @@ import {
   AUTH_MUTATION_LOCK_WAIT_TIMEOUT_MS,
   AUTH_USER_STORAGE_KEY,
   AuthRefreshCoordinationUnavailableError,
+  AuthStorageUnavailableError,
   AuthMutationLockTimeoutError,
   runWithAuthMutationLock,
   writePersistedAuthSession,
@@ -208,9 +209,10 @@ describe('auth store cross-tab session coordination', () => {
     seedV2Auth();
     const store = createAuthStore();
     const otherTabStore = createAuthStore(createPinia());
+    const binding = store.captureRequestAuthBinding();
     mocks.put.mockResolvedValueOnce({ status: 204 });
 
-    await expect(store.changePassword('current', 'new-password')).resolves.toBeUndefined();
+    await expect(store.changePassword('current', 'new-password', binding!)).resolves.toBeUndefined();
 
     expect(mocks.put).toHaveBeenCalledWith('/me/password', {
       current_password: 'current',
@@ -228,8 +230,9 @@ describe('auth store cross-tab session coordination', () => {
     seedV2Auth();
     const store = createAuthStore();
     const changeResponse = deferred<{ status: number }>();
+    const binding = store.captureRequestAuthBinding();
     mocks.put.mockReturnValueOnce(changeResponse.promise);
-    const pending = store.changePassword('current', 'new-password');
+    const pending = store.changePassword('current', 'new-password', binding!);
     await vi.waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1));
 
     const bob = persistedSession(otherIdentity, 'bob-access', 'bob-refresh', 'sid-8', 'revision-bob');
@@ -247,12 +250,13 @@ describe('auth store cross-tab session coordination', () => {
   it('clears a refresh response that finishes after a password change request succeeds', async () => {
     seedV2Auth();
     const store = createAuthStore();
+    const binding = store.captureRequestAuthBinding();
     const refreshResponse = deferred<{ data: ReturnType<typeof authResponse> }>();
     mocks.post.mockReturnValueOnce(refreshResponse.promise);
     mocks.put.mockResolvedValueOnce({ status: 204 });
     const refresh = store.refreshAccessToken();
     await vi.waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(1));
-    const change = store.changePassword('current', 'new-password');
+    const change = store.changePassword('current', 'new-password', binding!);
     await vi.waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1));
 
     refreshResponse.resolve({ data: authResponse(fullIdentity, 'late-refresh-access', 'late-refresh-token') });
@@ -267,13 +271,14 @@ describe('auth store cross-tab session coordination', () => {
   it('reports storage cleanup failure after server password update', async () => {
     seedV2Auth();
     const store = createAuthStore();
+    const binding = store.captureRequestAuthBinding();
     mocks.put.mockResolvedValueOnce({ status: 204 });
     vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
       if (key === AUTH_SESSION_STORAGE_KEY) throw new DOMException('Blocked', 'SecurityError');
       return originalStorageRemoveItem.call(this, key);
     });
 
-    await expect(store.changePassword('current', 'new-password')).rejects.toMatchObject({
+    await expect(store.changePassword('current', 'new-password', binding!)).rejects.toMatchObject({
       code: 'AUTH_PASSWORD_CHANGED_CLEANUP_FAILED',
     });
     expect(store.isAuthenticated).toBe(false);
@@ -286,13 +291,75 @@ describe('auth store cross-tab session coordination', () => {
   ])('maps password change HTTP %s errors without refreshing', async (_status, code, message) => {
     seedV2Auth();
     const store = createAuthStore();
+    const binding = store.captureRequestAuthBinding();
     mocks.put.mockRejectedValueOnce({
       isAxiosError: true,
       response: { status: Number(_status), data: { code } },
     });
 
-    await expect(store.changePassword('current', 'new-password')).rejects.toMatchObject({ message, code });
+    await expect(store.changePassword('current', 'new-password', binding!)).rejects.toMatchObject({ message, code });
     expect(mocks.post).not.toHaveBeenCalled();
+    expect(store.isAuthenticated).toBe(true);
+  });
+
+  it('rejects a binding for a different account before sending a password request', async () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    const binding = store.captureRequestAuthBinding()!;
+
+    await expect(store.changePassword('current', 'new-password', {
+      userID: otherIdentity.id,
+      sessionID: 'sid-8',
+      sessionVersion: binding.sessionVersion,
+    })).rejects.toBeInstanceOf(AuthSessionChangedError);
+
+    expect(mocks.put).not.toHaveBeenCalled();
+    expect(store.currentIdentity).toEqual(fullIdentity);
+  });
+
+  it('rejects an old binding when the same user has started a new session', async () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    const binding = store.captureRequestAuthBinding()!;
+    const nextSession = persistedSession(fullIdentity, 'alice-new-access', 'alice-new-refresh', 'sid-7-new', 'revision-2');
+    writePersistedAuthSession(nextSession);
+    localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(fullIdentity));
+
+    await expect(store.changePassword('current', 'new-password', binding)).rejects.toBeInstanceOf(AuthSessionChangedError);
+
+    expect(mocks.put).not.toHaveBeenCalled();
+    expect(store.isAuthenticated).toBe(true);
+    expect(store.token).toBe(bearerFor('alice-new-access', fullIdentity, 'sid-7-new'));
+    expect(store.sessionVersion).toBeGreaterThan(binding.sessionVersion);
+  });
+
+  it('reconciles an unannounced persisted account switch before sending', async () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    const binding = store.captureRequestAuthBinding()!;
+    const bob = persistedSession(otherIdentity, 'bob-access', 'bob-refresh', 'sid-8', 'revision-bob');
+    writePersistedAuthSession(bob);
+    localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(otherIdentity));
+
+    await expect(store.changePassword('alice-current', 'alice-new', binding)).rejects.toBeInstanceOf(AuthSessionChangedError);
+
+    expect(mocks.put).not.toHaveBeenCalled();
+    expect(store.currentIdentity).toEqual(otherIdentity);
+    expect(store.token).toBe(bearerFor('bob-access', otherIdentity, 'sid-8'));
+  });
+
+  it('fails closed without a password request when persisted auth storage is unreadable', async () => {
+    seedV2Auth();
+    const store = createAuthStore();
+    const binding = store.captureRequestAuthBinding()!;
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key: string) {
+      if (key === AUTH_SESSION_STORAGE_KEY) throw new DOMException('Blocked', 'SecurityError');
+      return originalStorageGetItem.call(this, key);
+    });
+
+    await expect(store.changePassword('current', 'new-password', binding)).rejects.toBeInstanceOf(AuthStorageUnavailableError);
+
+    expect(mocks.put).not.toHaveBeenCalled();
     expect(store.isAuthenticated).toBe(true);
   });
 

@@ -70,12 +70,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, shallowRef, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import AppIcon from '../components/icons/AppIcon.vue';
 import MobileAccountMenu from '../components/layout/MobileAccountMenu.vue';
 import { useAuthStore } from '../store/auth';
 import { AuthSessionChangedError } from '../store/auth';
+import type { AuthRequestBinding } from '../auth/authRequestBinding';
 
 const authStore = useAuthStore();
 const router = useRouter();
@@ -84,15 +85,45 @@ const newPassword = ref('');
 const confirmation = ref('');
 const errorMessage = ref('');
 const isSubmitting = ref(false);
+const formBinding = shallowRef<AuthRequestBinding | null>(authStore.captureRequestAuthBinding());
+const formGeneration = ref(0);
 const passwordBytes = computed(() => new TextEncoder().encode(newPassword.value).byteLength);
 const canSubmit = computed(() => Boolean(
-  currentPassword.value
+  authStore.isAuthenticated
+  && formBinding.value
+  && authStore.matchesRequestAuthBinding(formBinding.value)
+  && !isSubmitting.value
+  && currentPassword.value
   && newPassword.value
   && confirmation.value
   && passwordBytes.value <= 72
   && newPassword.value === confirmation.value
   && newPassword.value !== currentPassword.value,
 ));
+
+const clearPasswordForm = () => {
+  currentPassword.value = '';
+  newPassword.value = '';
+  confirmation.value = '';
+  errorMessage.value = '';
+};
+
+watch(
+  () => [
+    authStore.isAuthenticated,
+    authStore.currentIdentity?.id ?? null,
+    authStore.sessionVersion,
+  ] as const,
+  () => {
+    formGeneration.value += 1;
+    clearPasswordForm();
+    isSubmitting.value = false;
+    formBinding.value = authStore.isAuthenticated
+      ? authStore.captureRequestAuthBinding()
+      : null;
+  },
+  { flush: 'sync' },
+);
 
 const goBack = () => {
   const historyState = window.history.state as { back?: string | null } | null;
@@ -103,34 +134,57 @@ const goBack = () => {
 const submitChange = async () => {
   if (isSubmitting.value) return;
   errorMessage.value = '';
+
+  const requestBinding = formBinding.value;
+  const requestGeneration = formGeneration.value;
+  if (
+    !authStore.isAuthenticated
+    || !requestBinding
+    || !authStore.matchesRequestAuthBinding(requestBinding)
+  ) {
+    formGeneration.value += 1;
+    clearPasswordForm();
+    isSubmitting.value = false;
+    formBinding.value = authStore.isAuthenticated
+      ? authStore.captureRequestAuthBinding()
+      : null;
+    errorMessage.value = 'Your account session changed. Review the form and try again.';
+    return;
+  }
+
+  const currentPasswordValue = currentPassword.value;
+  const newPasswordValue = newPassword.value;
+  const confirmationValue = confirmation.value;
   if (passwordBytes.value > 72) {
     errorMessage.value = 'New password must be 72 UTF-8 bytes or fewer.';
     return;
   }
-  if (newPassword.value !== confirmation.value) {
+  if (newPasswordValue !== confirmationValue) {
     errorMessage.value = 'New password confirmation does not match.';
     return;
   }
-  if (newPassword.value === currentPassword.value) {
+  if (newPasswordValue === currentPasswordValue) {
     errorMessage.value = 'Choose a password different from your current password.';
     return;
   }
 
   isSubmitting.value = true;
   try {
-    await authStore.changePassword(currentPassword.value, newPassword.value);
-    currentPassword.value = '';
-    newPassword.value = '';
-    confirmation.value = '';
-    await router.replace({ name: 'Login', query: { passwordChanged: '1' } });
+    await authStore.changePassword(currentPasswordValue, newPasswordValue, requestBinding);
+    if (formGeneration.value === requestGeneration) clearPasswordForm();
+    if (!authStore.isAuthenticated) {
+      await router.replace({ name: 'Login', query: { passwordChanged: '1' } });
+    }
   } catch (error) {
-    if (error instanceof AuthSessionChangedError) {
-      errorMessage.value = 'Your account session changed while the request was in progress.';
-    } else {
-      errorMessage.value = error instanceof Error ? error.message : 'Password could not be changed. Please try again.';
+    if (formGeneration.value === requestGeneration) {
+      if (error instanceof AuthSessionChangedError) {
+        errorMessage.value = 'Your account session changed while the request was in progress.';
+      } else {
+        errorMessage.value = error instanceof Error ? error.message : 'Password could not be changed. Please try again.';
+      }
     }
   } finally {
-    isSubmitting.value = false;
+    if (formGeneration.value === requestGeneration) isSubmitting.value = false;
   }
 };
 </script>
