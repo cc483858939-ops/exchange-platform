@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -31,17 +32,51 @@ type RawPublisher interface {
 }
 
 type KafkaPublisher struct {
-	config  config.KafkaConfig
-	mu      sync.Mutex
-	writers map[string]*kafka.Writer
+	config        config.KafkaConfig
+	mu            sync.Mutex
+	writers       map[string]kafkaMessageWriter
+	writerFactory kafkaWriterFactory
+	state         kafkaPublisherState
+	closeDone     chan struct{}
+	closeErr      error
 }
+
+type kafkaMessageWriter interface {
+	WriteMessages(context.Context, ...kafka.Message) error
+	Close() error
+}
+
+type kafkaWriterFactory func(config.KafkaConfig, string) (kafkaMessageWriter, error)
+
+type kafkaPublisherState uint8
+
+const (
+	kafkaPublisherActive kafkaPublisherState = iota
+	kafkaPublisherClosing
+	kafkaPublisherClosed
+)
+
+const (
+	kafkaWriterMaxAttempts  = 2
+	kafkaWriterReadTimeout  = 2 * time.Second
+	kafkaWriterWriteTimeout = 2 * time.Second
+	kafkaWriterBackoffMin   = 100 * time.Millisecond
+	kafkaWriterBackoffMax   = 250 * time.Millisecond
+	kafkaWriterBatchTimeout = 50 * time.Millisecond
+)
+
+var errKafkaPublisherClosed = errors.New("kafka publisher is closing or closed")
 
 func NewKafkaPublisher(kafkaConfig config.KafkaConfig) (*KafkaPublisher, error) {
 	brokers := normalizedBrokers(kafkaConfig.Brokers)
 	if len(brokers) == 0 {
 		return nil, errors.New("kafka brokers are required")
 	}
-	return &KafkaPublisher{config: kafkaConfig, writers: make(map[string]*kafka.Writer)}, nil
+	return &KafkaPublisher{
+		config:        kafkaConfig,
+		writers:       make(map[string]kafkaMessageWriter),
+		writerFactory: newKafkaWriterFactory,
+	}, nil
 }
 
 func (p *KafkaPublisher) Publish(ctx context.Context, event Envelope) error {
@@ -55,7 +90,14 @@ func (p *KafkaPublisher) PublishBatch(ctx context.Context, events []Envelope) er
 	if len(events) == 0 {
 		return nil
 	}
+	if ctx == nil {
+		return errors.New("Kafka publish context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	byTopic := make(map[string][]kafka.Message)
+	topics := make([]string, 0)
 	for _, event := range events {
 		topic, err := TopicForEvent(p.config, event.Type)
 		if err != nil {
@@ -68,12 +110,26 @@ func (p *KafkaPublisher) PublishBatch(ctx context.Context, events []Envelope) er
 		if err != nil {
 			return fmt.Errorf("marshal Kafka event: %w", err)
 		}
+		if _, exists := byTopic[topic]; !exists {
+			topics = append(topics, topic)
+		}
 		byTopic[topic] = append(byTopic[topic], kafka.Message{
 			Key: []byte(KeyForEvent(event)), Value: value, Time: event.OccurredAt,
 		})
 	}
-	for topic, messages := range byTopic {
-		if err := p.writer(topic).WriteMessages(ctx, messages...); err != nil {
+	sort.Strings(topics)
+	for _, topic := range topics {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		writer, err := p.writer(ctx, topic)
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := writer.WriteMessages(ctx, byTopic[topic]...); err != nil {
 			return err
 		}
 	}
@@ -90,50 +146,120 @@ func (p *KafkaPublisher) PublishRaw(ctx context.Context, topic string, messages 
 	if len(messages) == 0 {
 		return nil
 	}
+	if ctx == nil {
+		return errors.New("Kafka publish context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(normalizedBrokers(p.config.Brokers)) == 0 {
 		return errors.New("kafka brokers are required")
 	}
-	return p.writer(topic).WriteMessages(ctx, messages...)
+	writer, err := p.writer(ctx, topic)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return writer.WriteMessages(ctx, messages...)
 }
 
 // PublishRawMessages is used only for infrastructure side channels such as a
 // projection DLQ. Domain activity publication continues to use canonical
 // Envelope values and TopicForEvent.
 func PublishRawMessages(ctx context.Context, kafkaConfig config.KafkaConfig, topic string, messages ...kafka.Message) error {
+	return publishRawMessages(ctx, kafkaConfig, topic, messages, newKafkaWriterFactory)
+}
+
+func publishRawMessages(ctx context.Context, kafkaConfig config.KafkaConfig, topic string, messages []kafka.Message, writerFactory kafkaWriterFactory) error {
 	if strings.TrimSpace(topic) == "" {
 		return errors.New("Kafka topic is required")
 	}
 	if len(messages) == 0 {
 		return nil
 	}
+	if ctx == nil {
+		return errors.New("Kafka publish context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	brokers := normalizedBrokers(kafkaConfig.Brokers)
 	if len(brokers) == 0 {
 		return errors.New("kafka brokers are required")
 	}
-	writer := &kafka.Writer{
-		Addr: kafka.TCP(brokers...), Topic: topic, Balancer: &kafka.Hash{},
-		RequiredAcks: kafka.RequireAll, Async: false, BatchTimeout: 50 * time.Millisecond,
+	if writerFactory == nil {
+		return errors.New("Kafka writer factory is nil")
 	}
-	defer writer.Close()
-	return writer.WriteMessages(ctx, messages...)
+	writer, err := writerFactory(kafkaConfig, topic)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Join(err, writer.Close())
+	}
+	writeErr := writer.WriteMessages(ctx, messages...)
+	closeErr := writer.Close()
+	return errors.Join(writeErr, closeErr)
 }
 
-func (p *KafkaPublisher) writer(topic string) *kafka.Writer {
+func newKafkaWriterFactory(kafkaConfig config.KafkaConfig, topic string) (kafkaMessageWriter, error) {
+	return newKafkaWriter(kafkaConfig, topic)
+}
+
+func newKafkaWriter(kafkaConfig config.KafkaConfig, topic string) (*kafka.Writer, error) {
+	brokers := normalizedBrokers(kafkaConfig.Brokers)
+	if len(brokers) == 0 {
+		return nil, errors.New("kafka brokers are required")
+	}
+	return &kafka.Writer{
+		Addr:            kafka.TCP(brokers...),
+		Topic:           topic,
+		Balancer:        &kafka.Hash{},
+		RequiredAcks:    kafka.RequireAll,
+		Async:           false,
+		BatchTimeout:    kafkaWriterBatchTimeout,
+		MaxAttempts:     kafkaWriterMaxAttempts,
+		ReadTimeout:     kafkaWriterReadTimeout,
+		WriteTimeout:    kafkaWriterWriteTimeout,
+		WriteBackoffMin: kafkaWriterBackoffMin,
+		WriteBackoffMax: kafkaWriterBackoffMax,
+	}, nil
+}
+
+func (p *KafkaPublisher) writer(ctx context.Context, topic string) (kafkaMessageWriter, error) {
+	if p == nil {
+		return nil, errors.New("kafka publisher is nil")
+	}
+	if ctx == nil {
+		return nil, errors.New("Kafka publish context is nil")
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if p.state != kafkaPublisherActive {
+		return nil, errKafkaPublisherClosed
+	}
+	if p.writers == nil {
+		p.writers = make(map[string]kafkaMessageWriter)
+	}
 	writer := p.writers[topic]
 	if writer == nil {
-		writer = &kafka.Writer{
-			Addr:         kafka.TCP(normalizedBrokers(p.config.Brokers)...),
-			Topic:        topic,
-			Balancer:     &kafka.Hash{},
-			RequiredAcks: kafka.RequireAll,
-			Async:        false,
-			BatchTimeout: 50 * time.Millisecond,
+		factory := p.writerFactory
+		if factory == nil {
+			factory = newKafkaWriterFactory
+		}
+		var err error
+		writer, err = factory(p.config, topic)
+		if err != nil {
+			return nil, fmt.Errorf("create Kafka writer for topic %q: %w", topic, err)
 		}
 		p.writers[topic] = writer
 	}
-	return writer
+	return writer, nil
 }
 
 func (p *KafkaPublisher) Close() error {
@@ -141,14 +267,54 @@ func (p *KafkaPublisher) Close() error {
 		return nil
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	var firstErr error
-	for _, writer := range p.writers {
-		if err := writer.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
+	if p.state == kafkaPublisherClosed {
+		err := p.closeErr
+		p.mu.Unlock()
+		return err
 	}
-	return firstErr
+	if p.state == kafkaPublisherClosing {
+		done := p.closeDone
+		p.mu.Unlock()
+		<-done
+		p.mu.Lock()
+		err := p.closeErr
+		p.mu.Unlock()
+		return err
+	}
+	p.state = kafkaPublisherClosing
+	p.closeDone = make(chan struct{})
+	done := p.closeDone
+	topics := make([]string, 0, len(p.writers))
+	for topic := range p.writers {
+		topics = append(topics, topic)
+	}
+	sort.Strings(topics)
+	writers := make([]kafkaMessageWriter, len(topics))
+	for i, topic := range topics {
+		writers[i] = p.writers[topic]
+	}
+	p.mu.Unlock()
+
+	var wg sync.WaitGroup
+	closeErrs := make([]error, len(writers))
+	for i, writer := range writers {
+		wg.Add(1)
+		go func(i int, writer kafkaMessageWriter) {
+			defer wg.Done()
+			if err := writer.Close(); err != nil {
+				closeErrs[i] = fmt.Errorf("close Kafka writer for topic %q: %w", topics[i], err)
+			}
+		}(i, writer)
+	}
+	wg.Wait()
+
+	p.mu.Lock()
+	p.closeErr = errors.Join(closeErrs...)
+	p.state = kafkaPublisherClosed
+	close(done)
+	err := p.closeErr
+	p.mu.Unlock()
+	return err
 }
 
 func NewKafkaReader(kafkaConfig config.KafkaConfig, topic, groupID string) (*kafka.Reader, string, error) {
