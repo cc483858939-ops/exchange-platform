@@ -109,11 +109,11 @@ const clearPasswordForm = () => {
 };
 
 watch(
-  () => [
-    authStore.isAuthenticated,
-    authStore.currentIdentity?.id ?? null,
-    authStore.sessionVersion,
-  ] as const,
+  [
+    () => authStore.isAuthenticated,
+    () => authStore.currentIdentity?.id ?? null,
+    () => authStore.sessionVersion,
+  ],
   () => {
     formGeneration.value += 1;
     clearPasswordForm();

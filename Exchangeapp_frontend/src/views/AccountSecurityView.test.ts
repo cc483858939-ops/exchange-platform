@@ -57,6 +57,11 @@ describe('AccountSecurityView', () => {
     mocks.authStore.currentIdentity = null;
   };
 
+  const renewSameAccountSession = () => {
+    mocks.authStore.sessionID = `sid-7-${mocks.authStore.sessionVersion + 1}`;
+    mocks.authStore.sessionVersion += 1;
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.authStore = reactive({
@@ -192,6 +197,86 @@ describe('AccountSecurityView', () => {
     expect(wrapper.get('input[autocomplete="current-password"]').element).toHaveProperty('value', 'current');
     expect(wrapper.get('input[autocomplete="new-password"]').element).toHaveProperty('value', 'new-password');
     expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeUndefined();
+  });
+
+  it('preserves all password fields when the same account identity object is replaced', async () => {
+    wrapper = mountPage();
+    await setPasswords('current', 'new-password', 'new-password');
+
+    mocks.authStore.currentIdentity = { id: 7, username: 'alice-updated' };
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.get('input[autocomplete="current-password"]').element).toHaveProperty('value', 'current');
+    expect(wrapper.get('input[autocomplete="new-password"]').element).toHaveProperty('value', 'new-password');
+    expect(wrapper.findAll('input[autocomplete="new-password"]')[1].element).toHaveProperty('value', 'new-password');
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeUndefined();
+    expect(mocks.authStore.changePassword).not.toHaveBeenCalled();
+  });
+
+  it('preserves the form when token refresh also replaces the same account identity object', async () => {
+    wrapper = mountPage();
+    await setPasswords('current', 'new-password', 'new-password');
+
+    mocks.authStore.token = 'Bearer alice-refreshed-access';
+    mocks.authStore.currentIdentity = { id: 7, username: 'alice-refreshed-profile' };
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.get('input[autocomplete="current-password"]').element).toHaveProperty('value', 'current');
+    expect(wrapper.get('input[autocomplete="new-password"]').element).toHaveProperty('value', 'new-password');
+    expect(wrapper.findAll('input[autocomplete="new-password"]')[1].element).toHaveProperty('value', 'new-password');
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeUndefined();
+    expect(mocks.authStore.changePassword).not.toHaveBeenCalled();
+  });
+
+  it('keeps a same-session request active when its identity profile object is replaced', async () => {
+    let rejectChange!: (error: Error) => void;
+    mocks.authStore.changePassword.mockReturnValueOnce(new Promise<void>((_resolve, reject) => { rejectChange = reject; }));
+    wrapper = mountPage();
+    await setPasswords('current', 'new-password', 'new-password');
+
+    const submission = wrapper.get('form').trigger('submit');
+    await wrapper.vm.$nextTick();
+    expect(mocks.authStore.changePassword).toHaveBeenCalledTimes(1);
+    expect(wrapper.get('button[type="submit"]').attributes('aria-busy')).toBe('true');
+
+    mocks.authStore.currentIdentity = { id: 7, username: 'alice-updated' };
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.get('input[autocomplete="current-password"]').element).toHaveProperty('value', 'current');
+    expect(wrapper.get('input[autocomplete="new-password"]').element).toHaveProperty('value', 'new-password');
+    expect(wrapper.get('button[type="submit"]').attributes('aria-busy')).toBe('true');
+    await wrapper.get('form').trigger('submit');
+    expect(mocks.authStore.changePassword).toHaveBeenCalledTimes(1);
+
+    rejectChange(new Error('Current password is incorrect.'));
+    await submission;
+    await flushPromises();
+
+    expect(wrapper.get('[role="alert"]').text()).toBe('Current password is incorrect.');
+    expect(wrapper.get('button[type="submit"]').attributes('aria-busy')).toBe('false');
+    expect(wrapper.get('input[autocomplete="current-password"]').element).toHaveProperty('value', 'current');
+  });
+
+  it('clears the form and captures a fresh binding when the same account starts a new session', async () => {
+    wrapper = mountPage();
+    await setPasswords('old-current', 'old-new', 'old-new');
+
+    renewSameAccountSession();
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.get('input[autocomplete="current-password"]').element).toHaveProperty('value', '');
+    expect(wrapper.get('input[autocomplete="new-password"]').element).toHaveProperty('value', '');
+    expect(wrapper.findAll('input[autocomplete="new-password"]')[1].element).toHaveProperty('value', '');
+    expect(mocks.authStore.changePassword).not.toHaveBeenCalled();
+
+    await setPasswords('new-current', 'new-password', 'new-password');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(mocks.authStore.changePassword).toHaveBeenCalledWith('new-current', 'new-password', {
+      userID: 7,
+      sessionID: 'sid-7-1',
+      sessionVersion: 1,
+    });
   });
 
   it('does not let an old successful request navigate or finish a new account submission', async () => {
