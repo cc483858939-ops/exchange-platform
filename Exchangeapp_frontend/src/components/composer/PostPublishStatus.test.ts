@@ -119,6 +119,29 @@ describe('PostPublishStatus', () => {
     expect(wrapper.get('.post-publish-status__error').text()).toContain('original attempt and its content are still preserved');
   });
 
+  it('reports when router push resolves with a cancelled navigation failure', async () => {
+    mocks.store.latestOperation = {
+      ...operationFor('failed', 'publish-navigation-cancelled'),
+      failureKind: 'validation_error',
+      error: 'Review the post and try again.',
+    };
+    mocks.store.recoverRejectedPostForEdit.mockResolvedValue('rejected-post-navigation-cancelled');
+    mocks.router.push.mockResolvedValueOnce({ type: 8 });
+
+    const wrapper = mount(PostPublishStatus);
+    await wrapper.get('.post-publish-status__discard').trigger('click');
+    await flushPromises();
+
+    expect(mocks.store.recoverRejectedPostForEdit).toHaveBeenCalledWith('publish-navigation-cancelled');
+    expect(mocks.router.push).toHaveBeenCalledWith({
+      name: 'PostCreate',
+      query: { draft: 'rejected-post-navigation-cancelled' },
+    });
+    expect(wrapper.get('.post-publish-status__error').text())
+      .toBe('The post is saved as a draft. Open Saved drafts to continue editing.');
+    expect(mocks.store.abandonFailedOperation).not.toHaveBeenCalled();
+  });
+
   it('requires confirmation before abandoning and preserves the operation on cancel', async () => {
     mocks.store.latestOperation = operationFor('failed', 'publish-43');
 

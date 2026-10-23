@@ -576,6 +576,17 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     classification = classifySubmissionFailure(error, 'post'),
   ) => {
     if (!canMarkDurableSubmissionFailed(operation.phase)) return;
+    if (classification.code === 'INVALID_MEDIA') {
+      for (const media of operation.media) {
+        media.uploadedURL = '';
+        if (
+          postDraft.publishOperationID === operation.id
+          && postDraft.viewerID === operation.publisherUserID
+        ) {
+          postDraft.setUploadedURL(media.draftMediaID, '');
+        }
+      }
+    }
     operation.phase = 'failed';
     operation.failureKind = classification.failureKind;
     operation.error = error instanceof PublishPersistenceError

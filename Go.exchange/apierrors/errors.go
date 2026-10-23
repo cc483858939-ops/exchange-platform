@@ -43,6 +43,14 @@ const (
 	CodePostReferenceUnavailable     Code = "POST_REFERENCE_UNAVAILABLE"
 	CodePostIdempotencyConflict      Code = "POST_IDEMPOTENCY_CONFLICT"
 	CodePostMentionLimitExceeded     Code = "POST_MENTION_LIMIT_EXCEEDED"
+	CodeContentIsRequired            Code = "CONTENT_IS_REQUIRED"
+	CodeReplyContentTooLong          Code = "REPLY_CONTENT_EXCEEDS_1000_UNICODE_CODE_POINTS"
+	CodeInvalidReplyToPostID         Code = "INVALID_REPLY_TO_POST_ID"
+	CodeInvalidQuotePostID           Code = "INVALID_QUOTE_POST_ID"
+	CodeReplyAndQuoteConflict        Code = "A_POST_CANNOT_BE_BOTH_A_REPLY_AND_A_QUOTE"
+	CodeTooManyMentionCandidates     Code = "TOO_MANY_MENTION_CANDIDATES"
+	CodeInvalidMentionText           Code = "INVALID_MENTION_TEXT"
+	CodeInvalidMedia                 Code = "INVALID_MEDIA"
 	CodeAuthTokenMissing             Code = "AUTH_TOKEN_MISSING"
 	CodeAuthTokenInvalid             Code = "AUTH_TOKEN_INVALID"
 	CodeAuthCredentialsInvalid       Code = "AUTH_CREDENTIALS_INVALID"
@@ -103,6 +111,14 @@ type ErrorResponse struct {
 
 var definitions = map[Code]Definition{
 	CodeInvalidRequest:               {Status: http.StatusBadRequest, Message: "Invalid request"},
+	CodeContentIsRequired:            {Status: http.StatusBadRequest, Message: "content is required"},
+	CodeReplyContentTooLong:          {Status: http.StatusBadRequest, Message: "reply content exceeds 1000 Unicode code points"},
+	CodeInvalidReplyToPostID:         {Status: http.StatusBadRequest, Message: "invalid reply_to_post_id"},
+	CodeInvalidQuotePostID:           {Status: http.StatusBadRequest, Message: "invalid quote_post_id"},
+	CodeReplyAndQuoteConflict:        {Status: http.StatusBadRequest, Message: "a post cannot be both a reply and a quote"},
+	CodeTooManyMentionCandidates:     {Status: http.StatusBadRequest, Message: "too many mention candidates"},
+	CodeInvalidMentionText:           {Status: http.StatusBadRequest, Message: "invalid mention text"},
+	CodeInvalidMedia:                 {Status: http.StatusBadRequest, Message: "invalid media"},
 	CodeUnauthorized:                 {Status: http.StatusUnauthorized, Message: "Unauthorized"},
 	CodeForbidden:                    {Status: http.StatusForbidden, Message: "Forbidden"},
 	CodeNotFound:                     {Status: http.StatusNotFound, Message: "Resource not found"},

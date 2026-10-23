@@ -2302,6 +2302,75 @@ describe('postPublish store', () => {
     expect(mocks.createPost).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps rejected image files and reuploads them before submitting a recovered INVALID_MEDIA draft', async () => {
+    const originalFile = file('rejected-image.png');
+    mocks.uploadPostMedia
+      .mockResolvedValueOnce('/media/rejected-url.png')
+      .mockResolvedValueOnce('/media/reuploaded.png');
+    mocks.createPost.mockRejectedValueOnce({
+      response: { status: 400, data: { code: 'INVALID_MEDIA' } },
+    });
+    const draft = usePostDraftStore();
+    draft.setContent('Post with a rejected image');
+    draft.addMedia(originalFile);
+    const store = usePostPublishStore();
+
+    const first = await store.startOrRetryDraft();
+    expect(first.status).toBe('accepted');
+    if (first.status !== 'accepted') throw new Error('publish was not accepted');
+    await flushPromises();
+
+    expect(first.operation).toMatchObject({
+      phase: 'failed',
+      failureKind: 'validation_error',
+      media: [{ uploadedURL: '' }],
+    });
+    expect(mocks.publishRecords.get(7)).toMatchObject({
+      phase: 'failed',
+      media: [{ uploadedURL: '' }],
+    });
+    expect(draft.media).toMatchObject([{
+      file: expect.objectContaining({ name: originalFile.name, size: originalFile.size }),
+      uploadedURL: '',
+    }]);
+    expect(mocks.uploadPostMedia).toHaveBeenCalledTimes(1);
+    expect(mocks.createPost).toHaveBeenCalledWith({
+      content: 'Post with a rejected image',
+      media: [{ type: 'image', url: '/media/rejected-url.png' }],
+    }, expect.objectContaining({ idempotencyKey: first.operation.id }));
+
+    const recoveredDraftID = await store.recoverRejectedPostForEdit(first.operation.id);
+    expect(recoveredDraftID).toBe(`rejected-post-${first.operation.id}`);
+    const recoveredRecord = mocks.sourceDraftRecords.get(recoveredDraftID!);
+    expect(recoveredRecord).toMatchObject({
+      content: 'Post with a rejected image',
+      media: [{ name: originalFile.name, uploadedURL: '' }],
+    });
+    expect(recoveredRecord.media[0].blob.size).toBe(originalFile.size);
+    expect(await draft.loadSavedDraft(recoveredDraftID!)).toEqual({ status: 'loaded' });
+    expect(draft.media).toMatchObject([{
+      file: expect.objectContaining({ name: originalFile.name, size: originalFile.size }),
+      uploadedURL: '',
+    }]);
+
+    const second = await store.startOrRetryDraft();
+    expect(second.status).toBe('accepted');
+    if (second.status !== 'accepted') throw new Error('recovered publish was not accepted');
+    expect(second.operation.id).not.toBe(first.operation.id);
+    await flushPromises();
+
+    expect(mocks.uploadPostMedia).toHaveBeenCalledTimes(2);
+    expect(mocks.uploadPostMedia).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: originalFile.name, size: originalFile.size }),
+      expect.any(Object),
+    );
+    expect(mocks.createPost).toHaveBeenCalledTimes(2);
+    expect(mocks.createPost).toHaveBeenNthCalledWith(2, {
+      content: 'Post with a rejected image',
+      media: [{ type: 'image', url: '/media/reuploaded.png' }],
+    }, expect.objectContaining({ idempotencyKey: second.operation.id }));
+  });
+
   it('restores quote and original media once before conditional deletion after refresh', async () => {
     const mediaFile = file('original.png');
     const operation = persistedFailedOperation({

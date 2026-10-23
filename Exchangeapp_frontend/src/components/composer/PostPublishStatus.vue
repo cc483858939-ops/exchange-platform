@@ -101,7 +101,10 @@ const recoverRejectedPostForEdit = async (operationID: string) => {
       return;
     }
     try {
-      await router.push({ name: 'PostCreate', query: { draft: draftID } });
+      const navigationFailure = await router.push({ name: 'PostCreate', query: { draft: draftID } });
+      if (navigationFailure) {
+        abandonError.value = 'The post is saved as a draft. Open Saved drafts to continue editing.';
+      }
     } catch {
       abandonError.value = 'The post is saved as a draft. Open Saved drafts to continue editing.';
     }
