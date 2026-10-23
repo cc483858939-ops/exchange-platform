@@ -7,6 +7,7 @@ import { reactive } from 'vue';
 import PostDetailView from './PostDetailView.vue';
 import type { Post } from '../types/Post';
 import { engagementResponseFromDetailMocks } from '../test-utils/engagementServiceMock';
+import { reconcilePostReplyCount } from '../store/postReplyCountReconciliation';
 import {
   releaseEngagementMutationLease,
   tryBeginEngagementMutationLease,
@@ -59,6 +60,8 @@ const mocks = vi.hoisted(() => ({
   captureReplyCountVersion: vi.fn(),
   commitReplyCountRefresh: vi.fn(),
   invalidateReplyCountRefreshes: vi.fn(),
+  markReplyCountReconciliationNeeded: vi.fn(),
+  isReplyCountReconciliationNeeded: vi.fn(),
   refreshAndSyncPostQuoteCount: vi.fn(),
   beginBookmarkStateMutation: vi.fn(),
   detailSync: null as {
@@ -102,6 +105,8 @@ vi.mock('../store/sessionSync', () => ({
   commitReplyCountMutation: mocks.externalReplyCount,
   commitReplyCountRefresh: mocks.commitReplyCountRefresh,
   invalidateReplyCountRefreshes: mocks.invalidateReplyCountRefreshes,
+  markReplyCountReconciliationNeeded: mocks.markReplyCountReconciliationNeeded,
+  isReplyCountReconciliationNeeded: mocks.isReplyCountReconciliationNeeded,
 }));
 vi.mock('../store/postQuoteCountReconciliation', () => ({
   refreshAndSyncPostQuoteCount: mocks.refreshAndSyncPostQuoteCount,
@@ -264,6 +269,12 @@ describe('PostDetailView mutation synchronization', () => {
     ));
     mocks.invalidateReplyCountRefreshes.mockImplementation((postID: number) => (
       mocks.replyCountCoordinator.invalidateReplyCountRefreshes(postID)
+    ));
+    mocks.markReplyCountReconciliationNeeded.mockImplementation((postID: number) => (
+      mocks.replyCountCoordinator.markReplyCountReconciliationNeeded(postID)
+    ));
+    mocks.isReplyCountReconciliationNeeded.mockImplementation((postID: number) => (
+      mocks.replyCountCoordinator.isReplyCountReconciliationNeeded(postID)
     ));
     mocks.externalReplyCount.mockImplementation((update: unknown, expectedVersion?: unknown) => (
       mocks.replyCountCoordinator.commitReplyCountMutation(update, expectedVersion)
@@ -1189,6 +1200,129 @@ describe('PostDetailView mutation synchronization', () => {
     );
     expect(mocks.commitReplyCountRefresh.mock.results[0]?.value).toBe(false);
     mounted.unmount();
+  });
+
+  it('recovers a conflicted reply deletion after an offline reconciliation without broadcasting a guessed count', async () => {
+    const deletion = deferred<void>();
+    const olderRefresh = deferred<Post>();
+    const home = { applyReplyCountUpdateLocal: vi.fn().mockReturnValue(true) };
+    mocks.getPostReplies.mockResolvedValueOnce({ items: [ownReply(9)], next_cursor: null });
+    mocks.getPostById.mockResolvedValueOnce({ ...post, reply_count: 5 });
+    mocks.deletePostReply.mockReturnValueOnce(deletion.promise);
+
+    const mounted = mountDetail();
+    mocks.replyCountCoordinator.registerHomeTimelineSync(home);
+    await flushPromises();
+    home.applyReplyCountUpdateLocal.mockClear();
+    mocks.externalReplyCount.mockClear();
+
+    mocks.getPostById.mockClear();
+    mocks.getPostById.mockReturnValueOnce(olderRefresh.promise);
+    mocks.replySubmissionStore.operations.push({
+      id: 'reply-count-recovery-old-read', viewerID: 7, parentPostID: 42, content: 'older read',
+      phase: 'succeeded', post: null, durableOwned: true,
+    });
+    await flushPromises();
+    expect(mocks.getPostById).toHaveBeenCalledTimes(1);
+
+    await mounted.find('.test-delete-comment').trigger('click');
+    await mounted.find('.test-confirm-delete').trigger('click');
+    await flushPromises();
+    expect(mocks.deletePostReply).toHaveBeenCalledExactlyOnceWith(9);
+
+    mocks.createPostReply.mockResolvedValueOnce(ownReply(10));
+    mocks.getPostById.mockResolvedValueOnce({ ...post, reply_count: 6 });
+    await mounted.find('.test-create-comment').trigger('click');
+    await flushPromises();
+    expect((mounted.vm as any).$.setupState.replyCount).toBe(6);
+    expect(home.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith({ postId: 42, replyCount: 6 });
+
+    mocks.getPostById.mockRejectedValueOnce(new Error('offline'));
+    deletion.resolve();
+    await flushPromises();
+
+    expect((mounted.vm as any).$.setupState.replies.some((item: Post) => item.id === 9)).toBe(false);
+    expect((mounted.vm as any).$.setupState.replyCount).toBe(6);
+    expect(mocks.deletePostReply).toHaveBeenCalledTimes(1);
+    expect(mocks.externalReplyCount).toHaveBeenCalledExactlyOnceWith(
+      { postId: 42, replyCount: 5 },
+      expect.objectContaining({ postId: 42 }),
+    );
+    expect(mocks.replyCountCoordinator.isReplyCountReconciliationNeeded(42)).toBe(true);
+    expect(home.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith({ postId: 42, replyCount: 6 });
+
+    mocks.getPostById.mockResolvedValueOnce({ ...post, reply_count: 5 });
+    window.dispatchEvent(new Event('online'));
+    await flushPromises();
+
+    expect((mounted.vm as any).$.setupState.replyCount).toBe(5);
+    expect(mocks.replyCountCoordinator.isReplyCountReconciliationNeeded(42)).toBe(false);
+    expect(mocks.deletePostReply).toHaveBeenCalledTimes(1);
+    expect(home.applyReplyCountUpdateLocal.mock.calls).toEqual([
+      [{ postId: 42, replyCount: 6 }],
+      [{ postId: 42, replyCount: 5 }],
+    ]);
+
+    olderRefresh.resolve({ ...post, reply_count: 99 });
+    await flushPromises();
+    expect((mounted.vm as any).$.setupState.replyCount).toBe(5);
+    expect(home.applyReplyCountUpdateLocal).toHaveBeenCalledTimes(2);
+    mounted.unmount();
+  });
+
+  it('keeps a pending reconciliation scoped to its Post when the detail route changes', async () => {
+    const mounted = mountDetail();
+    await flushPromises();
+    const home = { applyReplyCountUpdateLocal: vi.fn().mockReturnValue(true) };
+    mocks.replyCountCoordinator.registerHomeTimelineSync(home);
+    home.applyReplyCountUpdateLocal.mockClear();
+
+    expect(mocks.markReplyCountReconciliationNeeded(42)).toBe(true);
+    const oldRead = deferred<Post>();
+    const postB = { ...post, id: 43, conversation_id: 43, reply_count: 3 };
+    mocks.getPostById.mockClear();
+    mocks.getPostById.mockReturnValueOnce(oldRead.promise);
+    const reconciliation = reconcilePostReplyCount(42);
+
+    mocks.getPostById.mockResolvedValueOnce(postB);
+    mocks.route.params.id = '43';
+    await flushPromises();
+    expect((mounted.vm as any).$.setupState.replyCount).toBe(3);
+
+    oldRead.resolve({ ...post, reply_count: 5 });
+    await expect(reconciliation).resolves.toBe(true);
+    await flushPromises();
+
+    expect((mounted.vm as any).$.setupState.replyCount).toBe(3);
+    expect(home.applyReplyCountUpdateLocal.mock.calls).toEqual([
+      [{ postId: 43, replyCount: 3 }],
+      [{ postId: 42, replyCount: 5 }],
+    ]);
+    expect(mocks.replyCountCoordinator.isReplyCountReconciliationNeeded(42)).toBe(false);
+    mounted.unmount();
+  });
+
+  it('does not update an unmounted detail instance while reconciliation still syncs shared Stores', async () => {
+    const mounted = mountDetail();
+    await flushPromises();
+    const home = { applyReplyCountUpdateLocal: vi.fn().mockReturnValue(true) };
+    mocks.replyCountCoordinator.registerHomeTimelineSync(home);
+    home.applyReplyCountUpdateLocal.mockClear();
+    const detailUpdate = vi.spyOn(mocks.detailSync!, 'applyReplyCountUpdateLocal');
+
+    expect(mocks.markReplyCountReconciliationNeeded(42)).toBe(true);
+    const response = deferred<Post>();
+    mocks.getPostById.mockClear();
+    mocks.getPostById.mockReturnValueOnce(response.promise);
+    const reconciliation = reconcilePostReplyCount(42);
+    mounted.unmount();
+
+    response.resolve({ ...post, reply_count: 5 });
+    await expect(reconciliation).resolves.toBe(true);
+
+    expect(detailUpdate).not.toHaveBeenCalled();
+    expect(home.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith({ postId: 42, replyCount: 5 });
+    expect(mocks.replyCountCoordinator.isReplyCountReconciliationNeeded(42)).toBe(false);
   });
 
   it('keeps a newer public count when the initial detail response is stale', async () => {

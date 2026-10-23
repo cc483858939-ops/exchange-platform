@@ -136,7 +136,13 @@ let bookmarksSessionSync: BookmarksSessionSync | null = null;
 let postDetailSessionSync: PostDetailSessionSync | null = null;
 let quotesSessionSync: QuotesSessionSync | null = null;
 const bookmarkStateSyncVersions = new Map<number, number>();
-const replyCountSyncVersions = new Map<number, { version: number; requestVersion: number }>();
+type ReplyCountSyncState = {
+  version: number;
+  requestVersion: number;
+  reconciliationNeeded: boolean;
+};
+
+const replyCountSyncVersions = new Map<number, ReplyCountSyncState>();
 
 const isValidReplyCountPostID = (postID: number) =>
   Number.isSafeInteger(postID) && postID > 0;
@@ -147,7 +153,7 @@ const isValidReplyCount = (count: number) =>
 const getReplyCountSyncState = (postID: number) => {
   let state = replyCountSyncVersions.get(postID);
   if (!state) {
-    state = { version: 0, requestVersion: 0 };
+    state = { version: 0, requestVersion: 0, reconciliationNeeded: false };
     replyCountSyncVersions.set(postID, state);
   }
   return state;
@@ -506,6 +512,20 @@ export const invalidateReplyCountRefreshes = (postID: number) => {
   return true;
 };
 
+export const markReplyCountReconciliationNeeded = (postID: number) => {
+  if (!isValidReplyCountPostID(postID)) return false;
+  const state = getReplyCountSyncState(postID);
+  state.version += 1;
+  state.requestVersion += 1;
+  state.reconciliationNeeded = true;
+  return true;
+};
+
+export const isReplyCountReconciliationNeeded = (postID: number) => (
+  isValidReplyCountPostID(postID)
+  && replyCountSyncVersions.get(postID)?.reconciliationNeeded === true
+);
+
 export const captureReplyCountVersion = (postID: number): PostReplyCountVersion | null => {
   if (!isValidReplyCountPostID(postID)) return null;
   return { postId: postID, version: getReplyCountSyncState(postID).version };
@@ -534,6 +554,7 @@ export const commitReplyCountRefresh = (
   }
 
   acceptReplyCountUpdate(update);
+  state.reconciliationNeeded = false;
   return true;
 };
 
@@ -550,6 +571,7 @@ export const commitReplyCountMutation = (
   }
 
   const state = getReplyCountSyncState(update.postId);
+  if (state.reconciliationNeeded) return false;
   if (
     expectedVersion !== undefined
     && (

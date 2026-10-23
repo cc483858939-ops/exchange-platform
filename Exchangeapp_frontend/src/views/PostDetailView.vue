@@ -657,12 +657,15 @@ import {
   commitReplyCountMutation,
   commitReplyCountRefresh,
   invalidateReplyCountRefreshes,
+  isReplyCountReconciliationNeeded,
+  markReplyCountReconciliationNeeded,
   beginBookmarkStateMutation,
   markOwnProfileTimelineStale,
   type PostQuoteCountUpdate,
   type PostReplyCountUpdate,
 } from '../store/sessionSync';
 import { refreshAndSyncPostQuoteCount } from '../store/postQuoteCountReconciliation';
+import { reconcilePostReplyCount } from '../store/postReplyCountReconciliation';
 import type { Post } from '../types/Post';
 import type { FeedBookmarkStateUpdate, FeedBookmarkStatus, FeedPost } from '../types/Feed';
 import type { RecommendationTracking } from '../types/Recommendation';
@@ -2181,12 +2184,16 @@ const reconcileSucceededReply = async (operationID: string) => {
     repliesError.value = '';
   }
   invalidateReplyCountRefreshes(operation.parentPostID);
-  const countRefresh = beginReplyCountRefresh(operation.parentPostID);
-  await refreshReplyCountFromServer(operation.parentPostID, countRefresh, () => (
-    detailVersion === detailRequestVersion
-    && postId.value === String(operation.parentPostID)
-    && currentViewerID.value === operation.viewerID
-  ));
+  if (isReplyCountReconciliationNeeded(operation.parentPostID)) {
+    await reconcilePostReplyCount(operation.parentPostID);
+  } else {
+    const countRefresh = beginReplyCountRefresh(operation.parentPostID);
+    await refreshReplyCountFromServer(operation.parentPostID, countRefresh, () => (
+      detailVersion === detailRequestVersion
+      && postId.value === String(operation.parentPostID)
+      && currentViewerID.value === operation.viewerID
+    ));
+  }
   if (!operation.durableOwned) {
     replySubmissionStore.acknowledgeSucceededOperation(operation.id);
     reconciledReplyOperationIDs.delete(operation.id);
@@ -2270,15 +2277,11 @@ const confirmDeleteReply = async () => {
       postId: parentPostID,
       replyCount: Math.max(0, replyCount.value - 1),
     };
-    if (!commitReplyCountMutation(replyCountUpdate, replyCountVersion)) {
-      invalidateReplyCountRefreshes(parentPostID);
-      const countRefresh = beginReplyCountRefresh(parentPostID);
-      void refreshReplyCountFromServer(parentPostID, countRefresh, () => (
-        detailVersion === detailRequestVersion
-        && requestVersion === replyDeleteRequestVersion
-        && postId.value === String(parentPostID)
-        && currentViewerID.value === viewerID
-      ));
+    const committedMutation = !isReplyCountReconciliationNeeded(parentPostID)
+      && commitReplyCountMutation(replyCountUpdate, replyCountVersion);
+    if (!committedMutation) {
+      markReplyCountReconciliationNeeded(parentPostID);
+      void reconcilePostReplyCount(parentPostID);
     }
     deletingReplyId.value = null;
     deleteReplyCandidateId.value = null;
@@ -2415,10 +2418,13 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
     repostCount.value = clampCount(loadedPost.repost_count);
     quoteCount.value = clampCount(loadedPost.quote_count);
     if (replyCountRefresh) {
-      commitReplyCountRefresh(replyCountRefresh, {
+      const committedCount = commitReplyCountRefresh(replyCountRefresh, {
         postId: loadedPost.id,
         replyCount: loadedPost.reply_count,
       });
+      if (!committedCount && isReplyCountReconciliationNeeded(loadedPost.id)) {
+        void reconcilePostReplyCount(loadedPost.id);
+      }
     }
     viewCount.value = clampCount(loadedPost.view_count);
     postLoading.value = false;
@@ -2442,6 +2448,10 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
     void loadInitialReplies(id, detailVersion);
   } catch (error) {
     if (detailVersion === detailRequestVersion) {
+      const failedPostID = Number(id);
+      if (isReplyCountReconciliationNeeded(failedPostID)) {
+        void reconcilePostReplyCount(failedPostID);
+      }
       replyDraftHydrating.value = false;
       handoffPost.value = null;
       const status = (error as { response?: { status?: number } }).response?.status;

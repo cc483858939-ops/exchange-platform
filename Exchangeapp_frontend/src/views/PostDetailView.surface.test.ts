@@ -47,6 +47,8 @@ const mocks = vi.hoisted(() => ({
   invalidateReplyCountRefreshes: vi.fn(),
   commitReplyCountRefresh: vi.fn(),
   commitReplyCountMutation: vi.fn(),
+  markReplyCountReconciliationNeeded: vi.fn(() => true),
+  isReplyCountReconciliationNeeded: vi.fn(() => false),
   postDetailSync: null as any,
   deletePost: vi.fn(),
   consumeAttribution: vi.fn(),
@@ -143,6 +145,8 @@ vi.mock('../store/sessionSync', () => ({
   invalidateReplyCountRefreshes: mocks.invalidateReplyCountRefreshes,
   commitReplyCountRefresh: mocks.commitReplyCountRefresh,
   commitReplyCountMutation: mocks.commitReplyCountMutation,
+  markReplyCountReconciliationNeeded: mocks.markReplyCountReconciliationNeeded,
+  isReplyCountReconciliationNeeded: mocks.isReplyCountReconciliationNeeded,
 }));
 
 const canonicalPost = (overrides: Partial<Post> = {}): Post => ({

@@ -24,6 +24,8 @@ import {
   commitReplyCountMutation,
   commitReplyCountRefresh,
   invalidateReplyCountRefreshes,
+  isReplyCountReconciliationNeeded,
+  markReplyCountReconciliationNeeded,
   syncExternalPostLikeState,
   syncExternalPostRepostState,
   syncExternalPostBookmarkState,
@@ -402,6 +404,38 @@ describe('sessionSync external mutation sinks', () => {
 
     expect(commitReplyCountRefresh(older, { postId: 42009, replyCount: 8 })).toBe(false);
     expect(home.applyReplyCountUpdateLocal).not.toHaveBeenCalled();
+  });
+
+  it('keeps a per-post reconciliation mark until a current server snapshot commits', () => {
+    const { home } = registerSinks();
+    const postID = 42012;
+    const staleRead = beginReplyCountRefresh(postID);
+
+    expect(commitReplyCountMutation({ postId: postID, replyCount: 6 })).toBe(true);
+    expect(markReplyCountReconciliationNeeded(postID)).toBe(true);
+    expect(isReplyCountReconciliationNeeded(postID)).toBe(true);
+    expect(isReplyCountReconciliationNeeded(postID + 1)).toBe(false);
+
+    expect(commitReplyCountMutation({ postId: postID, replyCount: 5 })).toBe(false);
+    expect(commitReplyCountRefresh(staleRead, { postId: postID, replyCount: 7 })).toBe(false);
+    expect(isReplyCountReconciliationNeeded(postID)).toBe(true);
+
+    const currentRead = beginReplyCountRefresh(postID);
+    expect(commitReplyCountRefresh(currentRead, { postId: postID, replyCount: 5 })).toBe(true);
+    expect(isReplyCountReconciliationNeeded(postID)).toBe(false);
+    expect(home.applyReplyCountUpdateLocal.mock.calls).toEqual([
+      [{ postId: postID, replyCount: 6 }],
+      [{ postId: postID, replyCount: 5 }],
+    ]);
+  });
+
+  it('rejects invalid reconciliation post IDs without creating a marker', () => {
+    registerSinks();
+
+    expect(markReplyCountReconciliationNeeded(0)).toBe(false);
+    expect(markReplyCountReconciliationNeeded(Number.NaN)).toBe(false);
+    expect(markReplyCountReconciliationNeeded(Number.MAX_SAFE_INTEGER + 1)).toBe(false);
+    expect(isReplyCountReconciliationNeeded(0)).toBe(false);
   });
 
   it('does not update an unregistered detail instance while preserving shared-store updates', () => {

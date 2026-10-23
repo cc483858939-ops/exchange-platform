@@ -131,6 +131,8 @@ vi.mock('../store/sessionSync', () => ({
     mocks.postDetailSync?.applyReplyCountUpdateLocal(update);
     return true;
   }),
+  markReplyCountReconciliationNeeded: vi.fn(() => true),
+  isReplyCountReconciliationNeeded: vi.fn(() => false),
 }));
 
 const canonicalPost = (overrides: Partial<Post> = {}): Post => {
