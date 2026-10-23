@@ -42,7 +42,12 @@ const mocks = vi.hoisted(() => ({
   getPostReplies: vi.fn(),
   createPostReply: vi.fn(),
   deletePostReply: vi.fn(),
-  syncExternalReplyCount: vi.fn(),
+  beginReplyCountRefresh: vi.fn(),
+  captureReplyCountVersion: vi.fn(),
+  invalidateReplyCountRefreshes: vi.fn(),
+  commitReplyCountRefresh: vi.fn(),
+  commitReplyCountMutation: vi.fn(),
+  postDetailSync: null as any,
   deletePost: vi.fn(),
   consumeAttribution: vi.fn(),
   telemetry: {
@@ -128,12 +133,16 @@ vi.mock('../services/postViewTelemetry', () => ({
 
 vi.mock('../store/sessionSync', () => ({
   beginBookmarkStateMutation: vi.fn(),
-  registerPostDetailSessionSync: vi.fn(),
+  registerPostDetailSessionSync: vi.fn((sync: any) => { mocks.postDetailSync = sync; }),
   syncExternalPostLikeState: vi.fn(),
   syncExternalPostRepostState: vi.fn(),
   markOwnProfileTimelineStale: mocks.markOwnProfileTimelineStale,
   syncExternalPostRemoval: vi.fn(),
-  syncExternalReplyCount: mocks.syncExternalReplyCount,
+  beginReplyCountRefresh: mocks.beginReplyCountRefresh,
+  captureReplyCountVersion: mocks.captureReplyCountVersion,
+  invalidateReplyCountRefreshes: mocks.invalidateReplyCountRefreshes,
+  commitReplyCountRefresh: mocks.commitReplyCountRefresh,
+  commitReplyCountMutation: mocks.commitReplyCountMutation,
 }));
 
 const canonicalPost = (overrides: Partial<Post> = {}): Post => ({
@@ -279,6 +288,17 @@ describe('PostDetailView post-first surface', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.postDetailSync = null;
+    mocks.beginReplyCountRefresh.mockImplementation((postId: number) => ({ postId, version: 0, requestVersion: 0 }));
+    mocks.captureReplyCountVersion.mockImplementation((postId: number) => ({ postId, version: 0 }));
+    mocks.commitReplyCountRefresh.mockImplementation((_token: unknown, update: unknown) => {
+      mocks.postDetailSync?.applyReplyCountUpdateLocal(update);
+      return true;
+    });
+    mocks.commitReplyCountMutation.mockImplementation((update: unknown) => {
+      mocks.postDetailSync?.applyReplyCountUpdateLocal(update);
+      return true;
+    });
     originalHistoryState = window.history.state;
     originalHistoryURL = window.location.href;
     window.history.replaceState({ back: null }, '', originalHistoryURL);
@@ -882,11 +902,11 @@ describe('PostDetailView post-first surface', () => {
     expect(wrapper.find('.test-reply').exists()).toBe(false);
     expect(wrapper.find('.post-detail__reply').text()).toContain('3');
     expect(wrapper.find('.test-confirm-dialog').exists()).toBe(false);
-    expect(mocks.syncExternalReplyCount).toHaveBeenCalledTimes(1);
-    expect(mocks.syncExternalReplyCount).toHaveBeenCalledWith({
+    expect(mocks.commitReplyCountMutation).toHaveBeenCalledTimes(1);
+    expect(mocks.commitReplyCountMutation).toHaveBeenCalledWith({
       postId: 42,
       replyCount: 3,
-    });
+    }, { postId: 42, version: 0 });
   });
 
   it('blocks duplicate delete confirmations while the request is pending', async () => {
@@ -940,7 +960,7 @@ describe('PostDetailView post-first surface', () => {
     expect(mocks.deletePostReply).toHaveBeenCalledTimes(2);
     expect(wrapper.find('.test-reply').exists()).toBe(false);
     expect(wrapper.find('.test-confirm-dialog').exists()).toBe(false);
-    expect(mocks.syncExternalReplyCount).toHaveBeenCalledTimes(1);
+    expect(mocks.commitReplyCountMutation).toHaveBeenCalledTimes(1);
   });
 
   it('rejects delete requests for replies owned by another user', async () => {

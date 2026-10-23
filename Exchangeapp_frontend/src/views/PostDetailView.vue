@@ -652,10 +652,15 @@ import {
   syncExternalPostBookmarkState,
   registerPostDetailSessionSync,
   syncExternalPostRemoval,
-  syncExternalReplyCount,
+  beginReplyCountRefresh,
+  captureReplyCountVersion,
+  commitReplyCountMutation,
+  commitReplyCountRefresh,
+  invalidateReplyCountRefreshes,
   beginBookmarkStateMutation,
   markOwnProfileTimelineStale,
   type PostQuoteCountUpdate,
+  type PostReplyCountUpdate,
 } from '../store/sessionSync';
 import { refreshAndSyncPostQuoteCount } from '../store/postQuoteCountReconciliation';
 import type { Post } from '../types/Post';
@@ -1906,6 +1911,20 @@ const applyQuoteCountUpdateLocal = (update: PostQuoteCountUpdate) => {
   return true;
 };
 
+const applyReplyCountUpdateLocal = (update: PostReplyCountUpdate) => {
+  if (
+    !Number.isSafeInteger(update.postId)
+    || update.postId <= 0
+    || !Number.isSafeInteger(update.replyCount)
+    || update.replyCount < 0
+    || currentDetailPostID.value !== update.postId
+  ) {
+    return false;
+  }
+  replyCount.value = update.replyCount;
+  return true;
+};
+
 const removePostLocal = (postID: number) => {
   if (post.value) normalizePostReferences(post.value, id => id === postID);
   if (handoffPost.value) invalidateFeedPostReferences(handoffPost.value, postID);
@@ -2122,6 +2141,24 @@ const confirmDiscardReplyAttempt = async () => {
   }
 };
 
+const refreshReplyCountFromServer = async (
+  postID: number,
+  token: ReturnType<typeof beginReplyCountRefresh>,
+  isCurrent: () => boolean,
+) => {
+  if (!token) return false;
+  try {
+    const refreshedPost = await getPostById(String(postID));
+    if (!isCurrent() || refreshedPost.id !== postID) return false;
+    return commitReplyCountRefresh(token, {
+      postId: refreshedPost.id,
+      replyCount: refreshedPost.reply_count,
+    });
+  } catch {
+    return false;
+  }
+};
+
 const reconcileSucceededReply = async (operationID: string) => {
   const operation = replySubmissionStore.operations.find(item => item.id === operationID) ?? null;
   const currentPostID = currentDetailPostID.value;
@@ -2143,19 +2180,13 @@ const reconcileSucceededReply = async (operationID: string) => {
     void hydrateReplyBookmarkStates([operation.post], detailVersion);
     repliesError.value = '';
   }
-  try {
-    const refreshedParent = await getPostById(String(operation.parentPostID));
-    if (
-      detailVersion === detailRequestVersion
-      && postId.value === String(operation.parentPostID)
-      && currentViewerID.value === operation.viewerID
-    ) {
-      replyCount.value = clampCount(refreshedParent.reply_count);
-      syncExternalReplyCount({ postId: operation.parentPostID, replyCount: replyCount.value });
-    }
-  } catch {
-    // The reply remains successful; keep the last known count until a later refresh.
-  }
+  invalidateReplyCountRefreshes(operation.parentPostID);
+  const countRefresh = beginReplyCountRefresh(operation.parentPostID);
+  await refreshReplyCountFromServer(operation.parentPostID, countRefresh, () => (
+    detailVersion === detailRequestVersion
+    && postId.value === String(operation.parentPostID)
+    && currentViewerID.value === operation.viewerID
+  ));
   if (!operation.durableOwned) {
     replySubmissionStore.acknowledgeSucceededOperation(operation.id);
     reconciledReplyOperationIDs.delete(operation.id);
@@ -2211,6 +2242,10 @@ const confirmDeleteReply = async () => {
 
   const detailVersion = detailRequestVersion;
   const requestVersion = ++replyDeleteRequestVersion;
+  const parentPostID = currentDetailPostID.value;
+  const replyCountVersion = parentPostID === null
+    ? null
+    : captureReplyCountVersion(parentPostID);
   deletingReplyId.value = replyID;
   replyDeleteError.value = '';
 
@@ -2220,6 +2255,8 @@ const confirmDeleteReply = async () => {
       detailVersion !== detailRequestVersion
       || requestVersion !== replyDeleteRequestVersion
       || currentViewerID.value !== viewerID
+      || parentPostID === null
+      || post.value?.id !== parentPostID
     ) {
       return;
     }
@@ -2229,11 +2266,20 @@ const confirmDeleteReply = async () => {
     delete replyBookmarkStates[replyID];
     replyBookmarkMutations.invalidate('bookmark', replyID);
     syncExternalPostRemoval(replyID);
-    replyCount.value = Math.max(0, replyCount.value - 1);
-    syncExternalReplyCount({
-      postId: Number(postId.value),
-      replyCount: replyCount.value,
-    });
+    const replyCountUpdate = {
+      postId: parentPostID,
+      replyCount: Math.max(0, replyCount.value - 1),
+    };
+    if (!commitReplyCountMutation(replyCountUpdate, replyCountVersion)) {
+      invalidateReplyCountRefreshes(parentPostID);
+      const countRefresh = beginReplyCountRefresh(parentPostID);
+      void refreshReplyCountFromServer(parentPostID, countRefresh, () => (
+        detailVersion === detailRequestVersion
+        && requestVersion === replyDeleteRequestVersion
+        && postId.value === String(parentPostID)
+        && currentViewerID.value === viewerID
+      ));
+    }
     deletingReplyId.value = null;
     deleteReplyCandidateId.value = null;
     replyDeleteError.value = '';
@@ -2352,10 +2398,11 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
     if (replyID && feedStore.isPostDeleted(replyID)) invalidateFeedPostReferences(handoffPost.value, replyID);
   }
   postLoading.value = true;
+  const replyCountRefresh = beginReplyCountRefresh(Number(id));
 
   try {
     const loadedPost = await getPostById(id);
-    if (detailVersion !== detailRequestVersion) {
+    if (detailVersion !== detailRequestVersion || postId.value !== id) {
       return;
     }
     if (loadedPost.id !== Number(id)) {
@@ -2367,7 +2414,12 @@ const loadDetail = async (id: string, isAuthenticated: boolean) => {
     likeCount.value = clampCount(loadedPost.like_count);
     repostCount.value = clampCount(loadedPost.repost_count);
     quoteCount.value = clampCount(loadedPost.quote_count);
-    replyCount.value = clampCount(loadedPost.reply_count);
+    if (replyCountRefresh) {
+      commitReplyCountRefresh(replyCountRefresh, {
+        postId: loadedPost.id,
+        replyCount: loadedPost.reply_count,
+      });
+    }
     viewCount.value = clampCount(loadedPost.view_count);
     postLoading.value = false;
     void hydrateReplyContext(id, detailVersion, isAuthenticated ? currentViewerID.value : null);
@@ -2612,7 +2664,12 @@ onBeforeRouteLeave(async to => {
 });
 
 onMounted(() => {
-  registerPostDetailSessionSync({ applyExternalBookmarkStateLocal, applyQuoteCountUpdateLocal, removePostLocal });
+  registerPostDetailSessionSync({
+    applyExternalBookmarkStateLocal,
+    applyReplyCountUpdateLocal,
+    applyQuoteCountUpdateLocal,
+    removePostLocal,
+  });
   document.addEventListener('visibilitychange', handleVisibilityChange);
   window.addEventListener('scroll', handleReadScroll, { passive: true });
   window.addEventListener('resize', updateReadGeometry);

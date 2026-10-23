@@ -54,10 +54,16 @@ const mocks = vi.hoisted(() => ({
   externalRepost: vi.fn(),
   externalRemoval: vi.fn(),
   externalReplyCount: vi.fn(),
+  replyCountCoordinator: null as any,
+  beginReplyCountRefresh: vi.fn(),
+  captureReplyCountVersion: vi.fn(),
+  commitReplyCountRefresh: vi.fn(),
+  invalidateReplyCountRefreshes: vi.fn(),
   refreshAndSyncPostQuoteCount: vi.fn(),
   beginBookmarkStateMutation: vi.fn(),
   detailSync: null as {
     applyExternalBookmarkStateLocal: (update: unknown) => boolean;
+    applyReplyCountUpdateLocal: (update: unknown) => boolean;
     applyQuoteCountUpdateLocal: (update: unknown) => boolean;
     removePostLocal: (postID: number) => void;
   } | null,
@@ -84,13 +90,18 @@ vi.mock('../store/sessionSync', () => ({
   beginBookmarkStateMutation: mocks.beginBookmarkStateMutation,
   registerPostDetailSessionSync: vi.fn((sync: typeof mocks.detailSync) => {
     mocks.detailSync = sync;
+    mocks.replyCountCoordinator?.registerPostDetailSessionSync(sync);
   }),
   syncExternalPostLikeState: mocks.externalLike,
   syncExternalPostBookmarkState: mocks.externalBookmark,
   syncExternalPostRepostState: mocks.externalRepost,
   markOwnProfileTimelineStale: vi.fn(),
   syncExternalPostRemoval: mocks.externalRemoval,
-  syncExternalReplyCount: mocks.externalReplyCount,
+  beginReplyCountRefresh: mocks.beginReplyCountRefresh,
+  captureReplyCountVersion: mocks.captureReplyCountVersion,
+  commitReplyCountMutation: mocks.externalReplyCount,
+  commitReplyCountRefresh: mocks.commitReplyCountRefresh,
+  invalidateReplyCountRefreshes: mocks.invalidateReplyCountRefreshes,
 }));
 vi.mock('../store/postQuoteCountReconciliation', () => ({
   refreshAndSyncPostQuoteCount: mocks.refreshAndSyncPostQuoteCount,
@@ -237,10 +248,33 @@ describe('PostDetailView mutation synchronization', () => {
   let originalHistoryState: unknown;
   let originalHistoryURL = '';
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    mocks.replyCountCoordinator = await vi.importActual('../store/sessionSync') as any;
+    mocks.replyCountCoordinator.registerPostDetailSessionSync(null);
+    mocks.replyCountCoordinator.registerHomeTimelineSync(null);
+    mocks.beginReplyCountRefresh.mockImplementation((postID: number) => (
+      mocks.replyCountCoordinator.beginReplyCountRefresh(postID)
+    ));
+    mocks.captureReplyCountVersion.mockImplementation((postID: number) => (
+      mocks.replyCountCoordinator.captureReplyCountVersion(postID)
+    ));
+    mocks.commitReplyCountRefresh.mockImplementation((token: unknown, update: unknown) => (
+      mocks.replyCountCoordinator.commitReplyCountRefresh(token, update)
+    ));
+    mocks.invalidateReplyCountRefreshes.mockImplementation((postID: number) => (
+      mocks.replyCountCoordinator.invalidateReplyCountRefreshes(postID)
+    ));
+    mocks.externalReplyCount.mockImplementation((update: unknown, expectedVersion?: unknown) => (
+      mocks.replyCountCoordinator.commitReplyCountMutation(update, expectedVersion)
+    ));
     mocks.feedStore.isPostDeleted.mockReset().mockReturnValue(false);
     mocks.route = reactive({ params: { id: '42' }, query: {}, hash: '' });
+    mocks.authStore = reactive({
+      isAuthenticated: true,
+      token: 'Bearer test-token',
+      currentIdentity: { id: 7, username: 'viewer' },
+    });
     originalHistoryState = window.history.state;
     originalHistoryURL = window.location.href;
     window.history.replaceState({ back: null }, '', originalHistoryURL);
@@ -1053,13 +1087,15 @@ describe('PostDetailView mutation synchronization', () => {
     mocks.deletePostReply.mockResolvedValueOnce(undefined);
     const mounted = mountDetail();
     await flushPromises();
+    mocks.commitReplyCountRefresh.mockClear();
 
     await mounted.find('.test-create-comment').trigger('click');
     await flushPromises();
-    expect(mocks.externalReplyCount).toHaveBeenNthCalledWith(1, {
+    expect(mocks.commitReplyCountRefresh).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
       postId: 42,
       replyCount: 3,
     });
+    expect(mocks.externalReplyCount).not.toHaveBeenCalled();
 
     await mounted.find('.test-delete-comment').trigger('click');
     await flushPromises();
@@ -1070,10 +1106,230 @@ describe('PostDetailView mutation synchronization', () => {
     await flushPromises();
 
     expect(mocks.deletePostReply).toHaveBeenCalledWith(10);
-    expect(mocks.externalReplyCount).toHaveBeenNthCalledWith(2, {
+    expect(mocks.externalReplyCount).toHaveBeenCalledExactlyOnceWith({
       postId: 42,
       replyCount: 2,
+    }, expect.objectContaining({ postId: 42 }));
+  });
+
+  it('ignores an older same-post reply-count refresh that resolves after a newer one', async () => {
+    const mounted = mountDetail();
+    await flushPromises();
+
+    const olderRefresh = deferred<Post>();
+    const newerRefresh = deferred<Post>();
+    mocks.getPostById.mockClear();
+    mocks.getPostById
+      .mockReturnValueOnce(olderRefresh.promise)
+      .mockReturnValueOnce(newerRefresh.promise);
+    mocks.commitReplyCountRefresh.mockClear();
+
+    mocks.replySubmissionStore.operations.push(
+      {
+        id: 'reply-count-race-older', viewerID: 7, parentPostID: 42, content: 'older',
+        phase: 'succeeded', post: null, durableOwned: true,
+      },
+      {
+        id: 'reply-count-race-newer', viewerID: 7, parentPostID: 42, content: 'newer',
+        phase: 'succeeded', post: null, durableOwned: true,
+      },
+    );
+    await flushPromises();
+    expect(mocks.getPostById).toHaveBeenCalledTimes(2);
+
+    newerRefresh.resolve({ ...post, reply_count: 6 });
+    await flushPromises();
+    expect((mounted.vm as any).$.setupState.replyCount).toBe(6);
+    expect(mocks.commitReplyCountRefresh).toHaveBeenCalledTimes(1);
+
+    olderRefresh.resolve({ ...post, reply_count: 5 });
+    await flushPromises();
+
+    expect((mounted.vm as any).$.setupState.replyCount).toBe(6);
+    expect(mocks.commitReplyCountRefresh).toHaveBeenCalledTimes(2);
+    expect(mocks.commitReplyCountRefresh.mock.results[1]?.value).toBe(false);
+    mounted.unmount();
+  });
+
+  it('does not let a pending reply-count refresh undo a confirmed reply deletion', async () => {
+    mocks.getPostReplies.mockResolvedValueOnce({ items: [ownReply(9)], next_cursor: null });
+    mocks.deletePostReply.mockResolvedValueOnce(undefined);
+    const mounted = mountDetail();
+    await flushPromises();
+
+    const olderRefresh = deferred<Post>();
+    mocks.getPostById.mockClear();
+    mocks.getPostById.mockReturnValueOnce(olderRefresh.promise);
+    mocks.externalReplyCount.mockClear();
+    mocks.commitReplyCountRefresh.mockClear();
+    mocks.replySubmissionStore.operations.push({
+      id: 'reply-count-race-before-delete', viewerID: 7, parentPostID: 42, content: 'existing',
+      phase: 'succeeded', post: null, durableOwned: true,
     });
+    await flushPromises();
+    expect(mocks.getPostById).toHaveBeenCalledTimes(1);
+
+    await mounted.find('.test-delete-comment').trigger('click');
+    await mounted.find('.test-confirm-delete').trigger('click');
+    await flushPromises();
+
+    expect((mounted.vm as any).$.setupState.replyCount).toBe(1);
+    expect(mocks.externalReplyCount).toHaveBeenCalledExactlyOnceWith(
+      { postId: 42, replyCount: 1 },
+      expect.objectContaining({ postId: 42 }),
+    );
+
+    olderRefresh.resolve({ ...post, reply_count: 2 });
+    await flushPromises();
+
+    expect((mounted.vm as any).$.setupState.replyCount).toBe(1);
+    expect(mocks.externalReplyCount).toHaveBeenCalledExactlyOnceWith(
+      { postId: 42, replyCount: 1 },
+      expect.objectContaining({ postId: 42 }),
+    );
+    expect(mocks.commitReplyCountRefresh.mock.results[0]?.value).toBe(false);
+    mounted.unmount();
+  });
+
+  it('keeps a newer public count when the initial detail response is stale', async () => {
+    const initialDetail = deferred<Post>();
+    mocks.getPostById.mockReturnValueOnce(initialDetail.promise);
+    const mounted = mountDetail();
+    await flushPromises();
+    const home = { applyReplyCountUpdateLocal: vi.fn().mockReturnValue(true) };
+    mocks.replyCountCoordinator.registerHomeTimelineSync(home);
+
+    expect(mocks.replyCountCoordinator.commitReplyCountMutation({ postId: 42, replyCount: 6 })).toBe(true);
+    expect((mounted.vm as any).$.setupState.replyCount).toBe(6);
+
+    initialDetail.resolve({ ...post, reply_count: 5 });
+    await flushPromises();
+
+    expect((mounted.vm as any).$.setupState.replyCount).toBe(6);
+    expect(home.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith({ postId: 42, replyCount: 6 });
+    mounted.unmount();
+  });
+
+  it('does not commit an old reply refresh after the detail route changes', async () => {
+    const mounted = mountDetail();
+    await flushPromises();
+    const home = { applyReplyCountUpdateLocal: vi.fn().mockReturnValue(true) };
+    mocks.replyCountCoordinator.registerHomeTimelineSync(home);
+    const oldRefresh = deferred<Post>();
+    mocks.getPostById.mockClear();
+    mocks.getPostById.mockReturnValueOnce(oldRefresh.promise).mockResolvedValueOnce({ ...post, id: 43, reply_count: 3 });
+    mocks.replySubmissionStore.operations.push({
+      id: 'reply-count-route-change', viewerID: 7, parentPostID: 42, content: 'old post',
+      phase: 'succeeded', post: null, durableOwned: true,
+    });
+    await flushPromises();
+
+    mocks.route.params.id = '43';
+    await flushPromises();
+    expect((mounted.vm as any).$.setupState.replyCount).toBe(3);
+
+    oldRefresh.resolve({ ...post, reply_count: 5 });
+    await flushPromises();
+
+    expect((mounted.vm as any).$.setupState.replyCount).toBe(3);
+    expect(home.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith({ postId: 43, replyCount: 3 });
+    mounted.unmount();
+  });
+
+  it('ignores a reply refresh owned by the previous viewer session', async () => {
+    const mounted = mountDetail();
+    await flushPromises();
+    const home = { applyReplyCountUpdateLocal: vi.fn().mockReturnValue(true) };
+    mocks.replyCountCoordinator.registerHomeTimelineSync(home);
+    home.applyReplyCountUpdateLocal.mockClear();
+    const oldRefresh = deferred<Post>();
+    mocks.getPostById.mockClear();
+    mocks.getPostById.mockReturnValueOnce(oldRefresh.promise);
+    mocks.replySubmissionStore.operations.push({
+      id: 'reply-count-viewer-change', viewerID: 7, parentPostID: 42, content: 'old viewer',
+      phase: 'succeeded', post: null, durableOwned: true,
+    });
+    await flushPromises();
+
+    mocks.authStore.currentIdentity = { id: 8, username: 'new-viewer' };
+    await flushPromises();
+    oldRefresh.resolve({ ...post, reply_count: 5 });
+    await flushPromises();
+
+    expect(home.applyReplyCountUpdateLocal).not.toHaveBeenCalled();
+    mounted.unmount();
+  });
+
+  it('does not mutate an unmounted detail instance but still syncs a confirmed public count', async () => {
+    const mounted = mountDetail();
+    await flushPromises();
+    const home = { applyReplyCountUpdateLocal: vi.fn().mockReturnValue(true) };
+    mocks.replyCountCoordinator.registerHomeTimelineSync(home);
+    const pendingRefresh = deferred<Post>();
+    mocks.getPostById.mockClear();
+    mocks.getPostById.mockReturnValueOnce(pendingRefresh.promise);
+    mocks.replySubmissionStore.operations.push({
+      id: 'reply-count-unmount', viewerID: 7, parentPostID: 42, content: 'success before unmount',
+      phase: 'succeeded', post: null, durableOwned: true,
+    });
+    await flushPromises();
+    expect((mounted.vm as any).$.setupState.replyCount).toBe(2);
+    const detailReplyCountUpdate = vi.spyOn(mocks.detailSync!, 'applyReplyCountUpdateLocal');
+    detailReplyCountUpdate.mockClear();
+    mounted.unmount();
+
+    pendingRefresh.resolve({ ...post, reply_count: 3 });
+    await flushPromises();
+
+    expect(detailReplyCountUpdate).not.toHaveBeenCalled();
+    expect(home.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith({ postId: 42, replyCount: 3 });
+  });
+
+  it('keeps a confirmed reply when its follow-up count refresh fails', async () => {
+    mocks.createPostReply.mockResolvedValueOnce(ownReply(10));
+    mocks.getPostById.mockResolvedValueOnce(post).mockRejectedValueOnce(new Error('offline'));
+    const mounted = mountDetail();
+    await flushPromises();
+    mocks.commitReplyCountRefresh.mockClear();
+
+    await mounted.find('.test-create-comment').trigger('click');
+    await flushPromises();
+
+    expect((mounted.vm as any).$.setupState.replyCount).toBe(2);
+    expect((mounted.vm as any).$.setupState.replies.some((item: Post) => item.id === 10)).toBe(true);
+    expect(mocks.replySubmissionStore.acknowledgeSucceededOperation).toHaveBeenCalledWith('reply-op');
+    expect(mocks.commitReplyCountRefresh).not.toHaveBeenCalled();
+    mounted.unmount();
+  });
+
+  it('rejects mismatched Post IDs and invalid reply-count responses', async () => {
+    const mounted = mountDetail();
+    await flushPromises();
+    const home = { applyReplyCountUpdateLocal: vi.fn().mockReturnValue(true) };
+    mocks.replyCountCoordinator.registerHomeTimelineSync(home);
+    home.applyReplyCountUpdateLocal.mockClear();
+    mocks.getPostById.mockClear();
+    mocks.getPostById
+      .mockResolvedValueOnce({ ...post, id: 43, reply_count: 9 })
+      .mockResolvedValueOnce({ ...post, reply_count: Number.NaN });
+    mocks.commitReplyCountRefresh.mockClear();
+    mocks.replySubmissionStore.operations.push(
+      {
+        id: 'reply-count-bad-id', viewerID: 7, parentPostID: 42, content: 'bad id',
+        phase: 'succeeded', post: null, durableOwned: true,
+      },
+      {
+        id: 'reply-count-bad-value', viewerID: 7, parentPostID: 42, content: 'bad value',
+        phase: 'succeeded', post: null, durableOwned: true,
+      },
+    );
+    await flushPromises();
+
+    expect((mounted.vm as any).$.setupState.replyCount).toBe(2);
+    expect(mocks.commitReplyCountRefresh).toHaveBeenCalledTimes(1);
+    expect(mocks.commitReplyCountRefresh.mock.results[0]?.value).toBe(false);
+    expect(home.applyReplyCountUpdateLocal).not.toHaveBeenCalled();
+    mounted.unmount();
   });
 
   it('does not synchronize failed reply creation', async () => {

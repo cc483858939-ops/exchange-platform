@@ -45,6 +45,7 @@ const mocks = vi.hoisted(() => ({
     enqueue: vi.fn(),
   },
   composerFocus: vi.fn(),
+  postDetailSync: null as any,
 }));
 
 vi.mock('vue-router', () => ({
@@ -115,11 +116,21 @@ vi.mock('../services/postViewTelemetry', () => ({
 
 vi.mock('../store/sessionSync', () => ({
   beginBookmarkStateMutation: vi.fn(),
-  registerPostDetailSessionSync: vi.fn(),
+  registerPostDetailSessionSync: vi.fn((sync: any) => { mocks.postDetailSync = sync; }),
   syncExternalPostLikeState: vi.fn(),
   syncExternalPostRepostState: vi.fn(),
   syncExternalPostRemoval: vi.fn(),
-  syncExternalReplyCount: vi.fn(),
+  beginReplyCountRefresh: vi.fn((postId: number) => ({ postId, version: 0, requestVersion: 0 })),
+  captureReplyCountVersion: vi.fn((postId: number) => ({ postId, version: 0 })),
+  invalidateReplyCountRefreshes: vi.fn(),
+  commitReplyCountRefresh: vi.fn((_token: unknown, update: unknown) => {
+    mocks.postDetailSync?.applyReplyCountUpdateLocal(update);
+    return true;
+  }),
+  commitReplyCountMutation: vi.fn((update: unknown) => {
+    mocks.postDetailSync?.applyReplyCountUpdateLocal(update);
+    return true;
+  }),
 }));
 
 const canonicalPost = (overrides: Partial<Post> = {}): Post => {
@@ -225,6 +236,7 @@ describe('PostDetailView warm and cold transition', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.postDetailSync = null;
     mocks.route = reactive({
       params: { id: '42' },
       query: {},

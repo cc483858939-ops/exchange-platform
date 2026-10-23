@@ -12,6 +12,17 @@ export type PostReplyCountUpdate = {
   replyCount: number;
 };
 
+export type PostReplyCountRefreshToken = {
+  postId: number;
+  version: number;
+  requestVersion: number;
+};
+
+export type PostReplyCountVersion = {
+  postId: number;
+  version: number;
+};
+
 export type PostQuoteCountUpdate = {
   postId: number;
   quoteCount: number;
@@ -100,6 +111,7 @@ export type BookmarksSessionSync = {
 
 export type PostDetailSessionSync = {
   applyExternalBookmarkStateLocal: (update: FeedBookmarkStateUpdate) => boolean;
+  applyReplyCountUpdateLocal: (update: PostReplyCountUpdate) => boolean;
   applyQuoteCountUpdateLocal: (update: PostQuoteCountUpdate) => boolean;
   removePostLocal?: (postID: number) => void;
 };
@@ -124,6 +136,34 @@ let bookmarksSessionSync: BookmarksSessionSync | null = null;
 let postDetailSessionSync: PostDetailSessionSync | null = null;
 let quotesSessionSync: QuotesSessionSync | null = null;
 const bookmarkStateSyncVersions = new Map<number, number>();
+const replyCountSyncVersions = new Map<number, { version: number; requestVersion: number }>();
+
+const isValidReplyCountPostID = (postID: number) =>
+  Number.isSafeInteger(postID) && postID > 0;
+
+const isValidReplyCount = (count: number) =>
+  Number.isSafeInteger(count) && count >= 0;
+
+const getReplyCountSyncState = (postID: number) => {
+  let state = replyCountSyncVersions.get(postID);
+  if (!state) {
+    state = { version: 0, requestVersion: 0 };
+    replyCountSyncVersions.set(postID, state);
+  }
+  return state;
+};
+
+const acceptReplyCountUpdate = (update: PostReplyCountUpdate) => {
+  const state = getReplyCountSyncState(update.postId);
+  state.version += 1;
+  state.requestVersion += 1;
+  postDetailSessionSync?.applyReplyCountUpdateLocal(update);
+  homeTimelineSync?.applyReplyCountUpdateLocal(update);
+  profileSessionSync?.applyReplyCountUpdateEverywhereLocal(update);
+  historySessionSync?.applyReplyCountUpdateLocal(update);
+  topicSessionSync?.applyReplyCountUpdateLocal(update);
+  postSearchSessionSync?.applyReplyCountUpdateLocal(update);
+};
 
 const getBookmarkStateSyncVersion = (postID: number) => (
   bookmarkStateSyncVersions.get(postID) ?? 0
@@ -447,12 +487,82 @@ export const syncHydratedPostBookmarkState = (
   return true;
 };
 
-export const syncExternalReplyCount = (update: PostReplyCountUpdate) => {
-  homeTimelineSync?.applyReplyCountUpdateLocal(update);
-  profileSessionSync?.applyReplyCountUpdateEverywhereLocal(update);
-  historySessionSync?.applyReplyCountUpdateLocal(update);
-  topicSessionSync?.applyReplyCountUpdateLocal(update);
-  postSearchSessionSync?.applyReplyCountUpdateLocal(update);
+export const beginReplyCountRefresh = (postID: number): PostReplyCountRefreshToken | null => {
+  if (!isValidReplyCountPostID(postID)) return null;
+  const state = getReplyCountSyncState(postID);
+  state.requestVersion += 1;
+  return {
+    postId: postID,
+    version: state.version,
+    requestVersion: state.requestVersion,
+  };
+};
+
+export const invalidateReplyCountRefreshes = (postID: number) => {
+  if (!isValidReplyCountPostID(postID)) return false;
+  const state = getReplyCountSyncState(postID);
+  state.version += 1;
+  state.requestVersion += 1;
+  return true;
+};
+
+export const captureReplyCountVersion = (postID: number): PostReplyCountVersion | null => {
+  if (!isValidReplyCountPostID(postID)) return null;
+  return { postId: postID, version: getReplyCountSyncState(postID).version };
+};
+
+export const commitReplyCountRefresh = (
+  token: PostReplyCountRefreshToken | null,
+  update: PostReplyCountUpdate,
+) => {
+  if (
+    !token
+    || !isValidReplyCountPostID(token.postId)
+    || !Number.isSafeInteger(token.version)
+    || !Number.isSafeInteger(token.requestVersion)
+    || !update
+    || !isValidReplyCountPostID(update.postId)
+    || update.postId !== token.postId
+    || !isValidReplyCount(update.replyCount)
+  ) {
+    return false;
+  }
+
+  const state = getReplyCountSyncState(token.postId);
+  if (state.version !== token.version || state.requestVersion !== token.requestVersion) {
+    return false;
+  }
+
+  acceptReplyCountUpdate(update);
+  return true;
+};
+
+export const commitReplyCountMutation = (
+  update: PostReplyCountUpdate,
+  expectedVersion?: PostReplyCountVersion | null,
+) => {
+  if (
+    !update
+    || !isValidReplyCountPostID(update.postId)
+    || !isValidReplyCount(update.replyCount)
+  ) {
+    return false;
+  }
+
+  const state = getReplyCountSyncState(update.postId);
+  if (
+    expectedVersion !== undefined
+    && (
+      !expectedVersion
+      || expectedVersion.postId !== update.postId
+      || state.version !== expectedVersion.version
+    )
+  ) {
+    return false;
+  }
+
+  acceptReplyCountUpdate(update);
+  return true;
 };
 
 export const syncExternalQuoteCount = (update: PostQuoteCountUpdate) => {

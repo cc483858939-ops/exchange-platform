@@ -19,12 +19,16 @@ import {
   registerTopicSessionSync,
   captureBookmarkStateSyncVersion,
   beginBookmarkStateMutation,
+  beginReplyCountRefresh,
+  captureReplyCountVersion,
+  commitReplyCountMutation,
+  commitReplyCountRefresh,
+  invalidateReplyCountRefreshes,
   syncExternalPostLikeState,
   syncExternalPostRepostState,
   syncExternalPostBookmarkState,
   syncHydratedPostBookmarkState,
   syncExternalPostRemoval,
-  syncExternalReplyCount,
   syncExternalQuoteCount,
   syncExternalFollowState,
   syncHomeAuthorIdentity,
@@ -157,6 +161,7 @@ const registerSinks = () => {
   const postDetail = {
     removePostLocal: vi.fn(),
     applyExternalBookmarkStateLocal: vi.fn().mockReturnValue(true),
+    applyReplyCountUpdateLocal: vi.fn().mockReturnValue(true),
     applyQuoteCountUpdateLocal: vi.fn().mockReturnValue(true),
   };
   registerHomeTimelineSync(home);
@@ -285,18 +290,128 @@ describe('sessionSync external mutation sinks', () => {
     expect(postSearch.removePostLocal).toHaveBeenCalledWith(42);
   });
 
-  it('sends absolute comment counts to both caches', () => {
-    const { home, profile, postSearch, history, topic } = registerSinks();
+  it('fans out an accepted absolute reply count to every Post surface once', () => {
+    const { home, profile, postSearch, history, topic, postDetail } = registerSinks();
     const update = { postId: 42, replyCount: 5 };
 
-    syncExternalReplyCount(update);
+    expect(commitReplyCountMutation(update)).toBe(true);
 
-    expect(home.applyReplyCountUpdateLocal).toHaveBeenCalledWith(update);
-    expect(profile.applyReplyCountUpdateEverywhereLocal).toHaveBeenCalledWith(update);
-    expect(history.applyReplyCountUpdateLocal).toHaveBeenCalledWith(update);
-    expect(topic.applyReplyCountUpdateLocal).toHaveBeenCalledWith(update);
+    expect(home.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith(update);
+    expect(profile.applyReplyCountUpdateEverywhereLocal).toHaveBeenCalledExactlyOnceWith(update);
+    expect(history.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith(update);
+    expect(topic.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith(update);
     expect(postSearch.applyReplyCountUpdateLocal).toHaveBeenCalledOnce();
     expect(postSearch.applyReplyCountUpdateLocal).toHaveBeenCalledWith(update);
+    expect(postDetail.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith(update);
+  });
+
+  it('rejects older same-post refreshes without changing or rebroadcasting a newer count', () => {
+    const { home, profile, postSearch, history, topic, postDetail } = registerSinks();
+    const older = beginReplyCountRefresh(42001);
+    const newer = beginReplyCountRefresh(42001);
+    const accepted = { postId: 42001, replyCount: 6 };
+    const stale = { postId: 42001, replyCount: 5 };
+
+    expect(commitReplyCountRefresh(newer, accepted)).toBe(true);
+    expect(commitReplyCountRefresh(older, stale)).toBe(false);
+
+    expect(home.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith(accepted);
+    expect(home.applyReplyCountUpdateLocal).not.toHaveBeenCalledWith(stale);
+    expect(profile.applyReplyCountUpdateEverywhereLocal).toHaveBeenCalledExactlyOnceWith(accepted);
+    expect(profile.applyReplyCountUpdateEverywhereLocal).not.toHaveBeenCalledWith(stale);
+    expect(postSearch.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith(accepted);
+    expect(postSearch.applyReplyCountUpdateLocal).not.toHaveBeenCalledWith(stale);
+    expect(history.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith(accepted);
+    expect(history.applyReplyCountUpdateLocal).not.toHaveBeenCalledWith(stale);
+    expect(topic.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith(accepted);
+    expect(topic.applyReplyCountUpdateLocal).not.toHaveBeenCalledWith(stale);
+    expect(postDetail.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith(accepted);
+    expect(postDetail.applyReplyCountUpdateLocal).not.toHaveBeenCalledWith(stale);
+  });
+
+  it('invalidates pending reads after a confirmed mutation and permits count decreases', () => {
+    const { home, profile, history, topic, postSearch } = registerSinks();
+    const pending = beginReplyCountRefresh(42002);
+    const mutation = { postId: 42002, replyCount: 4 };
+
+    expect(commitReplyCountMutation(mutation)).toBe(true);
+    expect(commitReplyCountRefresh(pending, { postId: 42002, replyCount: 5 })).toBe(false);
+    expect(home.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith(mutation);
+    expect(profile.applyReplyCountUpdateEverywhereLocal).toHaveBeenCalledExactlyOnceWith(mutation);
+    expect(history.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith(mutation);
+    expect(topic.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith(mutation);
+    expect(postSearch.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith(mutation);
+  });
+
+  it('accepts confirmed reply-count changes from six to five and back to six', () => {
+    const { home } = registerSinks();
+    const updates = [6, 5, 6].map(replyCount => ({ postId: 42011, replyCount }));
+
+    for (const update of updates) {
+      expect(commitReplyCountMutation(update)).toBe(true);
+    }
+
+    expect(home.applyReplyCountUpdateLocal.mock.calls).toEqual(updates.map(update => [update]));
+  });
+
+  it('keeps reply-count refresh versions isolated by post ID', () => {
+    registerSinks();
+    const firstPost = beginReplyCountRefresh(42003);
+    const secondPost = beginReplyCountRefresh(42004);
+
+    expect(commitReplyCountMutation({ postId: 42004, replyCount: 7 })).toBe(true);
+    expect(commitReplyCountRefresh(firstPost, { postId: 42003, replyCount: 2 })).toBe(true);
+    expect(commitReplyCountRefresh(secondPost, { postId: 42004, replyCount: 8 })).toBe(false);
+  });
+
+  it('rejects malformed IDs, counts, mismatched responses, and superseded failed reads', () => {
+    const { home } = registerSinks();
+    const older = beginReplyCountRefresh(42005);
+    beginReplyCountRefresh(42005);
+
+    expect(beginReplyCountRefresh(0)).toBeNull();
+    expect(beginReplyCountRefresh(Number.MAX_SAFE_INTEGER + 1)).toBeNull();
+    expect(beginReplyCountRefresh(Number.NaN)).toBeNull();
+    expect(commitReplyCountRefresh(older, { postId: 42005, replyCount: 3 })).toBe(false);
+
+    const current = beginReplyCountRefresh(42006);
+    expect(commitReplyCountRefresh(current, { postId: 42007, replyCount: 3 })).toBe(false);
+    expect(commitReplyCountMutation({ postId: 42006, replyCount: -1 })).toBe(false);
+    expect(commitReplyCountMutation({ postId: 42006, replyCount: 1.5 })).toBe(false);
+    expect(commitReplyCountMutation({ postId: 42006, replyCount: Number.NaN })).toBe(false);
+    expect(commitReplyCountMutation({ postId: 42006, replyCount: Number.POSITIVE_INFINITY })).toBe(false);
+    expect(commitReplyCountMutation({ postId: Number.POSITIVE_INFINITY, replyCount: 3 })).toBe(false);
+    expect(home.applyReplyCountUpdateLocal).not.toHaveBeenCalled();
+  });
+
+  it('does not apply a delete based on an outdated count version', () => {
+    const { home } = registerSinks();
+    const beforeDelete = captureReplyCountVersion(42008);
+    const read = beginReplyCountRefresh(42008);
+    expect(commitReplyCountRefresh(read, { postId: 42008, replyCount: 6 })).toBe(true);
+
+    expect(commitReplyCountMutation({ postId: 42008, replyCount: 5 }, beforeDelete)).toBe(false);
+    expect(home.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith({ postId: 42008, replyCount: 6 });
+  });
+
+  it('lets a newer refresh supersede an older request even if the newer request fails', () => {
+    const { home } = registerSinks();
+    const older = beginReplyCountRefresh(42009);
+    beginReplyCountRefresh(42009);
+    invalidateReplyCountRefreshes(42009);
+
+    expect(commitReplyCountRefresh(older, { postId: 42009, replyCount: 8 })).toBe(false);
+    expect(home.applyReplyCountUpdateLocal).not.toHaveBeenCalled();
+  });
+
+  it('does not update an unregistered detail instance while preserving shared-store updates', () => {
+    const { home, postDetail } = registerSinks();
+    registerPostDetailSessionSync(null);
+    const update = { postId: 42010, replyCount: 3 };
+
+    expect(commitReplyCountMutation(update)).toBe(true);
+    expect(home.applyReplyCountUpdateLocal).toHaveBeenCalledExactlyOnceWith(update);
+    expect(postDetail.applyReplyCountUpdateLocal).not.toHaveBeenCalled();
   });
 
   it('fans out an absolute Quote count to every registered Post surface exactly once', () => {
