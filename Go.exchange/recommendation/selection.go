@@ -123,6 +123,7 @@ func SelectCandidates(input SelectionInput) []SelectedCandidate {
 	}
 	result := append([]SelectedCandidate(nil), input.Initial...)
 	selectedContext := append(append([]SelectedCandidate(nil), input.Prior...), result...)
+	diversityState := newSelectionDiversityState(input.Candidates, selectedContext, input.Config.Diversity)
 	selectedIDs := make(map[uint]struct{}, len(selectedContext))
 	for _, item := range selectedContext {
 		selectedIDs[item.Post.ID] = struct{}{}
@@ -154,7 +155,7 @@ func SelectCandidates(input SelectionInput) []SelectedCandidate {
 			}
 			return true
 		}
-		_, normal, normalOK := chooseNormalCandidate(input.Candidates, selectedContext, available, outPositions, position, input.Config, input.Phase)
+		_, normal, normalOK := chooseNormalCandidate(input.Candidates, selectedContext, diversityState, available, outPositions, position, input.Config, input.Phase)
 		chosen := normal
 		ok := normalOK
 		selectionOpportunity := false
@@ -167,7 +168,7 @@ func SelectCandidates(input SelectionInput) []SelectedCandidate {
 			opportunity = opportunityPosition
 		}
 		if opportunity {
-			_, strict, strictOK := chooseStrictExplorationCandidateWithConfig(input.Candidates, selectedContext, available, outPositions, position, input.Config, input.Now)
+			_, strict, strictOK := chooseStrictExplorationCandidateWithConfig(input.Candidates, selectedContext, diversityState, available, outPositions, position, input.Config, input.Now)
 			if strictOK && (!normalOK || strict.Post.ID != normal.Post.ID) {
 				chosen = strict
 				ok = true
@@ -192,6 +193,7 @@ func SelectCandidates(input SelectionInput) []SelectedCandidate {
 		}
 		result = append(result, selected)
 		selectedContext = append(selectedContext, selected)
+		diversityState.addSelected(selected)
 	}
 	return result
 }
@@ -205,43 +207,43 @@ func SelectNextPage(input SelectionInput, prior []SelectedCandidate) []SelectedC
 	return SelectCandidates(input)
 }
 
-func chooseNormalCandidate(candidates []RankedCandidate, selected []SelectedCandidate, available func(RankedCandidate) bool, outPositions map[int]struct{}, position int, cfg SelectionConfig, phase SelectionPhase) (int, RankedCandidate, bool) {
+func chooseNormalCandidate(candidates []RankedCandidate, selected []SelectedCandidate, diversityState *selectionDiversityState, available func(RankedCandidate) bool, outPositions map[int]struct{}, position int, cfg SelectionConfig, phase SelectionPhase) (int, RankedCandidate, bool) {
 	preferOutOfNetwork := func(item RankedCandidate) bool {
 		if _, ok := outPositions[position]; ok {
 			return !item.IsInNetwork
 		}
 		return true
 	}
-	_, chosen, ok := chooseCandidate(candidates, selected, available, preferOutOfNetwork, cfg, phase, true)
+	_, chosen, ok := chooseCandidate(candidates, selected, diversityState, available, preferOutOfNetwork, cfg, phase, true)
 	if ok {
 		return 0, chosen, true
 	}
-	_, chosen, ok = chooseCandidate(candidates, selected, available, func(RankedCandidate) bool { return true }, cfg, phase, true)
+	_, chosen, ok = chooseCandidate(candidates, selected, diversityState, available, func(RankedCandidate) bool { return true }, cfg, phase, true)
 	if ok {
 		return 0, chosen, true
 	}
-	_, chosen, ok = chooseCandidate(candidates, selected, available, preferOutOfNetwork, cfg, phase, false)
+	_, chosen, ok = chooseCandidate(candidates, selected, diversityState, available, preferOutOfNetwork, cfg, phase, false)
 	if ok {
 		return 0, chosen, true
 	}
-	_, chosen, ok = chooseCandidate(candidates, selected, available, func(RankedCandidate) bool { return true }, cfg, phase, false)
+	_, chosen, ok = chooseCandidate(candidates, selected, diversityState, available, func(RankedCandidate) bool { return true }, cfg, phase, false)
 	return 0, chosen, ok
 }
 
-func chooseStrictExplorationCandidateWithConfig(candidates []RankedCandidate, selected []SelectedCandidate, available func(RankedCandidate) bool, outPositions map[int]struct{}, position int, cfg SelectionConfig, now time.Time) (int, RankedCandidate, bool) {
+func chooseStrictExplorationCandidateWithConfig(candidates []RankedCandidate, selected []SelectedCandidate, diversityState *selectionDiversityState, available func(RankedCandidate) bool, outPositions map[int]struct{}, position int, cfg SelectionConfig, now time.Time) (int, RankedCandidate, bool) {
 	preferOutOfNetwork := func(item RankedCandidate) bool {
 		if _, ok := outPositions[position]; ok {
 			return !item.IsInNetwork
 		}
 		return true
 	}
-	if _, chosen, ok := chooseStrictExplorationCandidateFrom(candidates, selected, available, preferOutOfNetwork, cfg, now); ok {
+	if _, chosen, ok := chooseStrictExplorationCandidateFrom(candidates, selected, diversityState, available, preferOutOfNetwork, cfg, now); ok {
 		return 0, chosen, true
 	}
-	return chooseStrictExplorationCandidateFrom(candidates, selected, available, func(RankedCandidate) bool { return true }, cfg, now)
+	return chooseStrictExplorationCandidateFrom(candidates, selected, diversityState, available, func(RankedCandidate) bool { return true }, cfg, now)
 }
 
-func chooseStrictExplorationCandidateFrom(candidates []RankedCandidate, selected []SelectedCandidate, available func(RankedCandidate) bool, preferred func(RankedCandidate) bool, cfg SelectionConfig, now time.Time) (int, RankedCandidate, bool) {
+func chooseStrictExplorationCandidateFrom(candidates []RankedCandidate, selected []SelectedCandidate, diversityState *selectionDiversityState, available func(RankedCandidate) bool, preferred func(RankedCandidate) bool, cfg SelectionConfig, now time.Time) (int, RankedCandidate, bool) {
 	bestIndex := -1
 	var best RankedCandidate
 	found := false
@@ -249,11 +251,11 @@ func chooseStrictExplorationCandidateFrom(candidates []RankedCandidate, selected
 		if !available(candidate) || !preferred(candidate) || explorationReason(candidate, now, cfg.Exploration) == "" {
 			continue
 		}
-		if isSemanticDuplicate(candidate, selected, cfg.Diversity) || !authorWindowAllows(candidate, selected, cfg.Diversity) {
+		if diversityState.isDuplicate(index) || !authorWindowAllows(candidate, selected, cfg.Diversity) {
 			continue
 		}
 		evaluated := candidate
-		evaluated.Breakdown.DiversityPenalty = diversityPenalty(evaluated, selected, cfg.Diversity)
+		evaluated.Breakdown.DiversityPenalty = diversityState.penalty(index)
 		if !found || strictExplorationBefore(evaluated, best, now, cfg) {
 			found, bestIndex, best = true, index, evaluated
 		}
@@ -261,7 +263,57 @@ func chooseStrictExplorationCandidateFrom(candidates []RankedCandidate, selected
 	return bestIndex, best, found
 }
 
-func chooseCandidate(candidates []RankedCandidate, selected []SelectedCandidate, available func(RankedCandidate) bool, preferred func(RankedCandidate) bool, cfg SelectionConfig, phase SelectionPhase, enforceAuthorWindow bool) (int, RankedCandidate, bool) {
+type selectionDiversityState struct {
+	candidates   []RankedCandidate
+	duplicates   []bool
+	enabled      bool
+	threshold    float64
+	penaltyValue float64
+}
+
+func newSelectionDiversityState(candidates []RankedCandidate, selected []SelectedCandidate, cfg DiversityConfig) *selectionDiversityState {
+	state := &selectionDiversityState{
+		candidates:   candidates,
+		duplicates:   make([]bool, len(candidates)),
+		threshold:    cfg.SemanticDuplicateThreshold,
+		penaltyValue: cfg.SemanticDuplicatePenalty,
+	}
+	if !cfg.Enabled || cfg.SemanticDuplicateThreshold < -1 || cfg.SemanticDuplicateThreshold > 1 {
+		return state
+	}
+	state.enabled = true
+	for index, candidate := range candidates {
+		state.duplicates[index] = isSemanticDuplicate(candidate, selected, cfg)
+	}
+	return state
+}
+
+func (state *selectionDiversityState) isDuplicate(index int) bool {
+	return state != nil && index >= 0 && index < len(state.duplicates) && state.duplicates[index]
+}
+
+func (state *selectionDiversityState) penalty(index int) float64 {
+	if state != nil && state.isDuplicate(index) {
+		return state.penaltyValue
+	}
+	return 0
+}
+
+func (state *selectionDiversityState) addSelected(selected SelectedCandidate) {
+	if state == nil || !state.enabled || !ValidEmbeddingVector(selected.Embedding) {
+		return
+	}
+	for index, candidate := range state.candidates {
+		if state.duplicates[index] || !validComparableEmbedding(candidate.Embedding, selected.Embedding) {
+			continue
+		}
+		if CosineSimilarity(candidate.Embedding, selected.Embedding) >= state.threshold {
+			state.duplicates[index] = true
+		}
+	}
+}
+
+func chooseCandidate(candidates []RankedCandidate, selected []SelectedCandidate, diversityState *selectionDiversityState, available func(RankedCandidate) bool, preferred func(RankedCandidate) bool, cfg SelectionConfig, phase SelectionPhase, enforceAuthorWindow bool) (int, RankedCandidate, bool) {
 	bestIndex := -1
 	var best RankedCandidate
 	found := false
@@ -270,7 +322,7 @@ func chooseCandidate(candidates []RankedCandidate, selected []SelectedCandidate,
 			continue
 		}
 		evaluated := candidate
-		evaluated.Breakdown.DiversityPenalty = diversityPenalty(evaluated, selected, cfg.Diversity)
+		evaluated.Breakdown.DiversityPenalty = diversityState.penalty(index)
 		if enforceAuthorWindow && !authorWindowAllows(evaluated, selected, cfg.Diversity) {
 			continue
 		}

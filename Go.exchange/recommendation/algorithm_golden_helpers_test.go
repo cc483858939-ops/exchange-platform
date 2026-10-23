@@ -104,7 +104,9 @@ func selectRecommendationCandidates(candidates []RankedCandidate, initial []Sele
 }
 
 func chooseStrictExplorationCandidate(candidates []RankedCandidate, selected []SelectedCandidate, available func(RankedCandidate) bool, outPositions map[int]struct{}, position int, cfg config.RecommendationConfig, now time.Time) (int, RankedCandidate, bool) {
-	return chooseStrictExplorationCandidateWithConfig(candidates, selected, available, outPositions, position, testSelectionConfig(cfg), now)
+	selectionConfig := testSelectionConfig(cfg)
+	diversityState := newSelectionDiversityState(candidates, selected, selectionConfig.Diversity)
+	return chooseStrictExplorationCandidateWithConfig(candidates, selected, diversityState, available, outPositions, position, selectionConfig, now)
 }
 
 func recommendationDiversityPenalty(candidate RankedCandidate, selected []SelectedCandidate, cfg config.RecommendationConfig) float64 {
