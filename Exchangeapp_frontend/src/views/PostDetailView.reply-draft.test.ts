@@ -152,6 +152,7 @@ const makeSubmissionStore = () => {
       return { status: 'accepted', operation };
     }),
     retry: vi.fn(async () => true),
+    recoverRejectedAttemptForEdit: vi.fn(async () => true),
     abandonFailedOperation: vi.fn(async () => true),
     adoptHydratedOperation: vi.fn(() => false),
     acknowledgeSucceededOperation: vi.fn(() => true),
@@ -269,6 +270,24 @@ describe('PostDetail reply draft durability UX', () => {
     expect(wrapper.find('.reply-error').exists()).toBe(false);
     expect((wrapper.get('.reply-composer__textarea').element as HTMLTextAreaElement).value).toBe('new reply');
     expect(mocks.replySubmissionStore.startOrRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses durable edit recovery for a validation rejection instead of discarding the operation', async () => {
+    const operation = {
+      id: 'rejected-reply', viewerID: 7, parentPostID: 42, content: 'rejected body',
+      sourceDraftContent: null, phase: 'failed', failureKind: 'validation_error',
+      error: 'Review the reply and try again.', startedAt: 1, post: null,
+      durableOwned: true, cleanupPending: false,
+    } as const;
+    mocks.replySubmissionStore.operations.push(operation);
+    wrapper = mountDetail();
+    await flushAsync();
+
+    await wrapper.get('.reply-submission-status__action--quiet').trigger('click');
+    await flushAsync();
+
+    expect(mocks.replySubmissionStore.recoverRejectedAttemptForEdit).toHaveBeenCalledWith('rejected-reply');
+    expect(mocks.replySubmissionStore.abandonFailedOperation).not.toHaveBeenCalled();
   });
 
   it('registers beforeunload only for unsaved text and removes the warning after durable binding', async () => {

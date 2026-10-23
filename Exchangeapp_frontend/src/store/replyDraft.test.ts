@@ -7,12 +7,14 @@ import { useReplyDraftStore } from './replyDraft';
 const mocks = vi.hoisted(() => ({
   getReplyDraft: vi.fn(),
   saveReplyDraft: vi.fn(),
+  saveReplyDraftIfUnchanged: vi.fn(),
   deleteReplyDraftIfUnchanged: vi.fn(),
 }));
 
 vi.mock('../storage/replyStorage', () => ({
   getReplyDraft: mocks.getReplyDraft,
   saveReplyDraft: mocks.saveReplyDraft,
+  saveReplyDraftIfUnchanged: mocks.saveReplyDraftIfUnchanged,
   deleteReplyDraftIfUnchanged: mocks.deleteReplyDraftIfUnchanged,
 }));
 
@@ -37,6 +39,7 @@ describe('replyDraft store', () => {
     setActivePinia(createPinia());
     mocks.getReplyDraft.mockReset().mockResolvedValue(null);
     mocks.saveReplyDraft.mockReset().mockResolvedValue(undefined);
+    mocks.saveReplyDraftIfUnchanged.mockReset().mockResolvedValue(true);
     mocks.deleteReplyDraftIfUnchanged.mockReset().mockResolvedValue('deleted');
   });
 
@@ -73,6 +76,47 @@ describe('replyDraft store', () => {
     expect(store.getDraft(42)).toBe('  first\nsecond  ');
     expect(store.getDraft(43)).toBe('');
     expect(store.hasUnsavedChanges(42)).toBe(false);
+  });
+
+  it('persists the current reply before releasing a rejected submission', async () => {
+    const store = useReplyDraftStore();
+    store.setViewer(7);
+    await store.hydrateSavedDraft(42);
+    store.setDraft(42, 'rejected reply');
+
+    expect(await store.persistCurrentDraftForRejectedSubmission(42, 'rejected reply')).toBe(true);
+    expect(mocks.saveReplyDraftIfUnchanged).toHaveBeenCalledWith(expect.objectContaining({
+      key: '7:42', viewerID: 7, parentPostID: 42, content: 'rejected reply',
+    }), null);
+    expect(store.getSavedContent(42)).toBe('rejected reply');
+    expect(store.hasUnsavedChanges(42)).toBe(false);
+  });
+
+  it('preserves the current draft and refuses release if it is blank while the failed operation has content', async () => {
+    const store = useReplyDraftStore();
+    store.setViewer(7);
+    await store.hydrateSavedDraft(42);
+    store.setDraft(42, 'rejected reply');
+    store.setDraft(42, '');
+
+    expect(await store.persistCurrentDraftForRejectedSubmission(42, 'rejected reply')).toBe(false);
+    expect(mocks.saveReplyDraftIfUnchanged).not.toHaveBeenCalled();
+    expect(store.getDraft(42)).toBe('');
+  });
+
+  it('does not overwrite a draft changed in another tab after hydration', async () => {
+    mocks.getReplyDraft.mockResolvedValue(saved(7, 42, 'saved source'));
+    mocks.saveReplyDraftIfUnchanged.mockResolvedValueOnce(false);
+    const store = useReplyDraftStore();
+    store.setViewer(7);
+    await store.hydrateSavedDraft(42);
+    store.setDraft(42, 'current editor text');
+
+    expect(await store.persistCurrentDraftForRejectedSubmission(42, 'old failed body')).toBe(false);
+    expect(mocks.saveReplyDraftIfUnchanged).toHaveBeenCalledWith(expect.objectContaining({
+      content: 'current editor text',
+    }), 'saved source');
+    expect(store.getDraft(42)).toBe('current editor text');
   });
 
   it('does not overwrite text entered while draft hydration is pending', async () => {

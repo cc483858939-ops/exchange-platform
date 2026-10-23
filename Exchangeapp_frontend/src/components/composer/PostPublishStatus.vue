@@ -1,6 +1,6 @@
 <template>
   <aside
-    v-if="operation || successNotice || postPublishStore.recoveryError"
+    v-if="operation || successNotice || postPublishStore.recoveryError || abandonError"
     class="post-publish-status"
     role="status"
     aria-live="polite"
@@ -43,10 +43,12 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { usePostPublishStore } from '../../store/postPublish';
 import ConfirmDialog from '../dialogs/ConfirmDialog.vue';
 
 const postPublishStore = usePostPublishStore();
+const router = useRouter();
 const operation = computed(() => postPublishStore.latestOperation);
 const successNotice = computed(() => postPublishStore.currentSuccessNotice);
 const abandonConfirmationOpen = ref(false);
@@ -82,10 +84,32 @@ const requestAbandon = () => {
   abandonOperationID.value = operation.value.id;
   abandonError.value = '';
   if (operation.value.failureKind === 'validation_error') {
-    void confirmAbandon();
+    void recoverRejectedPostForEdit(operation.value.id);
     return;
   }
   abandonConfirmationOpen.value = true;
+};
+
+const recoverRejectedPostForEdit = async (operationID: string) => {
+  if (abandonBusy.value) return;
+  abandonBusy.value = true;
+  abandonError.value = '';
+  try {
+    const draftID = await postPublishStore.recoverRejectedPostForEdit(operationID);
+    if (!draftID) {
+      abandonError.value = 'Couldn’t safely restore this post for editing. The original attempt and its content are still preserved.';
+      return;
+    }
+    try {
+      await router.push({ name: 'PostCreate', query: { draft: draftID } });
+    } catch {
+      abandonError.value = 'The post is saved as a draft. Open Saved drafts to continue editing.';
+    }
+  } catch {
+    abandonError.value = 'Couldn’t safely restore this post for editing. The original attempt and its content are still preserved.';
+  } finally {
+    abandonBusy.value = false;
+  }
 };
 
 const cancelAbandon = () => {

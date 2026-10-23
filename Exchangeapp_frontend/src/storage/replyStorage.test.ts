@@ -51,6 +51,11 @@ class FakeTransaction {
         this.afterGet?.(stringKey, value);
         return value;
       }),
+      add: (value: { key: string }) => this.run(() => {
+        if (this.records.has(value.key)) throw new Error('ConstraintError');
+        this.records.set(value.key, value);
+        return value.key;
+      }),
       put: (value: { key: string }) => this.run(() => { this.records.set(value.key, value); return value.key; }),
       delete: (key: IDBValidKey) => this.run(() => { this.records.delete(String(key)); return undefined; }),
       index: (name: string) => ({
@@ -196,6 +201,18 @@ describe('replyStorage', () => {
     expect(indexedDBMock.database?.transactionModes).toContain('readwrite');
   });
 
+  it('conditionally saves a recovered reply without overwriting a newer draft', async () => {
+    const recovered = {
+      key: '7:42', viewerID: 7, parentPostID: 42,
+      content: 'recovered reply', createdAt: 1, updatedAt: 2,
+    };
+    await expect(storage.saveReplyDraftIfUnchanged(recovered, null)).resolves.toBe(true);
+    await expect(storage.saveReplyDraftIfUnchanged({ ...recovered, content: 'changed' }, null)).resolves.toBe(false);
+    await expect(storage.saveReplyDraftIfUnchanged({ ...recovered, content: 'changed' }, 'recovered reply')).resolves.toBe(true);
+    await expect(storage.getReplyDraft(7, 42)).resolves.toMatchObject({ content: 'changed' });
+    expect(indexedDBMock.database?.transactionModes).toContain('readwrite');
+  });
+
   it('rechecks session ownership after reading and before deleting a same-content draft', async () => {
     const original = {
       key: '7:42', viewerID: 7, parentPostID: 42,
@@ -238,6 +255,17 @@ describe('replyStorage', () => {
     expect(await storage.deleteReplySubmissionOperation(7, 42, 'op-a')).toBe(true);
     expect(await storage.getReplySubmissionOperation(7, 42)).toBeNull();
     expect(await storage.getReplySubmissionOperation(8, 42)).toMatchObject({ id: 'op-c' });
+  });
+
+  it('conditionally deletes only the same-session editable rejection', async () => {
+    const rejected = operation({ phase: 'failed', failureKind: 'validation_error' });
+    await storage.claimReplySubmissionOperation(rejected);
+
+    await expect(storage.deleteRejectedReplySubmissionOperation(7, 42, 'op-a', 'other-session'))
+      .resolves.toBe(false);
+    await expect(storage.deleteRejectedReplySubmissionOperation(7, 42, 'op-a', 'session-7'))
+      .resolves.toBe(true);
+    await expect(storage.getReplySubmissionOperation(7, 42)).resolves.toBeNull();
   });
 
   it('returns the validated durable owner without replacing an occupied reply slot', async () => {

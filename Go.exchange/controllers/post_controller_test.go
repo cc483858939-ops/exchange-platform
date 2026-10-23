@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -165,6 +166,70 @@ func TestCreatePostRejectsWhitespaceOnlyContent(t *testing.T) {
 	createPost(ctx)
 	if recorder.Code != http.StatusBadRequest || called {
 		t.Fatalf("status=%d called=%t body=%s", recorder.Code, called, recorder.Body.String())
+	}
+}
+
+func TestCreatePostReturnsRegisteredValidationErrorContracts(t *testing.T) {
+	tooManyCandidates := make([]string, 0, 51)
+	for index := 0; index < 51; index++ {
+		tooManyCandidates = append(tooManyCandidates, "@candidate"+strconv.Itoa(index))
+	}
+	tooLongReply, err := json.Marshal(createPostRequest{
+		Content:       strings.Repeat("界", maxReplyContentRunes+1),
+		ReplyToPostID: uintPointer(9),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name             string
+		body             []byte
+		wantCode         string
+		persistError     error
+		wantPersistCalls int
+	}{
+		{name: "content required", body: []byte(`{"content":"  "}`), wantCode: "CONTENT_IS_REQUIRED"},
+		{name: "reply content limit", body: tooLongReply, wantCode: "REPLY_CONTENT_EXCEEDS_1000_UNICODE_CODE_POINTS"},
+		{name: "invalid reply ID", body: []byte(`{"content":"reply","reply_to_post_id":0}`), wantCode: "INVALID_REPLY_TO_POST_ID"},
+		{name: "invalid quote ID", body: []byte(`{"content":"quote","quote_post_id":0}`), wantCode: "INVALID_QUOTE_POST_ID"},
+		{name: "reply and quote", body: []byte(`{"content":"both","reply_to_post_id":9,"quote_post_id":10}`), wantCode: "A_POST_CANNOT_BE_BOTH_A_REPLY_AND_A_QUOTE"},
+		{name: "too many mention candidates", body: []byte(`{"content":"` + strings.Join(tooManyCandidates, " ") + `"}`), wantCode: "TOO_MANY_MENTION_CANDIDATES"},
+		{name: "invalid media", body: []byte(`{"content":"media","media":[{"type":"video","url":"not-a-post-image"}]}`), wantCode: "INVALID_MEDIA"},
+		{name: "unavailable post reference", body: []byte(`{"content":"reply","reply_to_post_id":9}`), wantCode: "POST_REFERENCE_UNAVAILABLE", persistError: gorm.ErrRecordNotFound, wantPersistCalls: 1},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stubCreatePostAuthor(t)
+			originalPersist := persistPostGraphFn
+			persistCalls := 0
+			persistPostGraphFn = func(context.Context, *models.Post, uint, string, createPostRequest, []validatedPostMedia, time.Time) error {
+				persistCalls++
+				return test.persistError
+			}
+			t.Cleanup(func() { persistPostGraphFn = originalPersist })
+
+			recorder := executeCreatePostRequest(t, test.body)
+			var response struct {
+				Code string `json:"code"`
+			}
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+				t.Fatalf("decode error response: %v; body=%s", err, recorder.Body.String())
+			}
+			if recorder.Code != http.StatusBadRequest && test.wantCode != "POST_REFERENCE_UNAVAILABLE" {
+				t.Fatalf("status=%d body=%s want=%d", recorder.Code, recorder.Body.String(), http.StatusBadRequest)
+			}
+			if test.wantCode == "POST_REFERENCE_UNAVAILABLE" && recorder.Code != http.StatusNotFound {
+				t.Fatalf("status=%d body=%s want=%d", recorder.Code, recorder.Body.String(), http.StatusNotFound)
+			}
+			if response.Code != test.wantCode {
+				t.Fatalf("code=%q body=%s want=%q", response.Code, recorder.Body.String(), test.wantCode)
+			}
+			if persistCalls != test.wantPersistCalls {
+				t.Fatalf("persist calls=%d want=%d", persistCalls, test.wantPersistCalls)
+			}
+		})
 	}
 }
 

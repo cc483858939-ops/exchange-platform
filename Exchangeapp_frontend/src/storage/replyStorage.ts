@@ -158,6 +158,29 @@ export const saveReplyDraft = async (record: PersistedReplyDraft): Promise<void>
   });
 };
 
+export const saveReplyDraftIfUnchanged = async (
+  record: PersistedReplyDraft,
+  expectedContent: string | null,
+): Promise<boolean> => {
+  const normalized = validateDraft(record);
+  if (expectedContent !== null && typeof expectedContent !== 'string') return false;
+  return withStore(DRAFT_STORE, 'readwrite', async store => {
+    const currentValue = await requestResult(store.get(normalized.key));
+    if (currentValue === undefined) {
+      if (expectedContent !== null) return false;
+      await requestResult(store.add(normalized));
+      return true;
+    }
+    const current = validateDraft(currentValue);
+    if (
+      !validOwner(current, normalized.viewerID, normalized.parentPostID)
+      || current.content !== expectedContent
+    ) return false;
+    await requestResult(store.put(normalized));
+    return true;
+  });
+};
+
 export type ConditionalReplyDraftDelete = 'deleted' | 'missing' | 'changed';
 
 export const deleteReplyDraftIfUnchanged = async (
@@ -243,6 +266,30 @@ export const deleteReplySubmissionOperation = async (
     if (value === undefined) return false;
     const current = validateOperation(value);
     if (!validOwner(current, viewerID, parentPostID) || current.id !== operationID) return false;
+    await requestResult(store.delete(key));
+    return true;
+  });
+};
+
+export const deleteRejectedReplySubmissionOperation = async (
+  viewerID: number,
+  parentPostID: number,
+  operationID: string,
+  sessionID: string,
+): Promise<boolean> => {
+  if (!validID(viewerID) || !validID(parentPostID) || !operationID.trim() || !sessionID.trim()) return false;
+  return withStore(OPERATION_STORE, 'readwrite', async store => {
+    const key = replyStorageKey(viewerID, parentPostID);
+    const value = await requestResult(store.get(key));
+    if (value === undefined) return false;
+    const current = validateOperation(value);
+    if (
+      !validOwner(current, viewerID, parentPostID)
+      || current.id !== operationID
+      || current.viewerSessionID !== sessionID
+      || current.phase !== 'failed'
+      || current.failureKind !== 'validation_error'
+    ) return false;
     await requestResult(store.delete(key));
     return true;
   });

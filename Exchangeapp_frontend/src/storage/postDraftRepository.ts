@@ -18,6 +18,7 @@ export type PersistedPostDraftMedia = {
 export type PersistedPostDraft = {
   id: string;
   viewerID: number;
+  recoveryOperationID?: string;
   content: string;
   quotePostID: number | null;
   media: PersistedPostDraftMedia[];
@@ -48,6 +49,8 @@ const isPersistedPostDraft = (value: unknown): value is PersistedPostDraft => {
     && (draft.quotePostID === null || isValidQuotePostID(draft.quotePostID))
     && Number.isFinite(draft.createdAt)
     && Number.isFinite(draft.updatedAt)
+    && (draft.recoveryOperationID === undefined
+      || (typeof draft.recoveryOperationID === 'string' && draft.recoveryOperationID.trim().length > 0))
     && Array.isArray(draft.media)
     && draft.media.every(item => (
       Boolean(item)
@@ -173,6 +176,49 @@ export const savePostDraft = (draft: PersistedPostDraft): Promise<void> => {
     if (!belongsToViewer) {
       throw new Error('This post draft belongs to another viewer.');
     }
+  });
+};
+
+export type SaveRecoveredPostDraftResult = 'saved' | 'existing' | 'collision';
+
+export const saveRecoveredPostDraft = (
+  draft: PersistedPostDraft,
+  operationID: string,
+): Promise<SaveRecoveredPostDraftResult> => {
+  assertViewerID(draft.viewerID);
+  if (!operationID.trim() || draft.recoveryOperationID !== operationID || !isPersistedPostDraft(draft)) {
+    throw new TypeError('The recovered post draft record is invalid.');
+  }
+
+  return withDatabase(async database => {
+    const transaction = database.transaction(objectStoreName, 'readwrite');
+    const completed = transactionCompletion(transaction);
+    const store = transaction.objectStore(objectStoreName);
+    const result = await new Promise<SaveRecoveredPostDraftResult>((resolve, reject) => {
+      const request = store.get(draft.id);
+      request.onerror = () => reject(request.error || new Error('Could not check the recovered post draft.'));
+      request.onsuccess = () => {
+        const existing = request.result;
+        if (existing !== undefined) {
+          if (
+            isPersistedPostDraft(existing)
+            && existing.viewerID === draft.viewerID
+            && existing.recoveryOperationID === operationID
+          ) {
+            resolve('existing');
+            return;
+          }
+          resolve('collision');
+          return;
+        }
+
+        const add = store.add(draft);
+        add.onerror = () => reject(add.error || new Error('Could not save the recovered post draft.'));
+        add.onsuccess = () => resolve('saved');
+      };
+    });
+    await completed;
+    return result;
   });
 };
 

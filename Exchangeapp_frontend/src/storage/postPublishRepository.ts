@@ -336,6 +336,29 @@ export const deletePostPublishOperation = async (
   });
 };
 
+export const deleteRejectedPostPublishOperation = async (
+  viewerID: number,
+  operationID: string,
+  sessionID: string,
+): Promise<boolean> => {
+  if (!validViewerID(viewerID) || !operationID.trim() || !sessionID.trim()) return false;
+  return withStore('readwrite', async (store, transaction) => {
+    const value = await requestResult(store.get(viewerID));
+    if (value === undefined) return false;
+    const current = validateRecord(value);
+    if (
+      current.publisherUserID !== viewerID
+      || current.id !== operationID
+      || current.publisherSessionID !== sessionID
+      || current.phase !== 'failed'
+      || current.failureKind !== 'validation_error'
+    ) return false;
+    await requestResult(store.delete(viewerID));
+    await requestResult(transaction.objectStore(CHECKPOINT_STORE_NAME).delete(viewerID));
+    return true;
+  });
+};
+
 const copyPublishSourceDraft = (source: PublishSourceDraft): PublishSourceDraft => (
   source.sourceDraftID === null
     ? { sourceDraftID: null, sourceDraftSnapshot: null }

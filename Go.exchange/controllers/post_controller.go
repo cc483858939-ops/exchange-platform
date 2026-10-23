@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"Go.exchange/apierrors"
 	"Go.exchange/config"
 	"Go.exchange/eventing"
 	"Go.exchange/global"
@@ -203,7 +204,7 @@ func createPostWithRateLimiter(ctx *gin.Context, limiter ratelimit.Limiter, enab
 	err = persistPostGraphFn(ctx.Request.Context(), &post, userID, content, req, media, now)
 	if err != nil {
 		if errors.Is(err, errTooManyPostMentions) {
-			writeAPIError(ctx, "INVALID_REQUEST")
+			writeAPIError(ctx, string(apierrors.CodePostMentionLimitExceeded))
 			return
 		}
 		if hasClientPublishID && isClientPublishUniqueViolation(err) {

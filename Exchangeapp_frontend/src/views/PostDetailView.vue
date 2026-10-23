@@ -2092,7 +2092,7 @@ const releaseRejectedReplyAttempt = async () => {
   replyStatusBusy.value = true;
   replyStatusError.value = '';
   try {
-    if (!await replySubmissionStore.abandonFailedOperation(operation.id)) {
+    if (!await replySubmissionStore.recoverRejectedAttemptForEdit(operation.id)) {
       replyStatusError.value = 'Could not release this rejected reply on this device. Your draft is still safe.';
     }
   } finally {

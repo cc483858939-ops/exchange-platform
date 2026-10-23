@@ -151,6 +151,43 @@ func TestCreatePostIdempotencyReplayConflictScopeAndDeleteIntegration(t *testing
 	}
 }
 
+func TestCreatePostMentionLimitReturnsBusinessCodeAndRollsBackPostIntegration(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openPostEmbeddingOutboxIntegrationDatabase(t)
+	fixture := newPostEmbeddingOutboxFixture(t, db)
+
+	for index := 0; index < 6; index++ {
+		user := models.User{Username: "mention-limit-api-" + strconv.Itoa(index) + "-" + uuid.NewString(), Password: "test"}
+		if err := db.Create(&user).Error; err != nil {
+			t.Fatal(err)
+		}
+		fixture.users = append(fixture.users, user)
+	}
+
+	contentParts := []string{"six valid recipients"}
+	for _, user := range fixture.users[2:] {
+		contentParts = append(contentParts, "@"+user.Username)
+	}
+	content := strings.Join(contentParts, " ")
+	body, err := json.Marshal(createPostRequest{Content: content})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, recorder := newClientPublishIntegrationContext(string(body), fixture.users[0].ID, uuid.New())
+	createPost(ctx)
+
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `"code":"POST_MENTION_LIMIT_EXCEEDED"`) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var postCount int64
+	if err := db.Unscoped().Model(&models.Post{}).Where("author_id = ? AND content = ?", fixture.users[0].ID, content).Count(&postCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if postCount != 0 {
+		t.Fatalf("over-limit request created %d posts; want none", postCount)
+	}
+}
+
 func TestCreatePostMentionIdempotencyReplayDoesNotRefreshRecentOrOutboxIntegration(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openPostEmbeddingOutboxIntegrationDatabase(t)

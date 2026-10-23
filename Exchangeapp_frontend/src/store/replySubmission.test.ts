@@ -26,6 +26,12 @@ vi.mock('../storage/replyStorage', () => ({
   replyStorageKey: (viewerID: number, parentPostID: number) => `${viewerID}:${parentPostID}`,
   getReplyDraft: vi.fn(async (viewerID: number, parentPostID: number) => mocks.drafts.get(storageKey(viewerID, parentPostID)) ?? null),
   saveReplyDraft: vi.fn(async (record: any) => { mocks.drafts.set(record.key, record); }),
+  saveReplyDraftIfUnchanged: vi.fn(async (record: any, expectedContent: string | null) => {
+    const current = mocks.drafts.get(record.key);
+    if (current ? current.content !== expectedContent : expectedContent !== null) return false;
+    mocks.drafts.set(record.key, record);
+    return true;
+  }),
   deleteReplyDraftIfUnchanged: vi.fn(async (
     viewerID: number,
     parentPostID: number,
@@ -54,6 +60,19 @@ vi.mock('../storage/replyStorage', () => ({
     const key = storageKey(viewerID, parentPostID);
     const current = mocks.records.get(key);
     if (!current || current.id !== operationID) return false;
+    mocks.records.delete(key);
+    return true;
+  }),
+  deleteRejectedReplySubmissionOperation: vi.fn(async (
+    viewerID: number,
+    parentPostID: number,
+    operationID: string,
+    sessionID: string,
+  ) => {
+    const key = storageKey(viewerID, parentPostID);
+    const current = mocks.records.get(key);
+    if (!current || current.id !== operationID || current.viewerSessionID !== sessionID
+      || current.phase !== 'failed' || current.failureKind !== 'validation_error') return false;
     mocks.records.delete(key);
     return true;
   }),
@@ -346,12 +365,13 @@ describe('replySubmission store', () => {
     expect(mocks.createClientOperationID).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps a mention-limit validation failure non-retryable and releases it without losing the reply draft', async () => {
+  it('persists an edited reply before releasing its rejected operation and uses a new key', async () => {
     mocks.createClientOperationID.mockReturnValueOnce('validation-attempt').mockReturnValueOnce('corrected-attempt');
     mocks.createPostReply.mockRejectedValueOnce({
       response: { status: 400, data: { code: 'POST_MENTION_LIMIT_EXCEEDED', error: 'TEST_A2_INTERNAL_ERROR' } },
     });
     drafts().setViewer(7);
+    await drafts().hydrateSavedDraft(42);
     drafts().setDraft(42, '@alice @bob @carol @dana @erin @frank');
     const first = await store().startOrRetry(42, drafts().getDraft(42));
     expect(first.status).toBe('accepted');
@@ -373,8 +393,10 @@ describe('replySubmission store', () => {
     expect(drafts().getDraft(42)).toBe('@alice @bob @carol @dana @erin @frank');
 
     drafts().setDraft(42, '@alice @bob corrected');
-    expect(await store().abandonFailedOperation(operation.id)).toBe(true);
+    expect(await store().recoverRejectedAttemptForEdit(operation.id)).toBe(true);
     expect(drafts().getDraft(42)).toBe('@alice @bob corrected');
+    expect(mocks.drafts.get('7:42')).toMatchObject({ content: '@alice @bob corrected' });
+    expect(mocks.records.has('7:42')).toBe(false);
     expect(drafts().getBoundOperationID(42)).toBeNull();
     const corrected = await store().startOrRetry(42, drafts().getDraft(42));
     expect(corrected.status).toBe('accepted');
@@ -408,6 +430,59 @@ describe('replySubmission store', () => {
       status: 'blocked',
       reason: 'unresolved_reply',
     });
+  });
+
+  it('keeps the rejected reply operation when its draft cannot be persisted', async () => {
+    const content = 'keep this reply';
+    mocks.records.set('7:42', record({
+      id: 'rejected-write', content, phase: 'failed', failureKind: 'validation_error',
+    }));
+    drafts().setViewer(7);
+    await drafts().hydrateSavedDraft(42);
+    drafts().setDraft(42, content);
+    await store().activateViewer(7);
+    const storageModule = await import('../storage/replyStorage');
+    vi.mocked(storageModule.saveReplyDraftIfUnchanged).mockResolvedValueOnce(false);
+
+    expect(await store().recoverRejectedAttemptForEdit('rejected-write')).toBe(false);
+    expect(mocks.records.get('7:42')).toMatchObject({ id: 'rejected-write', phase: 'failed' });
+    expect(vi.mocked(storageModule.deleteRejectedReplySubmissionOperation)).not.toHaveBeenCalled();
+    expect(drafts().getDraft(42)).toBe(content);
+  });
+
+  it('does not overwrite a reply draft for another post during rejected recovery', async () => {
+    const content = 'reply for post 42';
+    mocks.records.set('7:42', record({
+      id: 'rejected-42', content, phase: 'failed', failureKind: 'validation_error',
+    }));
+    drafts().setViewer(7);
+    await drafts().hydrateSavedDraft(42);
+    await drafts().hydrateSavedDraft(99);
+    drafts().setDraft(42, content);
+    drafts().setDraft(99, 'another post draft');
+    await drafts().saveDraft(99);
+    await store().activateViewer(7);
+
+    expect(await store().recoverRejectedAttemptForEdit('rejected-42')).toBe(true);
+    expect(mocks.drafts.get('7:42')?.content).toBe(content);
+    expect(mocks.drafts.get('7:99')?.content).toBe('another post draft');
+  });
+
+  it('does not recover a rejected reply across authentication sessions', async () => {
+    const content = 'session-bound reply';
+    mocks.records.set('7:42', record({
+      id: 'rejected-old-session', content, phase: 'failed', failureKind: 'validation_error',
+    }));
+    drafts().setViewer(7);
+    await drafts().hydrateSavedDraft(42);
+    drafts().setDraft(42, content);
+    await store().activateViewer(7);
+    mocks.authStore.sessionID = 'session-7-new';
+    const storageModule = await import('../storage/replyStorage');
+
+    expect(await store().recoverRejectedAttemptForEdit('rejected-old-session')).toBe(false);
+    expect(vi.mocked(storageModule.saveReplyDraftIfUnchanged)).not.toHaveBeenCalled();
+    expect(mocks.records.get('7:42')).toMatchObject({ id: 'rejected-old-session' });
   });
 
   it('durably transitions a retry before calling HTTP', async () => {

@@ -30,10 +30,12 @@ const mocks = vi.hoisted(() => ({
   getPostDraft: vi.fn(),
   listPostDrafts: vi.fn(),
   savePostDraft: vi.fn(),
+  saveRecoveredPostDraft: vi.fn(),
   getPostPublishOperation: vi.fn(),
   claimPostPublishOperation: vi.fn(),
   updatePostPublishOperationCheckpoint: vi.fn(),
   deletePostPublishOperation: vi.fn(),
+  deleteRejectedPostPublishOperation: vi.fn(),
   serializePublishOperation: vi.fn(),
   restorePublishOperation: vi.fn(),
   publishRecords: new Map<number, any>(),
@@ -75,6 +77,7 @@ vi.mock('../storage/postDraftRepository', () => ({
   getPostDraft: mocks.getPostDraft,
   listPostDrafts: mocks.listPostDrafts,
   savePostDraft: mocks.savePostDraft,
+  saveRecoveredPostDraft: mocks.saveRecoveredPostDraft,
 }));
 
 vi.mock('../storage/postPublishRepository', () => ({
@@ -82,6 +85,7 @@ vi.mock('../storage/postPublishRepository', () => ({
   claimPostPublishOperation: mocks.claimPostPublishOperation,
   updatePostPublishOperationCheckpoint: mocks.updatePostPublishOperationCheckpoint,
   deletePostPublishOperation: mocks.deletePostPublishOperation,
+  deleteRejectedPostPublishOperation: mocks.deleteRejectedPostPublishOperation,
   serializePublishOperation: mocks.serializePublishOperation,
   serializePublishOperationCheckpoint: (operation: any) => {
     const record = mocks.serializePublishOperation(operation);
@@ -356,6 +360,17 @@ describe('postPublish store', () => {
     mocks.savePostDraft.mockImplementation(async (record: any) => {
       mocks.sourceDraftRecords.set(record.id, record);
     });
+    mocks.saveRecoveredPostDraft.mockImplementation(async (record: any, operationID: string) => {
+      const existing = mocks.sourceDraftRecords.get(record.id);
+      if (!existing) {
+        mocks.sourceDraftRecords.set(record.id, record);
+        return 'saved';
+      }
+      if (existing.viewerID === record.viewerID && existing.recoveryOperationID === operationID) {
+        return 'existing';
+      }
+      return 'collision';
+    });
     mocks.publishRecords.clear();
     mocks.getPostPublishOperation.mockImplementation(async (viewerID: number) => (
       clonePublishRecord(mocks.publishRecords.get(viewerID) || null)
@@ -380,6 +395,17 @@ describe('postPublish store', () => {
     mocks.deletePostPublishOperation.mockImplementation(async (viewerID: number, operationID: string) => {
       const current = mocks.publishRecords.get(viewerID);
       if (!current || current.id !== operationID) return false;
+      mocks.publishRecords.delete(viewerID);
+      return true;
+    });
+    mocks.deleteRejectedPostPublishOperation.mockImplementation(async (
+      viewerID: number,
+      operationID: string,
+      sessionID: string,
+    ) => {
+      const current = mocks.publishRecords.get(viewerID);
+      if (!current || current.id !== operationID || current.publisherSessionID !== sessionID
+        || current.phase !== 'failed' || current.failureKind !== 'validation_error') return false;
       mocks.publishRecords.delete(viewerID);
       return true;
     });
@@ -2230,7 +2256,7 @@ describe('postPublish store', () => {
     expect(mocks.createPost).toHaveBeenCalledTimes(1);
   });
 
-  it('persists the exact mention-limit validation failure without retrying and preserves the draft for safe recovery', async () => {
+  it('persists a rejected post before editing it and creates a new operation after correction', async () => {
     mocks.createPost.mockRejectedValueOnce({
       response: { status: 400, data: { code: 'POST_MENTION_LIMIT_EXCEEDED', error: 'TEST_A2_INTERNAL_ERROR' } },
     });
@@ -2259,8 +2285,13 @@ describe('postPublish store', () => {
     expect(mocks.createPost).toHaveBeenCalledTimes(1);
     expect(draft.content).toBe('@alice @bob @carol @dana @erin @frank');
 
+    const recoveredDraftID = await store.recoverRejectedPostForEdit(result.operation.id);
+    expect(recoveredDraftID).toBe(`rejected-post-${result.operation.id}`);
+    expect(mocks.sourceDraftRecords.get(recoveredDraftID!) ?? null).toMatchObject({
+      recoveryOperationID: result.operation.id,
+      content: '@alice @bob @carol @dana @erin @frank',
+    });
     draft.setContent('@alice @bob corrected');
-    expect(await store.abandonFailedOperation(result.operation.id)).toBe(true);
     expect(draft.content).toBe('@alice @bob corrected');
     expect(draft.publishOperationID).toBeNull();
     const corrected = await store.startOrRetryDraft();
@@ -2269,6 +2300,66 @@ describe('postPublish store', () => {
     expect(corrected.operation.id).not.toBe(result.operation.id);
     await flushPromises();
     expect(mocks.createPost).toHaveBeenCalledTimes(2);
+  });
+
+  it('restores quote and original media once before conditional deletion after refresh', async () => {
+    const mediaFile = file('original.png');
+    const operation = persistedFailedOperation({
+      content: 'post with image and quote',
+      quotePostID: 42,
+      media: [{ draftMediaID: 'media-1', file: mediaFile, uploadedURL: '/uploaded/original.png' }],
+      failureKind: 'validation_error',
+    });
+    mocks.publishRecords.set(7, operation);
+    usePostDraftStore().setViewer(7);
+    const store = usePostPublishStore();
+    await store.activateViewer(7);
+    const recoveredID = `rejected-post-${operation.id}`;
+    mocks.deleteRejectedPostPublishOperation.mockResolvedValueOnce(false);
+
+    await expect(store.recoverRejectedPostForEdit(operation.id)).resolves.toBeNull();
+    expect(mocks.publishRecords.get(7)).toMatchObject({ id: operation.id, phase: 'failed' });
+    expect(mocks.sourceDraftRecords.get(recoveredID)).toMatchObject({
+      recoveryOperationID: operation.id,
+      content: 'post with image and quote',
+      quotePostID: 42,
+      media: [{ id: 'media-1', name: 'original.png', uploadedURL: '/uploaded/original.png' }],
+    });
+
+    mocks.sourceDraftRecords.set(recoveredID, {
+      ...mocks.sourceDraftRecords.get(recoveredID),
+      content: 'newer recovered draft edit',
+      updatedAt: Date.now() + 1,
+    });
+    await expect(store.recoverRejectedPostForEdit(operation.id)).resolves.toBe(recoveredID);
+    expect(mocks.publishRecords.has(7)).toBe(false);
+    expect(mocks.sourceDraftRecords.get(recoveredID)).toMatchObject({
+      content: 'newer recovered draft edit',
+      quotePostID: 42,
+      media: [{ id: 'media-1', name: 'original.png' }],
+    });
+    expect(mocks.sourceDraftRecords.size).toBe(1);
+  });
+
+  it('keeps the authoritative operation when recovered-draft persistence fails or another draft is open', async () => {
+    const operation = persistedFailedOperation({ failureKind: 'validation_error' });
+    mocks.publishRecords.set(7, operation);
+    const draft = usePostDraftStore();
+    draft.setViewer(7);
+    draft.setContent('another unsaved draft');
+    const store = usePostPublishStore();
+    await store.activateViewer(7);
+
+    await expect(store.recoverRejectedPostForEdit(operation.id)).resolves.toBeNull();
+    expect(mocks.saveRecoveredPostDraft).not.toHaveBeenCalled();
+    expect(mocks.publishRecords.get(7)?.id).toBe(operation.id);
+    expect(draft.content).toBe('another unsaved draft');
+
+    draft.clear();
+    mocks.saveRecoveredPostDraft.mockRejectedValueOnce(new Error('IndexedDB unavailable'));
+    await expect(store.recoverRejectedPostForEdit(operation.id)).resolves.toBeNull();
+    expect(mocks.publishRecords.get(7)?.id).toBe(operation.id);
+    expect(mocks.deleteRejectedPostPublishOperation).not.toHaveBeenCalled();
   });
 
   it('restores a persisted mention validation failure without replaying it', async () => {

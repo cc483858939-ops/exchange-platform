@@ -3,6 +3,7 @@ package apierrors
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -82,6 +83,44 @@ func TestWritePublicErrorUnknownCodeFallsBackToInternal(t *testing.T) {
 	engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/unknown", nil))
 	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), `"code":"INTERNAL_ERROR"`) {
 		t.Fatalf("unknown public code was not safely rejected: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestWritePublicErrorRegistersPostValidationCodes(t *testing.T) {
+	previousMode := gin.Mode()
+	gin.SetMode(gin.TestMode)
+	t.Cleanup(func() { gin.SetMode(previousMode) })
+
+	tests := []struct {
+		code       Code
+		wantStatus int
+	}{
+		{Code("CONTENT_IS_REQUIRED"), http.StatusBadRequest},
+		{Code("REPLY_CONTENT_EXCEEDS_1000_UNICODE_CODE_POINTS"), http.StatusBadRequest},
+		{Code("INVALID_REPLY_TO_POST_ID"), http.StatusBadRequest},
+		{Code("INVALID_QUOTE_POST_ID"), http.StatusBadRequest},
+		{Code("A_POST_CANNOT_BE_BOTH_A_REPLY_AND_A_QUOTE"), http.StatusBadRequest},
+		{Code("TOO_MANY_MENTION_CANDIDATES"), http.StatusBadRequest},
+		{Code("INVALID_MENTION_TEXT"), http.StatusBadRequest},
+		{Code("INVALID_MEDIA"), http.StatusBadRequest},
+		{CodePostMentionLimitExceeded, http.StatusBadRequest},
+		{CodePostReferenceUnavailable, http.StatusNotFound},
+	}
+
+	for _, test := range tests {
+		t.Run(string(test.code), func(t *testing.T) {
+			engine := gin.New()
+			engine.POST("/api/posts", func(ctx *gin.Context) { WritePublicError(ctx, test.code) })
+			response := httptest.NewRecorder()
+			engine.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/posts", nil))
+			var body ErrorResponse
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode public error: %v; body=%s", err, response.Body.String())
+			}
+			if response.Code != test.wantStatus || body.Code != test.code || body.Error == "" {
+				t.Fatalf("status=%d body=%+v want status=%d code=%s", response.Code, body, test.wantStatus, test.code)
+			}
+		})
 	}
 }
 

@@ -5,6 +5,7 @@ import type { Post } from '../types/Post';
 import { createClientOperationID } from '../utils/clientOperationId';
 import {
   claimReplySubmissionOperation,
+  deleteRejectedReplySubmissionOperation,
   deleteReplyDraftIfUnchanged,
   deleteReplySubmissionOperation,
   getReplyDraft,
@@ -26,8 +27,7 @@ import {
   canAbandonDurableSubmission,
   canMarkDurableSubmissionFailed,
   canRetryDurableSubmission,
-  isPostIdempotencyConflictError,
-  isPostMentionLimitValidationError,
+  classifySubmissionFailure,
 } from '../utils/durableSubmissionContract';
 
 export type ReplySubmissionOperation = {
@@ -60,6 +60,11 @@ export type StartReplySubmissionResult =
 
 const normalizeViewerID = (value: unknown): number | null => (
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null
+);
+
+const replyAuthContextChanged = classifySubmissionFailure(
+  Object.assign(new Error('Authentication session changed'), { name: 'AuthSessionChangedError' }),
+  'reply',
 );
 
 const restoreOperation = (record: PersistedReplySubmissionOperation): ReplySubmissionOperation => ({
@@ -126,6 +131,7 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
   const hydratedViewers = new Set<number>();
   const runningOperationIDs = new Set<string>();
   const abandoningOperationIDs = new Set<string>();
+  const recoveringOperationIDs = new Set<string>();
   const reconciledOperationIDs = new Set<string>();
   const completedSucceededOperationIDs = new Set<string>();
   const finalizationTasks = new Map<string, Promise<boolean>>();
@@ -296,17 +302,11 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
         operation.phase = 'failed';
         const authContextChanged = (error instanceof Error && error.name === 'AuthSessionChangedError')
           || !operationMatchesCurrentSession(operation);
-        const mentionLimit = isPostMentionLimitValidationError(error);
-        operation.failureKind = authContextChanged
-          ? 'auth_context_changed'
-          : isPostIdempotencyConflictError(error)
-            ? 'idempotency_conflict'
-            : mentionLimit ? 'validation_error' : 'retryable';
-        operation.error = operation.failureKind === 'idempotency_conflict'
-          ? 'This reply can’t be retried safely.'
-          : operation.failureKind === 'validation_error'
-            ? 'A post can mention at most 5 different valid users. Edit the reply before trying again.'
-          : 'Reply failed. Retry safely.';
+        const classification = authContextChanged
+          ? replyAuthContextChanged
+          : classifySubmissionFailure(error, 'reply');
+        operation.failureKind = classification.failureKind;
+        operation.error = classification.message;
         operation.cleanupPending = false;
       }
       upsertOperation(operation);
@@ -392,8 +392,8 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
     if (!canRetryDurableSubmission(operation.phase, operation.failureKind)) return false;
     if (!operationMatchesCurrentSession(operation)) {
       operation.phase = 'failed';
-      operation.failureKind = 'auth_context_changed';
-      operation.error = 'Reply failed. Retry safely.';
+      operation.failureKind = replyAuthContextChanged.failureKind;
+      operation.error = replyAuthContextChanged.message;
       try { await updateReplySubmissionOperation(persistOperation(operation)); } catch { /* retain fail-closed state */ }
       upsertOperation(operation);
       return false;
@@ -446,8 +446,8 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
     let existing = getOwnedOperation(viewerID, parentPostID);
     if (existing && existing.phase !== 'succeeded' && !operationMatchesCurrentSession(existing)) {
       existing.phase = 'failed';
-      existing.failureKind = 'auth_context_changed';
-      existing.error = 'Reply failed. Retry safely.';
+      existing.failureKind = replyAuthContextChanged.failureKind;
+      existing.error = replyAuthContextChanged.message;
       try { await updateReplySubmissionOperation(persistOperation(existing)); } catch { /* retain fail-closed state */ }
       upsertOperation(existing);
       return { status: 'blocked', reason: 'unresolved_reply' };
@@ -538,8 +538,8 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
       if (existing.phase === 'succeeded') completedSucceededOperationIDs.add(existing.id);
       if (existing.phase !== 'succeeded' && !operationMatchesCurrentSession(existing)) {
         existing.phase = 'failed';
-        existing.failureKind = 'auth_context_changed';
-        existing.error = 'Reply failed. Retry safely.';
+        existing.failureKind = replyAuthContextChanged.failureKind;
+        existing.error = replyAuthContextChanged.message;
         try { await updateReplySubmissionOperation(persistOperation(existing)); } catch { /* retain fail-closed state */ }
       }
       upsertOperation(existing);
@@ -560,8 +560,8 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
 
     if (!authStore.matchesRequestAuthBinding(authBinding)) {
       operation.phase = 'failed';
-      operation.failureKind = 'auth_context_changed';
-      operation.error = 'Reply failed. Retry safely.';
+      operation.failureKind = replyAuthContextChanged.failureKind;
+      operation.error = replyAuthContextChanged.message;
       try { await updateReplySubmissionOperation(persistOperation(operation)); } catch { /* preserve draft if storage is unavailable */ }
       upsertOperation(operation);
       return { status: 'rejected', reason: 'unauthenticated' };
@@ -583,8 +583,8 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
     ) return false;
     if (!operationMatchesCurrentSession(operation)) {
       operation.phase = 'failed';
-      operation.failureKind = 'auth_context_changed';
-      operation.error = 'Reply failed. Retry safely.';
+      operation.failureKind = replyAuthContextChanged.failureKind;
+      operation.error = replyAuthContextChanged.message;
       try { await updateReplySubmissionOperation(persistOperation(operation)); } catch { /* keep fail-closed in memory */ }
       upsertOperation(operation);
       return false;
@@ -596,13 +596,98 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
       || !operation.durableOwned) return false;
     if (!operationMatchesCurrentSession(operation)) {
       operation.phase = 'failed';
-      operation.failureKind = 'auth_context_changed';
-      operation.error = 'Reply failed. Retry safely.';
+      operation.failureKind = replyAuthContextChanged.failureKind;
+      operation.error = replyAuthContextChanged.message;
       try { await updateReplySubmissionOperation(persistOperation(operation)); } catch { /* keep fail-closed in memory */ }
       upsertOperation(operation);
       return false;
     }
     return transitionToPublishing(operation);
+  };
+
+  const recoverRejectedAttemptForEdit = async (operationID: string): Promise<boolean> => {
+    const operation = operations.value.find(item => item.id === operationID);
+    if (
+      !operation
+      || operation.phase !== 'failed'
+      || operation.failureKind !== 'validation_error'
+      || operation.viewerID !== currentViewerID.value
+      || !operation.durableOwned
+      || !operationMatchesCurrentSession(operation)
+      || runningOperationIDs.has(operation.id)
+      || abandoningOperationIDs.has(operation.id)
+      || recoveringOperationIDs.has(operation.id)
+    ) return false;
+
+    if (
+      await replyDraftStore.awaitPendingSave(operation.parentPostID) === 'failed'
+      || operation.phase !== 'failed'
+      || operation.failureKind !== 'validation_error'
+      || operation.viewerID !== currentViewerID.value
+      || !operation.durableOwned
+      || !operationMatchesCurrentSession(operation)
+      || runningOperationIDs.has(operation.id)
+      || abandoningOperationIDs.has(operation.id)
+      || recoveringOperationIDs.has(operation.id)
+    ) return false;
+    recoveringOperationIDs.add(operation.id);
+    try {
+      const stored = await getReplySubmissionOperation(operation.viewerID, operation.parentPostID);
+      if (
+        !stored
+        || stored.id !== operation.id
+        || stored.viewerSessionID !== operation.viewerSessionID
+        || stored.phase !== 'failed'
+        || stored.failureKind !== 'validation_error'
+        || stored.content !== operation.content
+        || stored.sourceDraftContent !== operation.sourceDraftContent
+        || !mayMutateCurrentReplySession(operation)
+        || runningOperationIDs.has(operation.id)
+        || abandoningOperationIDs.has(operation.id)
+      ) return false;
+
+      const latest = restoreOperation(stored);
+      upsertOperation(latest);
+      if (!await replyDraftStore.persistCurrentDraftForRejectedSubmission(latest.parentPostID, latest.content)) {
+        return false;
+      }
+
+      if (
+        !mayMutateCurrentReplySession(latest)
+        || runningOperationIDs.has(latest.id)
+        || abandoningOperationIDs.has(latest.id)
+        || !recoveringOperationIDs.has(latest.id)
+      ) return false;
+      const verified = await getReplySubmissionOperation(latest.viewerID, latest.parentPostID);
+      if (
+        !verified
+        || verified.id !== latest.id
+        || verified.viewerSessionID !== latest.viewerSessionID
+        || verified.phase !== 'failed'
+        || verified.failureKind !== 'validation_error'
+        || verified.content !== latest.content
+        || verified.sourceDraftContent !== latest.sourceDraftContent
+      ) return false;
+
+      const deleted = await deleteRejectedReplySubmissionOperation(
+        latest.viewerID,
+        latest.parentPostID,
+        latest.id,
+        latest.viewerSessionID,
+      );
+      if (!deleted) return false;
+
+      latest.durableOwned = false;
+      if (mayMutateCurrentReplySession(latest)) {
+        replyDraftStore.clearSubmissionBinding(latest.parentPostID, latest.id);
+      }
+      upsertOperation(latest);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      recoveringOperationIDs.delete(operation.id);
+    }
   };
 
   const abandonFailedOperation = async (operationID: string): Promise<boolean> => {
@@ -614,13 +699,15 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
       || !operation.durableOwned
       || runningOperationIDs.has(operation.id)
       || abandoningOperationIDs.has(operation.id)
+      || recoveringOperationIDs.has(operation.id)
     ) return false;
     if (await replyDraftStore.awaitPendingSave(operation.parentPostID) === 'failed'
       || currentViewerID.value !== operation.viewerID
       || !canAbandonDurableSubmission(operation.phase, operation.failureKind)
       || !operation.durableOwned
       || runningOperationIDs.has(operation.id)
-      || abandoningOperationIDs.has(operation.id)) return false;
+      || abandoningOperationIDs.has(operation.id)
+      || recoveringOperationIDs.has(operation.id)) return false;
     abandoningOperationIDs.add(operation.id);
     let deleted = false;
     try {
@@ -676,6 +763,7 @@ export const useReplySubmissionStore = defineStore('replySubmission', () => {
     startOrRetry,
     retry,
     retryCleanup,
+    recoverRejectedAttemptForEdit,
     abandonFailedOperation,
     adoptHydratedOperation,
     acknowledgeSucceededOperation,

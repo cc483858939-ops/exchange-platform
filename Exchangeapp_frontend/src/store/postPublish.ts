@@ -10,6 +10,7 @@ import type { Post } from '../types/Post';
 import {
   claimPostPublishOperation,
   deletePostPublishOperation,
+  deleteRejectedPostPublishOperation,
   getPostPublishOperation,
   restorePublishOperation,
   serializePublishOperation,
@@ -21,6 +22,10 @@ import {
   type PublishOperationValue,
   type PublishSourceDraft,
 } from '../storage/postPublishRepository';
+import {
+  saveRecoveredPostDraft,
+  type PersistedPostDraft,
+} from '../storage/postDraftRepository';
 import { useAuthStore } from './auth';
 import {
   matchesDurableAuthOwner,
@@ -35,11 +40,11 @@ import {
   canAbandonDurableSubmission,
   canMarkDurableSubmissionFailed,
   canRetryDurableSubmission,
-  isPostIdempotencyConflictError,
-  isPostMentionLimitValidationError,
+  classifySubmissionFailure,
 } from '../utils/durableSubmissionContract';
 import {
   createPostDraftSnapshot,
+  postDraftSnapshotsEqual,
 } from '../utils/postDraftSnapshot';
 import {
   captureBookmarkStateSyncVersion,
@@ -85,12 +90,9 @@ export type StartPublishResult =
 
 const mediaUploadConcurrency = 2;
 const publishSuccessNoticeDurationMs = 4000;
-const publishFailureMessage = 'Couldn’t confirm this post. Retry safely.';
 const publishPersistenceMessage = 'Couldn’t save publish progress on this device. Retry.';
 const publishRecoveryUnavailableMessage = 'Couldn’t restore the pending post from this device. Publishing is paused to prevent duplicate submissions.';
 const publishCoordinationUnavailableMessage = 'This browser cannot safely coordinate publishing across tabs. Publishing is paused; use a browser that supports cross-tab locks and try again.';
-const publishConflictMessage = 'This post can’t be retried safely.';
-const publishMentionLimitMessage = 'A post can mention at most 5 different valid users. Edit the draft before trying again.';
 
 class SupersededPublishOperationError extends Error {}
 class PublishPersistenceError extends Error {}
@@ -127,6 +129,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
   const unresolvedOperationByViewer = ref(new Map<number, string>());
   const runningOperationIDs = new Set<string>();
   const abandoningOperationIDs = new Set<string>();
+  const recoveringOperationIDs = new Set<string>();
   const startingViewerIDs = new Set<number>();
   let successNoticeTimer: ReturnType<typeof setTimeout> | null = null;
   const hydrationPromises = new Map<number, Promise<void>>();
@@ -389,6 +392,15 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     });
   };
 
+  const hasConflictingWorkingDraft = (operation: PublishOperation) => {
+    if (postDraft.viewerID !== operation.publisherUserID) return false;
+    const hasWorkingDraft = postDraft.draftID !== null
+      || postDraft.hasContent
+      || postDraft.quotePostID !== null
+      || postDraft.publishOperationID !== null;
+    return hasWorkingDraft && !draftMatchesOperation(operation);
+  };
+
   const getDraftPublishBlockReason = (
     viewerID: number,
     boundOperationID: string | null | undefined = null,
@@ -470,7 +482,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     post: Post,
   ): Promise<SuccessCleanupResult> => {
     if (post.author.id !== operation.publisherUserID) {
-      await markFailed(operation, new PublishAuthContextChangedError(), 'auth_context_changed');
+      await markFailed(operation, new PublishAuthContextChangedError());
       return 'pending';
     }
     if (operation.quotePostID !== null) {
@@ -561,18 +573,14 @@ export const usePostPublishStore = defineStore('postPublish', () => {
   const markFailed = async (
     operation: PublishOperation,
     error: unknown,
-    failureKind: Exclude<PublishFailureKind, null> = 'retryable',
+    classification = classifySubmissionFailure(error, 'post'),
   ) => {
     if (!canMarkDurableSubmissionFailed(operation.phase)) return;
     operation.phase = 'failed';
-    operation.failureKind = failureKind;
-    operation.error = failureKind === 'idempotency_conflict'
-      ? publishConflictMessage
-      : failureKind === 'validation_error'
-        ? publishMentionLimitMessage
-      : error instanceof PublishPersistenceError
-        ? publishPersistenceMessage
-        : publishFailureMessage;
+    operation.failureKind = classification.failureKind;
+    operation.error = error instanceof PublishPersistenceError
+      ? publishPersistenceMessage
+      : classification.message;
     await persistBestEffort(operation);
   };
 
@@ -626,7 +634,6 @@ export const usePostPublishStore = defineStore('postPublish', () => {
   };
 
   const executeOperationUnderLock = async (operation: PublishOperation) => {
-    let posting = false;
     try {
       if (operation.phase !== 'uploading' && operation.phase !== 'publishing') return;
       if (!operationMatchesCurrentSession(operation)) {
@@ -653,7 +660,6 @@ export const usePostPublishStore = defineStore('postPublish', () => {
         })),
       };
       const authBinding = captureOperationAuthBinding(operation);
-      posting = true;
       const post = await createPost(payload, { idempotencyKey: operation.id, authBinding });
       if (post.author.id !== operation.publisherUserID) {
         throw new PublishAuthContextChangedError();
@@ -668,19 +674,16 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       await finalizeSuccessfulOperationUnderLock(operation, post);
     } catch (error) {
       if (error instanceof SupersededPublishOperationError) return;
-      const conflict = posting && isPostIdempotencyConflictError(error);
-      const mentionLimit = posting && isPostMentionLimitValidationError(error);
       const authContextChanged = error instanceof PublishAuthContextChangedError
         || (error instanceof Error && error.name === 'AuthSessionChangedError')
         || !operationMatchesCurrentSession(operation);
       await markFailed(
         operation,
         error,
-        authContextChanged
-          ? 'auth_context_changed'
-          : conflict
-            ? 'idempotency_conflict'
-            : mentionLimit ? 'validation_error' : 'retryable',
+        classifySubmissionFailure(
+          authContextChanged ? new PublishAuthContextChangedError() : error,
+          'post',
+        ),
       );
     }
   };
@@ -711,7 +714,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
 
       if (latest.phase === 'uploading' || latest.phase === 'publishing') {
         if (!operationMatchesCurrentSession(latest)) {
-          await markFailed(latest, new PublishAuthContextChangedError(), 'auth_context_changed');
+          await markFailed(latest, new PublishAuthContextChangedError());
           return;
         }
         await executeOperationUnderLock(latest);
@@ -721,7 +724,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
         canAbandonDurableSubmission(latest.phase, latest.failureKind)
         && !operationMatchesCurrentSession(latest)
       ) {
-        await markFailed(latest, new PublishAuthContextChangedError(), 'auth_context_changed');
+        await markFailed(latest, new PublishAuthContextChangedError());
       }
     });
 
@@ -834,7 +837,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       return false;
     }
     if (!operationMatchesCurrentSession(operation)) {
-      await markFailed(operation, new PublishAuthContextChangedError(), 'auth_context_changed');
+      await markFailed(operation, new PublishAuthContextChangedError());
       return false;
     }
     const conflictingInFlight = operations.value.find(candidate => (
@@ -970,7 +973,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
 
     if (isInFlight(operation)) {
       if (!operationMatchesCurrentSession(operation)) {
-        await markFailed(operation, new PublishAuthContextChangedError(), 'auth_context_changed');
+        await markFailed(operation, new PublishAuthContextChangedError());
         return { result: { status: 'blocked', reason: 'unresolved_publish' } };
       }
       const sameBoundSubmission = postDraft.publishOperationID === operation.id
@@ -984,7 +987,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
 
     if (operation.phase === 'failed') {
       if (!operationMatchesCurrentSession(operation)) {
-        await markFailed(operation, new PublishAuthContextChangedError(), 'auth_context_changed');
+        await markFailed(operation, new PublishAuthContextChangedError());
         return { result: { status: 'blocked', reason: 'unresolved_publish' } };
       }
       const sameSubmission = draftMatchesOperation(operation);
@@ -1127,7 +1130,6 @@ export const usePostPublishStore = defineStore('postPublish', () => {
             await markFailed(
               claimed,
               new PublishAuthContextChangedError(),
-              'auth_context_changed',
             );
             return { result: { status: 'rejected', reason: 'unauthenticated' } };
           }
@@ -1150,6 +1152,122 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     }
   };
 
+  const recoverRejectedPostForEdit = async (operationID: string): Promise<string | null> => {
+    const operation = getOperation(operationID);
+    if (
+      !operation
+      || operation.phase !== 'failed'
+      || operation.failureKind !== 'validation_error'
+      || currentViewerID() !== operation.publisherUserID
+      || !operationMatchesCurrentSession(operation)
+      || runningOperationIDs.has(operation.id)
+      || abandoningOperationIDs.has(operation.id)
+      || recoveringOperationIDs.has(operation.id)
+      || unresolvedOperationByViewer.value.get(operation.publisherUserID) !== operation.id
+      || hasConflictingWorkingDraft(operation)
+    ) return null;
+
+    recoveringOperationIDs.add(operation.id);
+    try {
+      return await withPostPublishExecutionLock(operation.publisherUserID, async () => {
+        const latest = await readLatestOperationUnderLock(operation.publisherUserID, operation.id);
+        if (
+          !latest
+          || latest.id !== operation.id
+          || latest.phase !== 'failed'
+          || latest.failureKind !== 'validation_error'
+          || currentViewerID() !== latest.publisherUserID
+          || !operationMatchesCurrentSession(latest)
+          || runningOperationIDs.has(latest.id)
+          || abandoningOperationIDs.has(latest.id)
+          || !recoveringOperationIDs.has(latest.id)
+          || hasConflictingWorkingDraft(latest)
+        ) return null;
+
+        const recoveredDraftID = `rejected-post-${latest.id}`;
+        const recoveredDraft: PersistedPostDraft = {
+          id: recoveredDraftID,
+          viewerID: latest.publisherUserID,
+          recoveryOperationID: latest.id,
+          content: latest.content,
+          quotePostID: latest.quotePostID,
+          media: latest.media.map(item => ({
+            id: item.draftMediaID,
+            blob: item.file.slice(0, item.file.size, item.file.type),
+            name: item.file.name,
+            type: item.file.type,
+            size: item.file.size,
+            lastModified: item.file.lastModified,
+            uploadedURL: item.uploadedURL,
+          })),
+          createdAt: latest.startedAt,
+          updatedAt: Date.now(),
+        };
+        const savedDraft = await saveRecoveredPostDraft(recoveredDraft, latest.id);
+        if (savedDraft === 'collision') return null;
+
+        if (
+          currentViewerID() !== latest.publisherUserID
+          || !operationMatchesCurrentSession(latest)
+          || hasConflictingWorkingDraft(latest)
+          || runningOperationIDs.has(latest.id)
+        ) return null;
+
+        const persisted = await getPostPublishOperation(latest.publisherUserID);
+        if (
+          !persisted
+          || persisted.id !== latest.id
+          || persisted.publisherSessionID !== latest.publisherSessionID
+          || persisted.phase !== 'failed'
+          || persisted.failureKind !== 'validation_error'
+        ) return null;
+        const verified = restorePublishOperation(persisted) as PublishOperation;
+        const sameSourceSnapshot = latest.sourceDraftSnapshot === null
+          ? verified.sourceDraftSnapshot === null
+          : verified.sourceDraftSnapshot !== null
+            && postDraftSnapshotsEqual(verified.sourceDraftSnapshot, latest.sourceDraftSnapshot);
+        const samePayload = verified.content === latest.content
+          && verified.quotePostID === latest.quotePostID
+          && verified.sourceDraftID === latest.sourceDraftID
+          && sameSourceSnapshot
+          && verified.media.length === latest.media.length
+          && verified.media.every((item, index) => {
+            const expected = latest.media[index];
+            return Boolean(expected)
+              && item.draftMediaID === expected!.draftMediaID
+              && item.file.name === expected!.file.name
+              && item.file.type === expected!.file.type
+              && item.file.size === expected!.file.size
+              && item.file.lastModified === expected!.file.lastModified
+              && item.uploadedURL === expected!.uploadedURL;
+          });
+        if (!samePayload) return null;
+
+        const deleted = await deleteRejectedPostPublishOperation(
+          latest.publisherUserID,
+          latest.id,
+          latest.publisherSessionID,
+        );
+        if (!deleted) return null;
+
+        releaseOperationOwnership(latest.publisherUserID, latest.id);
+        postDraft.releasePublishOperationBinding(latest.id, latest.publisherUserID);
+        removeOperationIfCurrent(latest.publisherUserID, latest.id);
+        recoveryErrors.value.delete(latest.publisherUserID);
+        return recoveredDraftID;
+      });
+    } catch (error) {
+      if (error instanceof PublishCoordinationUnavailableError) {
+        setCoordinationUnavailable(operation.publisherUserID);
+      } else {
+        setRecoveryUnavailable(operation.publisherUserID);
+      }
+      return null;
+    } finally {
+      recoveringOperationIDs.delete(operation.id);
+    }
+  };
+
   const abandonFailedOperation = async (operationID: string): Promise<boolean> => {
     const operation = getOperation(operationID);
     if (
@@ -1158,6 +1276,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
       || currentViewerID() !== operation.publisherUserID
       || runningOperationIDs.has(operation.id)
       || abandoningOperationIDs.has(operation.id)
+      || recoveringOperationIDs.has(operation.id)
       || unresolvedOperationByViewer.value.get(operation.publisherUserID) !== operation.id
     ) {
       return false;
@@ -1175,6 +1294,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
           || latest.id !== operation.id
           || !canAbandonDurableSubmission(latest.phase, latest.failureKind)
           || currentViewerID() !== latest.publisherUserID
+          || recoveringOperationIDs.has(latest.id)
         ) {
           return false;
         }
@@ -1218,6 +1338,7 @@ export const usePostPublishStore = defineStore('postPublish', () => {
     activateViewer,
     startOrRetryDraft,
     retry,
+    recoverRejectedPostForEdit,
     abandonFailedOperation,
   };
 });

@@ -4,6 +4,7 @@ import {
   deleteReplyDraftIfUnchanged,
   getReplyDraft,
   saveReplyDraft,
+  saveReplyDraftIfUnchanged,
 } from '../storage/replyStorage';
 
 const normalizeViewerID = (value: unknown): number | null => (
@@ -209,6 +210,65 @@ export const useReplyDraftStore = defineStore('replyDraft', () => {
     }
   };
 
+  const persistCurrentDraftForRejectedSubmission = async (
+    postID: number | string,
+    operationContent: string,
+  ): Promise<boolean> => {
+    const normalized = normalizePostID(postID);
+    const saveViewerID = viewerID.value;
+    if (saveViewerID === null || normalized === null) return false;
+    if (await awaitPendingSave(normalized) === 'failed' || viewerID.value !== saveViewerID) return false;
+
+    const key = keyFor(normalized);
+    const expectedSavedContent = savedContentByPost.value[key];
+    if (expectedSavedContent === undefined) return false;
+    const workingRevision = workingRevisions.get(key) ?? 0;
+    const content = draftsByPost.value[key] ?? '';
+    if (!content.trim() && operationContent.trim()) return false;
+    const now = Date.now();
+
+    if (!content) {
+      if (expectedSavedContent !== null) {
+        const deleted = await deleteReplyDraftIfUnchanged(
+          saveViewerID,
+          normalized,
+          expectedSavedContent,
+          () => viewerID.value === saveViewerID
+            && (workingRevisions.get(key) ?? 0) === workingRevision,
+        );
+        if (deleted !== 'deleted' && deleted !== 'missing') return false;
+      }
+      if (
+        viewerID.value !== saveViewerID
+        || (workingRevisions.get(key) ?? 0) !== workingRevision
+      ) return false;
+      savedContentByPost.value[key] = null;
+      createdAtByPost.value[key] = null;
+      return true;
+    }
+
+    const saved = await saveReplyDraftIfUnchanged({
+      key: `${saveViewerID}:${normalized}`,
+      viewerID: saveViewerID,
+      parentPostID: normalized,
+      content,
+      createdAt: createdAtByPost.value[key] ?? now,
+      updatedAt: now,
+    }, expectedSavedContent);
+    if (!saved || viewerID.value !== saveViewerID) return false;
+    if ((workingRevisions.get(key) ?? 0) !== workingRevision) {
+      const latest = await getReplyDraft(saveViewerID, normalized).catch(() => null);
+      if (viewerID.value === saveViewerID) {
+        savedContentByPost.value[key] = latest?.content ?? null;
+        createdAtByPost.value[key] = latest?.createdAt ?? null;
+      }
+      return false;
+    }
+    savedContentByPost.value[key] = content;
+    createdAtByPost.value[key] ??= now;
+    return true;
+  };
+
   const saveDraft = (postID: number | string): Promise<SaveReplyDraftResult> => {
     const normalized = normalizePostID(postID);
     const saveViewerID = viewerID.value;
@@ -358,6 +418,7 @@ export const useReplyDraftStore = defineStore('replyDraft', () => {
     captureWorkingRevision,
     hydrateSavedDraft,
     saveDraft,
+    persistCurrentDraftForRejectedSubmission,
     discardChanges,
     bindSubmission,
     adoptHydratedSubmission,

@@ -1,16 +1,21 @@
 // @vitest-environment jsdom
 
-import { mount } from '@vue/test-utils';
+import { flushPromises, mount } from '@vue/test-utils';
 import { reactive } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PostPublishStatus from './PostPublishStatus.vue';
 
 const mocks = vi.hoisted(() => ({
   store: null as any,
+  router: { push: vi.fn() },
 }));
 
 vi.mock('../../store/postPublish', () => ({
   usePostPublishStore: () => mocks.store,
+}));
+
+vi.mock('vue-router', () => ({
+  useRouter: () => mocks.router,
 }));
 
 const operationFor = (phase: string, id = 'publish-1') => ({
@@ -27,8 +32,10 @@ describe('PostPublishStatus', () => {
       currentSuccessNotice: null,
       recoveryError: '',
       retry: vi.fn(),
+      recoverRejectedPostForEdit: vi.fn(),
       abandonFailedOperation: vi.fn(),
     });
+    mocks.router.push.mockReset().mockResolvedValue(undefined);
   });
 
   it.each([
@@ -70,6 +77,46 @@ describe('PostPublishStatus', () => {
     expect(wrapper.get('[role="status"]').text()).toContain('This post can’t be retried safely.');
     expect(wrapper.find('.post-publish-status__retry').exists()).toBe(false);
     expect(wrapper.get('.post-publish-status__discard').text()).toBe('Discard attempt');
+  });
+
+  it('saves a rejected post as a draft before navigating to edit it', async () => {
+    mocks.store.latestOperation = {
+      ...operationFor('failed', 'publish-validation'),
+      failureKind: 'validation_error',
+      error: 'Review the post and try again.',
+    };
+    mocks.store.recoverRejectedPostForEdit.mockResolvedValue('rejected-post-publish-validation');
+
+    const wrapper = mount(PostPublishStatus);
+    const edit = wrapper.get('.post-publish-status__discard');
+    expect(edit.text()).toBe('Edit and try again');
+    await edit.trigger('click');
+    await flushPromises();
+
+    expect(mocks.store.recoverRejectedPostForEdit).toHaveBeenCalledWith('publish-validation');
+    expect(mocks.store.abandonFailedOperation).not.toHaveBeenCalled();
+    expect(mocks.router.push).toHaveBeenCalledWith({
+      name: 'PostCreate',
+      query: { draft: 'rejected-post-publish-validation' },
+    });
+    expect(wrapper.find('.confirm-dialog').exists()).toBe(false);
+  });
+
+  it('keeps the failed operation visible when rejected-post recovery cannot persist', async () => {
+    mocks.store.latestOperation = {
+      ...operationFor('failed', 'publish-validation'),
+      failureKind: 'validation_error',
+    };
+    mocks.store.recoverRejectedPostForEdit.mockResolvedValue(null);
+
+    const wrapper = mount(PostPublishStatus);
+    await wrapper.get('.post-publish-status__discard').trigger('click');
+    await flushPromises();
+
+    expect(mocks.store.latestOperation.id).toBe('publish-validation');
+    expect(mocks.store.abandonFailedOperation).not.toHaveBeenCalled();
+    expect(mocks.router.push).not.toHaveBeenCalled();
+    expect(wrapper.get('.post-publish-status__error').text()).toContain('original attempt and its content are still preserved');
   });
 
   it('requires confirmation before abandoning and preserves the operation on cancel', async () => {

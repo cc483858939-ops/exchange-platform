@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   claimPostPublishOperation,
   deletePostPublishOperation,
+  deleteRejectedPostPublishOperation,
   getPostPublishOperation,
   restorePublishOperation,
   serializePublishOperation,
@@ -347,6 +348,21 @@ describe('postPublishRepository', () => {
     expect(await deletePostPublishOperation(7, 'operation-a')).toBe(true);
     expect(await getPostPublishOperation(7)).toBeNull();
     expect(await getPostPublishOperation(8)).toMatchObject({ id: 'operation-b' });
+  });
+
+  it('deletes an editable rejection only for the matching operation and auth session', async () => {
+    const operation = {
+      ...makeOperation('rejected-operation', 90),
+      phase: 'failed' as const,
+      failureKind: 'validation_error' as const,
+    };
+    await claimPostPublishOperation(serializePublishOperation(operation));
+
+    await expect(deleteRejectedPostPublishOperation(90, operation.id, 'another-session')).resolves.toBe(false);
+    await expect(deleteRejectedPostPublishOperation(90, 'another-operation', operation.publisherSessionID)).resolves.toBe(false);
+    expect(await getPostPublishOperation(90)).toMatchObject({ id: operation.id, phase: 'failed' });
+    await expect(deleteRejectedPostPublishOperation(90, operation.id, operation.publisherSessionID)).resolves.toBe(true);
+    await expect(getPostPublishOperation(90)).resolves.toBeNull();
   });
 
   it('returns the validated durable owner without replacing it when a slot is occupied', async () => {

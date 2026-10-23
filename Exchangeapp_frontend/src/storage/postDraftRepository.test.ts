@@ -7,6 +7,7 @@ import {
   getPostDraft,
   listPostDrafts,
   savePostDraft,
+  saveRecoveredPostDraft,
   type PersistedPostDraft,
 } from './postDraftRepository';
 import type { DraftSnapshot } from '../utils/postDraftSnapshot';
@@ -98,6 +99,15 @@ class TestObjectStore {
   put(record: PersistedPostDraft) {
     if (!this.transaction) throw new Error('Object store has no transaction.');
     return this.transaction.request(() => {
+      this.records.set(record.id, record);
+      return record.id;
+    });
+  }
+
+  add(record: PersistedPostDraft) {
+    if (!this.transaction) throw new Error('Object store has no transaction.');
+    return this.transaction.request(() => {
+      if (this.records.has(record.id)) throw new DOMException('A draft with this ID already exists.', 'ConstraintError');
       this.records.set(record.id, record);
       return record.id;
     });
@@ -295,6 +305,41 @@ describe('postDraftRepository', () => {
       .rejects.toThrow('belongs to another viewer');
     expect((await getPostDraft(7, 'known-id'))?.content).toBe('Owner content');
     expect(await getPostDraft(8, 'known-id')).toBeNull();
+  });
+
+  it('saves a rejected operation draft once and preserves later edits on retry', async () => {
+    const blob = new Blob(['original image'], { type: 'image/png' });
+    const recovered: PersistedPostDraft = {
+      ...draft('rejected-post-operation-1', 7, 200, 'Rejected body'),
+      recoveryOperationID: 'operation-1',
+      quotePostID: 42,
+      media: [{
+        id: 'original-media', blob, name: 'photo.png', type: 'image/png',
+        size: blob.size, lastModified: 123, uploadedURL: '/uploaded/photo.png',
+      }],
+    };
+
+    await expect(saveRecoveredPostDraft(recovered, 'operation-1')).resolves.toBe('saved');
+    await savePostDraft({ ...recovered, content: 'User edit after recovery', updatedAt: 300 });
+    await expect(saveRecoveredPostDraft(recovered, 'operation-1')).resolves.toBe('existing');
+    await expect(getPostDraft(7, recovered.id)).resolves.toMatchObject({
+      recoveryOperationID: 'operation-1',
+      content: 'User edit after recovery',
+      quotePostID: 42,
+      media: [{ id: 'original-media', name: 'photo.png', uploadedURL: '/uploaded/photo.png' }],
+    });
+  });
+
+  it('does not overwrite a different draft that collides with the deterministic recovery ID', async () => {
+    const original = draft('rejected-post-operation-2', 7, 100, 'Keep existing draft');
+    await savePostDraft(original);
+    const recovered: PersistedPostDraft = {
+      ...draft(original.id, 7, 200, 'Rejected body'),
+      recoveryOperationID: 'operation-2',
+    };
+
+    await expect(saveRecoveredPostDraft(recovered, 'operation-2')).resolves.toBe('collision');
+    await expect(getPostDraft(7, original.id)).resolves.toMatchObject({ content: 'Keep existing draft' });
   });
 
   it('atomically deletes an unchanged saved draft after the readwrite transaction completes', async () => {
