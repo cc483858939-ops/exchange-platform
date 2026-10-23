@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/go-redis/redis/v7"
 	"github.com/google/uuid"
 )
 
@@ -48,6 +50,355 @@ func TestRecommendationCursorCodecBindsOwnerPageSizeAndSignature(t *testing.T) {
 	}
 	if _, err := codec.Decode(expired, viewer, 20, now); !errors.Is(err, ErrCursorExpired) {
 		t.Fatalf("expired cursor error=%v want cursor expired", err)
+	}
+}
+
+func TestSnapshotMutationJSONListsUseArraySemantics(t *testing.T) {
+	deleteJSON, postStateJSON, err := marshalSnapshotMutationLists(SnapshotMutation{})
+	if err != nil {
+		t.Fatalf("marshal nil mutation lists: %v", err)
+	}
+	if deleteJSON != "[]" || postStateJSON != "[]" {
+		t.Fatalf("nil mutation lists encoded as deletes=%q post_states=%q, want [] and []", deleteJSON, postStateJSON)
+	}
+
+	explicitDeleteJSON, explicitPostStateJSON, err := marshalSnapshotMutationLists(SnapshotMutation{
+		DeletePageIndices: []int{}, PostStates: []SnapshotPostStateUpdate{},
+	})
+	if err != nil {
+		t.Fatalf("marshal explicit empty mutation lists: %v", err)
+	}
+	if explicitDeleteJSON != deleteJSON || explicitPostStateJSON != postStateJSON {
+		t.Fatalf("nil and explicit empty lists differ: nil=(%q,%q) explicit=(%q,%q)", deleteJSON, postStateJSON, explicitDeleteJSON, explicitPostStateJSON)
+	}
+
+	deleteJSON, postStateJSON, err = marshalSnapshotMutationLists(SnapshotMutation{
+		DeletePageIndices: []int{3, 1},
+		PostStates:        []SnapshotPostStateUpdate{{PostID: 9, Expected: "reserved:0", Next: "used:0"}},
+	})
+	if err != nil {
+		t.Fatalf("marshal populated mutation lists: %v", err)
+	}
+	if deleteJSON != "[3,1]" || postStateJSON != `[{"PostID":9,"Expected":"reserved:0","Next":"used:0"}]` {
+		t.Fatalf("populated mutation lists changed: deletes=%q post_states=%q", deleteJSON, postStateJSON)
+	}
+
+}
+
+func TestSnapshotStateNilCandidatePoolUsesArraySemantics(t *testing.T) {
+	_, poolJSON, err := marshalSnapshotState(CandidatePoolSnapshot{
+		ID: "empty-pool", PageSize: 20, ExpiresAt: time.Now().UTC().Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("marshal nil candidate pool: %v", err)
+	}
+	if poolJSON != "[]" {
+		t.Fatalf("nil candidate pool encoded as %q, want []", poolJSON)
+	}
+}
+
+func newRedisSnapshotIntegrationStore(t *testing.T) (*redis.Client, *RedisSnapshotStore) {
+	t.Helper()
+	client := openHistoryIntegrationRedis(t)
+	store, err := NewRedisSnapshotStore(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, store
+}
+
+func newRedisSnapshotIntegrationMetadata(now time.Time, pageSize int) CandidatePoolSnapshot {
+	return CandidatePoolSnapshot{
+		ID: uuid.NewString(), OwnerDigest: "snapshot-json-array-owner", CreatedAt: now,
+		ExpiresAt: now.Add(10 * time.Minute), PageSize: pageSize,
+		EmbeddingVersion: "embedding-v1", RankerConfigHash: "ranker-v1", StrategyVersion: "strategy-v3",
+	}
+}
+
+func redisSnapshotTestCandidate(postID uint) CachedCandidate {
+	return CachedCandidate{PostID: postID, Candidate: Candidate{PostID: postID}}
+}
+
+func cleanupRedisSnapshot(t *testing.T, client *redis.Client, snapshotID string) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := client.Del(snapshotRedisKey(snapshotID)).Err(); err != nil {
+			t.Errorf("delete Redis snapshot %s: %v", snapshotID, err)
+		}
+	})
+}
+
+func TestRedisSnapshotStoreApplyNilDeleteListWithPostStatesIntegration(t *testing.T) {
+	client, store := newRedisSnapshotIntegrationStore(t)
+	now := time.Now().UTC()
+	snapshot := newRedisSnapshotIntegrationMetadata(now, 2)
+	cleanupRedisSnapshot(t, client, snapshot.ID)
+	snapshot.Candidates = []CachedCandidate{redisSnapshotTestCandidate(7), redisSnapshotTestCandidate(9)}
+	firstPage := CachedPage{
+		Index: 0, RequestID: "nil-delete-page-0", ServedAt: now,
+		Items: []CachedCandidate{redisSnapshotTestCandidate(7)},
+	}
+	if err := store.Create(context.Background(), snapshot, []CachedPage{firstPage}, []SnapshotContextEntry{{PageIndex: 0, Candidate: firstPage.Items[0]}}, 10*time.Minute); err != nil {
+		t.Fatalf("create first snapshot page: %v", err)
+	}
+	loaded, err := store.Load(context.Background(), snapshot.ID)
+	if err != nil {
+		t.Fatalf("load initial snapshot: %v", err)
+	}
+	secondPage := CachedPage{
+		Index: 1, RequestID: "nil-delete-page-1", ServedAt: now.Add(time.Second),
+		Items: []CachedCandidate{redisSnapshotTestCandidate(9)},
+	}
+	updated := cloneSnapshot(loaded)
+	updated.PageCount = 2
+	updated.Revision++
+	contextEntries := []SnapshotContextEntry{
+		{PageIndex: 0, Candidate: firstPage.Items[0]},
+		{PageIndex: 1, Candidate: secondPage.Items[0]},
+	}
+	mutation := SnapshotMutation{
+		Snapshot: updated, Page: &secondPage,
+		PostStates: []SnapshotPostStateUpdate{{PostID: 9, Next: snapshotPostState("reserved", 1)}},
+		Context:    &contextEntries,
+	}
+	if mutation.DeletePageIndices != nil {
+		t.Fatal("test must exercise a nil DeletePageIndices argument")
+	}
+	if applied, err := store.Apply(context.Background(), snapshot.ID, loaded.Revision, mutation); err != nil || !applied {
+		t.Fatalf("apply dynamic page: applied=%t err=%v", applied, err)
+	}
+	current, err := store.Load(context.Background(), snapshot.ID)
+	if err != nil || current.Revision != loaded.Revision+1 || current.PageCount != 2 {
+		t.Fatalf("snapshot revision/page count=%d/%d err=%v, want %d/2", current.Revision, current.PageCount, err, loaded.Revision+1)
+	}
+	for pageIndex, requestID := range []string{firstPage.RequestID, secondPage.RequestID} {
+		page, found, err := store.LoadPage(context.Background(), snapshot.ID, pageIndex)
+		if err != nil || !found || page.RequestID != requestID {
+			t.Fatalf("page %d found=%t request=%q err=%v, want request %q", pageIndex, found, page.RequestID, err, requestID)
+		}
+	}
+	if state, err := client.HGet(snapshotRedisKey(snapshot.ID), snapshotPostField(9)).Result(); err != nil || state != snapshotPostState("reserved", 1) {
+		t.Fatalf("post state=%q err=%v, want reserved:1", state, err)
+	}
+	known, err := store.KnownPostIDs(context.Background(), snapshot.ID, []uint{7, 9})
+	if err != nil || len(known) != 2 {
+		t.Fatalf("known post IDs=%v err=%v, want both page IDs", known, err)
+	}
+	firstRead, found, err := store.LoadPage(context.Background(), snapshot.ID, 1)
+	replay, replayFound, replayErr := store.LoadPage(context.Background(), snapshot.ID, 1)
+	if err != nil || replayErr != nil || !found || !replayFound || firstRead.RequestID != replay.RequestID ||
+		!equalUintSlices(cachedPagePostIDs(firstRead), cachedPagePostIDs(replay)) {
+		t.Fatalf("dynamic page replay changed: first=%#v replay=%#v errors=%v/%v", firstRead, replay, err, replayErr)
+	}
+}
+
+func TestRedisSnapshotStoreNilCandidatePoolAndPureRevisionApplyIntegration(t *testing.T) {
+	client, store := newRedisSnapshotIntegrationStore(t)
+	now := time.Now().UTC()
+	snapshot := newRedisSnapshotIntegrationMetadata(now, 20)
+	key := snapshotRedisKey(snapshot.ID)
+	cleanupRedisSnapshot(t, client, snapshot.ID)
+	if err := store.Create(context.Background(), snapshot, nil, nil, 10*time.Minute); err != nil {
+		t.Fatalf("create nil candidate pool: %v", err)
+	}
+	if raw, err := client.HGet(key, "pool").Result(); err != nil || raw != "[]" {
+		t.Fatalf("Redis pool field=%q err=%v, want []", raw, err)
+	}
+	loaded, err := store.Load(context.Background(), snapshot.ID)
+	if err != nil || len(loaded.Candidates) != 0 {
+		t.Fatalf("load empty candidate pool: candidates=%v err=%v", loaded.Candidates, err)
+	}
+	contextBefore, err := store.LoadContext(context.Background(), snapshot.ID, 1)
+	if err != nil || len(contextBefore) != 0 {
+		t.Fatalf("initial context=%v err=%v, want empty", contextBefore, err)
+	}
+	pendingBefore, err := store.LoadPendingHistory(context.Background(), snapshot.ID, 1)
+	if err != nil || len(pendingBefore) != 0 {
+		t.Fatalf("initial pending history=%v err=%v, want empty", pendingBefore, err)
+	}
+	contextRawBefore, err := client.HGet(key, "context").Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingRawBefore, err := client.HGet(key, "pending_history").Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := cloneSnapshot(loaded)
+	updated.Candidates = nil
+	updated.Revision++
+	if applied, err := store.Apply(context.Background(), snapshot.ID, loaded.Revision, SnapshotMutation{Snapshot: updated}); err != nil || !applied {
+		t.Fatalf("pure revision update with nil arrays applied=%t err=%v", applied, err)
+	}
+	if raw, err := client.HGet(key, "pool").Result(); err != nil || raw != "[]" {
+		t.Fatalf("pool after nil candidate Apply=%q err=%v, want []", raw, err)
+	}
+	updated, err = store.Load(context.Background(), snapshot.ID)
+	if err != nil || updated.Revision != loaded.Revision+1 {
+		t.Fatalf("pure revision result revision=%d err=%v", updated.Revision, err)
+	}
+	updated.Revision++
+	if applied, err := store.Apply(context.Background(), snapshot.ID, updated.Revision-1, SnapshotMutation{
+		Snapshot: updated, DeletePageIndices: []int{}, PostStates: []SnapshotPostStateUpdate{},
+	}); err != nil || !applied {
+		t.Fatalf("pure revision update with explicit empty arrays applied=%t err=%v", applied, err)
+	}
+	contextAfter, err := store.LoadContext(context.Background(), snapshot.ID, 1)
+	if err != nil || len(contextAfter) != len(contextBefore) {
+		t.Fatalf("pure revision update changed context: before=%v after=%v err=%v", contextBefore, contextAfter, err)
+	}
+	contextRawAfter, err := client.HGet(key, "context").Result()
+	if err != nil || contextRawAfter != contextRawBefore {
+		t.Fatalf("pure revision update changed serialized context from %q to %q err=%v", contextRawBefore, contextRawAfter, err)
+	}
+	pendingAfter, err := store.LoadPendingHistory(context.Background(), snapshot.ID, 1)
+	if err != nil || len(pendingAfter) != len(pendingBefore) {
+		t.Fatalf("pure revision update changed pending history: before=%v after=%v err=%v", pendingBefore, pendingAfter, err)
+	}
+	pendingRawAfter, err := client.HGet(key, "pending_history").Result()
+	if err != nil || pendingRawAfter != pendingRawBefore {
+		t.Fatalf("pure revision update changed serialized pending history from %q to %q err=%v", pendingRawBefore, pendingRawAfter, err)
+	}
+	for _, field := range []string{snapshotPageField(0), snapshotPostField(9)} {
+		if exists, err := client.HExists(key, field).Result(); err != nil || exists {
+			t.Fatalf("pure revision update created unexpected field %q: exists=%t err=%v", field, exists, err)
+		}
+	}
+	final, err := store.Load(context.Background(), snapshot.ID)
+	if err != nil || final.Revision != loaded.Revision+2 {
+		t.Fatalf("nil and explicit empty arrays did not have equivalent revision updates: revision=%d err=%v", final.Revision, err)
+	}
+}
+
+func TestRedisSnapshotStoreTraceReceiptWithNilMutationListsIntegration(t *testing.T) {
+	client, store := newRedisSnapshotIntegrationStore(t)
+	now := time.Now().UTC()
+	snapshot := newRedisSnapshotIntegrationMetadata(now, 20)
+	cleanupRedisSnapshot(t, client, snapshot.ID)
+	page := CachedPage{
+		Index: 0, RequestID: "trace-receipt-page", ServedAt: now,
+		Items: []CachedCandidate{redisSnapshotTestCandidate(9)}, ReturnedPostIDs: []uint{9},
+		Committed: true, HistoryRecorded: true,
+	}
+	if err := store.Create(context.Background(), snapshot, []CachedPage{page}, nil, 10*time.Minute); err != nil {
+		t.Fatalf("create committed page: %v", err)
+	}
+	key := snapshotRedisKey(snapshot.ID)
+	stateBefore, err := client.HGet(key, snapshotPostField(9)).Result()
+	if err != nil || stateBefore != snapshotPostState("used", 0) {
+		t.Fatalf("initial post state=%q err=%v, want used:0", stateBefore, err)
+	}
+	loaded, err := store.Load(context.Background(), snapshot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page.TraceAttempted = true
+	page.Finalized = true
+	updated := cloneSnapshot(loaded)
+	updated.Revision++
+	if applied, err := store.Apply(context.Background(), snapshot.ID, loaded.Revision, SnapshotMutation{Snapshot: updated, Page: &page}); err != nil || !applied {
+		t.Fatalf("trace receipt applied=%t err=%v", applied, err)
+	}
+	storedPage, found, err := store.LoadPage(context.Background(), snapshot.ID, 0)
+	if err != nil || !found || !storedPage.TraceAttempted || !storedPage.Finalized {
+		t.Fatalf("stored trace page=%#v found=%t err=%v", storedPage, found, err)
+	}
+	stateAfter, err := client.HGet(key, snapshotPostField(9)).Result()
+	if err != nil || stateAfter != stateBefore {
+		t.Fatalf("trace update changed post state from %q to %q err=%v", stateBefore, stateAfter, err)
+	}
+	if applied, err := store.Apply(context.Background(), snapshot.ID, loaded.Revision, SnapshotMutation{Snapshot: updated, Page: &page}); err != nil || applied {
+		t.Fatalf("stale trace receipt applied=%t err=%v, want a normal CAS conflict", applied, err)
+	}
+	afterStale, err := store.Load(context.Background(), snapshot.ID)
+	storedAfterStale, found, pageErr := store.LoadPage(context.Background(), snapshot.ID, 0)
+	stateAfterStale, stateErr := client.HGet(key, snapshotPostField(9)).Result()
+	if err != nil || pageErr != nil || stateErr != nil || afterStale.Revision != loaded.Revision+1 || !found ||
+		!storedAfterStale.TraceAttempted || !storedAfterStale.Finalized || stateAfterStale != stateBefore {
+		t.Fatalf("stale trace receipt changed state: revision=%d page=%#v post=%q errors=%v/%v/%v", afterStale.Revision, storedAfterStale, stateAfterStale, err, pageErr, stateErr)
+	}
+}
+
+func TestRedisSnapshotStoreConcurrentNilListMutationsUseRevisionCASIntegration(t *testing.T) {
+	client, store := newRedisSnapshotIntegrationStore(t)
+	now := time.Now().UTC()
+	snapshot := newRedisSnapshotIntegrationMetadata(now, 20)
+	cleanupRedisSnapshot(t, client, snapshot.ID)
+	if err := store.Create(context.Background(), snapshot, nil, nil, 10*time.Minute); err != nil {
+		t.Fatalf("create CAS snapshot: %v", err)
+	}
+	loaded, err := store.Load(context.Background(), snapshot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutations := []SnapshotMutation{cloneSnapshotMutationWithBatches(loaded, 1), cloneSnapshotMutationWithBatches(loaded, 2)}
+	start := make(chan struct{})
+	type outcome struct {
+		applied bool
+		err     error
+	}
+	outcomes := make(chan outcome, len(mutations))
+	var wait sync.WaitGroup
+	for _, mutation := range mutations {
+		wait.Add(1)
+		go func(mutation SnapshotMutation) {
+			defer wait.Done()
+			<-start
+			applied, err := store.Apply(context.Background(), snapshot.ID, loaded.Revision, mutation)
+			outcomes <- outcome{applied: applied, err: err}
+		}(mutation)
+	}
+	close(start)
+	wait.Wait()
+	close(outcomes)
+	committed := 0
+	for result := range outcomes {
+		if result.err != nil {
+			t.Fatalf("concurrent CAS error: %v", result.err)
+		}
+		if result.applied {
+			committed++
+		}
+	}
+	if committed != 1 {
+		t.Fatalf("concurrent CAS committed %d mutations, want exactly one", committed)
+	}
+	current, err := store.Load(context.Background(), snapshot.ID)
+	if err != nil || current.Revision != loaded.Revision+1 || (current.HistoricalBatches != 1 && current.HistoricalBatches != 2) {
+		t.Fatalf("CAS winner state revision=%d batches=%d err=%v", current.Revision, current.HistoricalBatches, err)
+	}
+}
+
+func cloneSnapshotMutationWithBatches(snapshot CandidatePoolSnapshot, batches int) SnapshotMutation {
+	updated := cloneSnapshot(snapshot)
+	updated.HistoricalBatches = batches
+	updated.Revision++
+	return SnapshotMutation{Snapshot: updated}
+}
+
+func TestRedisSnapshotStoreClosedClientDoesNotApplyMutationIntegration(t *testing.T) {
+	client, store := newRedisSnapshotIntegrationStore(t)
+	controlClient, controlStore := newRedisSnapshotIntegrationStore(t)
+	now := time.Now().UTC()
+	snapshot := newRedisSnapshotIntegrationMetadata(now, 20)
+	cleanupRedisSnapshot(t, controlClient, snapshot.ID)
+	if err := store.Create(context.Background(), snapshot, nil, nil, 10*time.Minute); err != nil {
+		t.Fatalf("create snapshot before simulated Redis failure: %v", err)
+	}
+	before, err := controlStore.Load(context.Background(), snapshot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("close mutation client: %v", err)
+	}
+	mutation := cloneSnapshotMutationWithBatches(before, 1)
+	if applied, err := store.Apply(context.Background(), snapshot.ID, before.Revision, mutation); applied || !errors.Is(err, ErrSnapshotUnavailable) {
+		t.Fatalf("closed Redis client Apply applied=%t err=%v, want unavailable and not committed", applied, err)
+	}
+	after, err := controlStore.Load(context.Background(), snapshot.ID)
+	if err != nil || after.Revision != before.Revision || after.HistoricalBatches != before.HistoricalBatches {
+		t.Fatalf("failed write partially changed snapshot: before=%#v after=%#v err=%v", before, after, err)
 	}
 }
 
@@ -295,6 +646,7 @@ func TestRedisSnapshotStoreCreateLoadCASAndExpiryIntegration(t *testing.T) {
 	updated.Revision = 2
 	mutation := SnapshotMutation{
 		Snapshot: updated, Page: &updatedPage,
+		DeletePageIndices:    []int{},
 		PostStates:           []SnapshotPostStateUpdate{{PostID: 9, Expected: snapshotPostState("reserved", 0), Next: snapshotPostState("used", 0)}},
 		PendingHistoryChange: SnapshotPendingHistoryAdd, PendingHistoryPage: 0,
 	}
@@ -328,6 +680,14 @@ func TestRedisSnapshotStoreCreateLoadCASAndExpiryIntegration(t *testing.T) {
 	pending, err = store.LoadPendingHistory(context.Background(), snapshot.ID, 1)
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("completed pending history=%#v err=%v", pending, err)
+	}
+	loaded, err = store.Load(context.Background(), snapshot.ID)
+	completedPage, exists, pageErr := store.LoadPage(context.Background(), snapshot.ID, 0)
+	if err != nil || pageErr != nil || loaded.Revision != 3 || !exists || !completedPage.HistoryRecorded {
+		t.Fatalf("history receipt not persisted: revision=%d page=%#v exists=%t errors=%v/%v", loaded.Revision, completedPage, exists, err, pageErr)
+	}
+	if state, err := client.HGet(key, snapshotPostField(9)).Result(); err != nil || state != snapshotPostState("used", 0) {
+		t.Fatalf("history receipt changed post state=%q err=%v, want used:0", state, err)
 	}
 	time.Sleep(2100 * time.Millisecond)
 	if _, err := store.Load(context.Background(), snapshot.ID); !errors.Is(err, ErrCursorExpired) {

@@ -14,6 +14,7 @@ import (
 
 	"Go.exchange/config"
 	"Go.exchange/models"
+	"github.com/go-redis/redis/v7"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"gorm.io/gorm"
@@ -1649,6 +1650,145 @@ func TestRecommendationSnapshotNextPageRetainsCandidateWithoutEmbedding(t *testi
 	}
 	if !repository.snapshotQueries[1].Now.Equal(now.Add(time.Second)) {
 		t.Fatalf("dynamic snapshot page query time=%s, want %s", repository.snapshotQueries[1].Now, now.Add(time.Second))
+	}
+}
+
+func TestRecommendationRedisSnapshotServiceGeneratesAndReplaysThirdPageIntegration(t *testing.T) {
+	client := openHistoryIntegrationRedis(t)
+	store, err := NewRedisSnapshotStore(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, _, now := newSnapshotTestService(t, store)
+	if service.config.Recommendation.Snapshot.PreselectPages != 2 || service.config.Recommendation.Snapshot.DefaultPageSize != 20 {
+		t.Fatalf("test fixture does not match default pagination: preselect=%d page_size=%d", service.config.Recommendation.Snapshot.PreselectPages, service.config.Recommendation.Snapshot.DefaultPageSize)
+	}
+	viewer := Viewer{Kind: ViewerAuthenticated, UserID: 42}
+	history := service.dependencies.History.(*serviceTestHistoryStore)
+	traces := &serviceTestTraceEnqueuer{}
+	service.dependencies.TraceEnqueuer = traces
+
+	first, err := service.Serve(context.Background(), ServeRequest{
+		Viewer: viewer, Limit: 20, RequestID: "redis-third-page-0", Now: now,
+	})
+	if err != nil || len(first.Selected) != 20 || first.NextCursor == "" {
+		t.Fatalf("Page 0: selected=%d cursor=%q err=%v", len(first.Selected), first.NextCursor, err)
+	}
+	cleanupRedisSnapshot(t, client, first.PoolID)
+	initialPageOne, exists, err := store.LoadPage(context.Background(), first.PoolID, 1)
+	if err != nil || !exists || len(initialPageOne.Items) != 20 {
+		t.Fatalf("preselected Page 1: exists=%t items=%d err=%v", exists, len(initialPageOne.Items), err)
+	}
+	finalizeServiceTestResult(t, service, first)
+
+	second, err := service.Serve(context.Background(), ServeRequest{
+		Viewer: viewer, Limit: 20, Cursor: first.NextCursor, RequestID: "redis-third-page-1", Now: now.Add(time.Second),
+	})
+	if err != nil || !second.CacheHit || len(second.Selected) != 20 || second.NextCursor == "" {
+		t.Fatalf("Page 1: cache=%t selected=%d cursor=%q err=%v", second.CacheHit, len(second.Selected), second.NextCursor, err)
+	}
+	finalizeServiceTestResult(t, service, second)
+
+	thirdCursor := second.NextCursor
+	third, err := service.Serve(context.Background(), ServeRequest{
+		Viewer: viewer, Limit: 20, Cursor: thirdCursor, RequestID: "redis-third-page-2", Now: now.Add(2 * time.Second),
+	})
+	if err != nil || len(third.Selected) != 20 || third.NextCursor == "" {
+		t.Fatalf("Page 2: selected=%d cursor=%q err=%v", len(third.Selected), third.NextCursor, err)
+	}
+	if err := service.FinalizeServing(context.Background(), third, third.Selected); err != nil {
+		t.Fatalf("finalize Page 2: %v", err)
+	}
+	assertNoRepeatedPostIDs(t, selectedPostIDs(first.Selected), selectedPostIDs(second.Selected), selectedPostIDs(third.Selected))
+	thirdStored, exists, err := store.LoadPage(context.Background(), third.PoolID, 2)
+	if err != nil || !exists || !thirdStored.Committed || !thirdStored.HistoryRecorded || !thirdStored.TraceAttempted || !thirdStored.Finalized {
+		t.Fatalf("stored Page 2=%#v exists=%t err=%v", thirdStored, exists, err)
+	}
+	pending, err := store.LoadPendingHistory(context.Background(), third.PoolID, 8)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("pending history after third page=%#v err=%v, want empty", pending, err)
+	}
+	history.mu.Lock()
+	historyAttempts := history.pageRecordAttempts
+	history.mu.Unlock()
+	if historyAttempts != 3 || traces.enqueueCalls != 3 {
+		t.Fatalf("side effects after three pages: history=%d trace=%d, want 3 each", historyAttempts, traces.enqueueCalls)
+	}
+
+	replay, err := service.Serve(context.Background(), ServeRequest{
+		Viewer: viewer, Limit: 20, Cursor: thirdCursor, RequestID: "redis-third-page-2-replay", Now: now.Add(3 * time.Second),
+	})
+	if err != nil || !replay.CacheHit || replay.RequestID != third.RequestID || !equalUintSlices(selectedPostIDs(replay.Selected), selectedPostIDs(third.Selected)) {
+		t.Fatalf("Page 2 Replay: cache=%t request=%q/%q IDs_equal=%t err=%v", replay.CacheHit, replay.RequestID, third.RequestID, equalUintSlices(selectedPostIDs(replay.Selected), selectedPostIDs(third.Selected)), err)
+	}
+	finalizeServiceTestResult(t, service, replay)
+	history.mu.Lock()
+	defer history.mu.Unlock()
+	if history.pageRecordAttempts != historyAttempts || traces.enqueueCalls != 3 {
+		t.Fatalf("Page 2 replay repeated side effects: history=%d/%d trace=%d", history.pageRecordAttempts, historyAttempts, traces.enqueueCalls)
+	}
+}
+
+func TestRecommendationRedisSnapshotMapperRejectionReleasesPreselectionIntegration(t *testing.T) {
+	client := openHistoryIntegrationRedis(t)
+	store, err := NewRedisSnapshotStore(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, _, now := newSnapshotTestService(t, store)
+	traces := &serviceTestTraceEnqueuer{}
+	service.dependencies.TraceEnqueuer = traces
+	result := firstSnapshotResult(t, service, now)
+	if len(result.Selected) < 2 {
+		t.Fatalf("fixture returned %d candidates, need at least two to test mapper filtering", len(result.Selected))
+	}
+	cleanupRedisSnapshot(t, client, result.PoolID)
+	pageOne, exists, err := store.LoadPage(context.Background(), result.PoolID, 1)
+	if err != nil || !exists || len(pageOne.Items) != 20 {
+		t.Fatalf("preselected page 1: exists=%t items=%d err=%v", exists, len(pageOne.Items), err)
+	}
+	returned := append([]SelectedCandidate(nil), result.Selected[:len(result.Selected)-1]...)
+	rejectedID := result.Selected[len(result.Selected)-1].Post.ID
+	if _, err := service.FinalizeMappedServing(context.Background(), result, returned); err != nil {
+		t.Fatalf("finalize mapper-filtered page: %v", err)
+	}
+
+	snapshot, err := store.Load(context.Background(), result.PoolID)
+	if err != nil || snapshot.PageCount != 1 {
+		t.Fatalf("snapshot after mapper filter page_count=%d err=%v, want 1", snapshot.PageCount, err)
+	}
+	if _, exists, err := store.LoadPage(context.Background(), result.PoolID, 1); err != nil || exists {
+		t.Fatalf("invalidated preselected page exists=%t err=%v, want absent", exists, err)
+	}
+	returnedIDs := selectedPostIDs(returned)
+	for _, id := range returnedIDs {
+		state, err := client.HGet(snapshotRedisKey(result.PoolID), snapshotPostField(id)).Result()
+		if err != nil || state != snapshotPostState("used", 0) {
+			t.Fatalf("returned post %d state=%q err=%v, want used:0", id, state, err)
+		}
+	}
+	if state, err := client.HGet(snapshotRedisKey(result.PoolID), snapshotPostField(rejectedID)).Result(); err != nil || state != snapshotPostState("rejected", 0) {
+		t.Fatalf("mapper-rejected post %d state=%q err=%v, want rejected:0", rejectedID, state, err)
+	}
+	for _, item := range pageOne.Items {
+		if _, err := client.HGet(snapshotRedisKey(result.PoolID), snapshotPostField(item.PostID)).Result(); !errors.Is(err, redis.Nil) {
+			t.Fatalf("invalidated page post %d was not released: err=%v", item.PostID, err)
+		}
+	}
+	committed, exists, err := store.LoadPage(context.Background(), result.PoolID, 0)
+	if err != nil || !exists || !committed.HistoryRecorded || !committed.TraceAttempted || !committed.Finalized ||
+		!equalUintSlices(committed.ReturnedPostIDs, returnedIDs) {
+		t.Fatalf("mapper-filtered committed page=%#v exists=%t err=%v", committed, exists, err)
+	}
+	pending, err := store.LoadPendingHistory(context.Background(), result.PoolID, 8)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("pending history after mapper-filtered page=%#v err=%v", pending, err)
+	}
+	history := service.dependencies.History.(*serviceTestHistoryStore)
+	history.mu.Lock()
+	defer history.mu.Unlock()
+	if history.pageRecordAttempts != 1 || traces.enqueueCalls != 1 {
+		t.Fatalf("mapper-filtered page side effects: history=%d trace=%d, want one each", history.pageRecordAttempts, traces.enqueueCalls)
 	}
 }
 

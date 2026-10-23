@@ -489,6 +489,26 @@ func (store *RedisSnapshotStore) KnownPostIDs(ctx context.Context, snapshotID st
 	return known, nil
 }
 
+func marshalSnapshotMutationLists(mutation SnapshotMutation) (string, string, error) {
+	deletePageIndices := mutation.DeletePageIndices
+	if deletePageIndices == nil {
+		deletePageIndices = []int{}
+	}
+	postStates := mutation.PostStates
+	if postStates == nil {
+		postStates = []SnapshotPostStateUpdate{}
+	}
+	deleteJSON, err := json.Marshal(deletePageIndices)
+	if err != nil {
+		return "", "", fmt.Errorf("marshal snapshot page deletes: %w", err)
+	}
+	postStateJSON, err := json.Marshal(postStates)
+	if err != nil {
+		return "", "", fmt.Errorf("marshal snapshot post states: %w", err)
+	}
+	return string(deleteJSON), string(postStateJSON), nil
+}
+
 func (store *RedisSnapshotStore) Apply(ctx context.Context, snapshotID string, expectedRevision int64, mutation SnapshotMutation) (bool, error) {
 	client, err := snapshotRedisContext(ctx, store.client)
 	if err != nil {
@@ -560,8 +580,10 @@ func (store *RedisSnapshotStore) Apply(ctx context.Context, snapshotID string, e
 			return false, ErrSnapshotUnavailable
 		}
 	}
-	deleteJSON, _ := json.Marshal(mutation.DeletePageIndices)
-	postStateJSON, _ := json.Marshal(mutation.PostStates)
+	deleteJSON, postStateJSON, err := marshalSnapshotMutationLists(mutation)
+	if err != nil {
+		return false, err
+	}
 	nowMS := time.Now().UnixMilli()
 
 	const applyScript = `
@@ -687,7 +709,7 @@ return 1
 `
 	args := []interface{}{
 		expectedRevision, nowMS, metaJSON, poolJSON, contextSet, contextJSON,
-		pageField, pageJSON, string(deleteJSON), string(postStateJSON),
+		pageField, pageJSON, deleteJSON, postStateJSON,
 		int(mutation.PendingHistoryChange), mutation.PendingHistoryPage,
 		defaultSnapshotMaxStorageBytes, maxSnapshotHashFields,
 	}
@@ -781,7 +803,11 @@ func marshalSnapshotState(snapshot CandidatePoolSnapshot) (string, string, error
 	if err != nil {
 		return "", "", fmt.Errorf("marshal recommendation snapshot metadata: %w", err)
 	}
-	pool, err := json.Marshal(snapshot.Candidates)
+	candidates := snapshot.Candidates
+	if candidates == nil {
+		candidates = []CachedCandidate{}
+	}
+	pool, err := json.Marshal(candidates)
 	if err != nil {
 		return "", "", fmt.Errorf("marshal recommendation candidate pool: %w", err)
 	}
