@@ -2,10 +2,12 @@ import { flushPromises } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { reactive } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { FeedPost } from '../types/Feed';
+import type { PostEngagementStatesResponse } from '../services/engagementService';
+import type { FeedLikeStateUpdate, FeedPost, FeedRepostStateUpdate } from '../types/Feed';
 import { engagementResponseFromBatchMocks } from '../test-utils/engagementServiceMock';
 import {
   captureBookmarkStateSyncVersion,
+  registerProfileSessionSync,
   syncHydratedPostBookmarkState,
 } from './sessionSync';
 
@@ -1901,6 +1903,319 @@ describe('home timeline session store', () => {
     pending.resolve({ bookmarked: true });
     expect(await request).toBe('succeeded');
   });
+
+  it('hydrates one deduplicated batch across every Home copy and preserves sync boundaries', async () => {
+    const store = useHomeTimelineStore();
+    const recentCopy = feedPostFixture(1, 7);
+    const followingCopy = unknownFeedPost(1);
+    mocks.feedStore!.recentlyPublishedPosts = [recentCopy];
+    store.following.items = [followingCopy];
+
+    const likeSync = vi.fn((_update: FeedLikeStateUpdate) => true);
+    const repostSync = vi.fn((_update: FeedRepostStateUpdate) => true);
+    const timelineStale = vi.fn(() => true);
+    registerProfileSessionSync({
+      applyLikeStateUpdateLocal: likeSync,
+      applyExternalLikeStateLocal: vi.fn(() => false),
+      applyRepostStateUpdateLocal: repostSync,
+      applyExternalRepostStateLocal: vi.fn(() => false),
+      applyReplyCountUpdateEverywhereLocal: vi.fn(() => false),
+      applyQuoteCountUpdateEverywhereLocal: vi.fn(() => false),
+      applyExternalFollowStateLocal: vi.fn(() => false),
+      markOwnProfileTimelineStale: timelineStale,
+      removePostEverywhereLocal: vi.fn(),
+      replaceAuthorIdentityEverywhereLocal: vi.fn(),
+    });
+
+    const postIDs = Array.from({ length: 20 }, (_, index) => index + 1);
+    mocks.getPostRecommendations.mockResolvedValue(recommendationPage(
+      [...postIDs, postIDs[0]].map(id => recommendation(id)),
+      true,
+    ));
+    mocks.getPostEngagementStates.mockResolvedValue(readyEngagementResponse(postIDs));
+    const bookmarkVersion = captureBookmarkStateSyncVersion(1);
+
+    await store.loadForYou();
+    await settle();
+
+    expect(mocks.getPostEngagementStates).toHaveBeenCalledTimes(1);
+    expect(mocks.getPostEngagementStates).toHaveBeenCalledWith(postIDs);
+    expect(store.forYou.items.map(item => item.post.id)).toEqual(postIDs);
+    expect(mocks.feedStore!.recentlyPublishedPosts).toEqual([recentCopy]);
+    expect(store.following.items).toEqual([followingCopy]);
+    for (const copy of [recentCopy, followingCopy, store.forYou.items[0].post]) {
+      expect(copy).toMatchObject({
+        likeCount: 10,
+        liked: true,
+        likeStatus: 'ready',
+        repostCount: 3,
+        reposted: true,
+        repostStatus: 'ready',
+        bookmarked: true,
+        bookmarkStatus: 'ready',
+      });
+    }
+    expect(likeSync).toHaveBeenCalledTimes(postIDs.length);
+    expect(likeSync.mock.calls.filter(([update]) => update.postId === 1)).toHaveLength(1);
+    expect(repostSync).toHaveBeenCalledTimes(postIDs.length);
+    expect(repostSync.mock.calls.filter(([update]) => update.postId === 1)).toHaveLength(1);
+    expect(timelineStale).not.toHaveBeenCalled();
+    expect(captureBookmarkStateSyncVersion(1)).toBe(bookmarkVersion);
+  });
+
+  it('keeps per-kind unavailable and missing-ID states independent', async () => {
+    const store = useHomeTimelineStore();
+    mocks.getFollowingTimeline.mockResolvedValue({
+      items: [followingActivity(60), followingActivity(61)],
+      next_cursor: null,
+    });
+    mocks.getPostEngagementStates.mockResolvedValue({
+      items: [{
+        post_id: 60,
+        like: { status: 'ready', likes: 4, liked: true },
+        repost: { status: 'unavailable' },
+        bookmark: { status: 'ready', bookmarked: true },
+      }],
+    });
+
+    await store.loadFollowing();
+    await settle();
+
+    expect(store.following.items[0]).toMatchObject({
+      likeCount: 4,
+      liked: true,
+      likeStatus: 'ready',
+      repostStatus: 'unavailable',
+      bookmarked: true,
+      bookmarkStatus: 'ready',
+    });
+    expect(store.following.items[1]).toMatchObject({
+      likeStatus: 'unavailable',
+      repostStatus: 'unavailable',
+      bookmarkStatus: 'unavailable',
+    });
+  });
+
+  it('marks only still-unknown kinds unavailable when the batch request fails', async () => {
+    const store = useHomeTimelineStore();
+    mocks.getFollowingTimeline.mockResolvedValue({
+      items: [followingActivity(62), followingActivity(63)],
+      next_cursor: null,
+    });
+    mocks.getPostEngagementStates.mockRejectedValueOnce(new Error('engagement unavailable'));
+
+    await store.loadFollowing();
+    const unknownPost = store.following.items[0];
+    const readyPost = store.following.items[1];
+    readyPost.likeStatus = 'ready';
+    readyPost.likeCount = 12;
+    readyPost.liked = true;
+    readyPost.repostStatus = 'ready';
+    readyPost.repostCount = 7;
+    readyPost.reposted = true;
+    readyPost.bookmarkStatus = 'ready';
+    readyPost.bookmarked = true;
+    await settle();
+
+    expect(unknownPost).toMatchObject({
+      likeStatus: 'unavailable',
+      repostStatus: 'unavailable',
+      bookmarkStatus: 'unavailable',
+    });
+    expect(readyPost).toMatchObject({
+      likeStatus: 'ready',
+      likeCount: 12,
+      liked: true,
+      repostStatus: 'ready',
+      repostCount: 7,
+      reposted: true,
+      bookmarkStatus: 'ready',
+      bookmarked: true,
+    });
+  });
+
+  it('applies only current per-kind revisions to the current list copies', async () => {
+    const hydration = deferred<PostEngagementStatesResponse>();
+    const store = useHomeTimelineStore();
+    mocks.getFollowingTimeline.mockResolvedValue({
+      items: [followingActivity(64), followingActivity(68)],
+      next_cursor: null,
+    });
+    mocks.getPostEngagementStates.mockReturnValueOnce(hydration.promise);
+
+    await store.loadFollowing();
+    const oldCopy = store.following.items[0];
+    const externalLike = {
+      postId: 64,
+      likes: 8,
+      liked: true,
+      status: 'ready' as const,
+    };
+    const externalRepost = {
+      postId: 68,
+      reposts: 9,
+      reposted: true,
+      status: 'ready' as const,
+    };
+    const externalBookmark = {
+      postId: 68,
+      bookmarked: true,
+      status: 'ready' as const,
+    };
+    store.applyExternalLikeStateLocal(externalLike);
+    store.applyExternalRepostStateLocal(externalRepost);
+    store.applyExternalBookmarkStateLocal(externalBookmark);
+
+    const replacement = unknownFeedPost(64);
+    const repostBookmarkCopy = store.following.items[1];
+    store.following.items = [replacement];
+    store.following.items.push(repostBookmarkCopy);
+    hydration.resolve(readyEngagementResponse([64, 68]));
+    await settle();
+
+    expect(oldCopy).toMatchObject({ likeCount: 8, liked: true });
+    expect(replacement).toMatchObject({
+      likeCount: 0,
+      likeStatus: 'unknown',
+      repostCount: 3,
+      reposted: true,
+      repostStatus: 'ready',
+      bookmarked: true,
+      bookmarkStatus: 'ready',
+    });
+    expect(repostBookmarkCopy).toMatchObject({
+      likeCount: 10,
+      liked: true,
+      likeStatus: 'ready',
+      repostCount: 9,
+      reposted: true,
+      bookmarked: true,
+    });
+  });
+
+  it('indexes replacement list objects after the pending batch response arrives', async () => {
+    const hydration = deferred<PostEngagementStatesResponse>();
+    const store = useHomeTimelineStore();
+    mocks.getFollowingTimeline.mockResolvedValue({
+      items: [followingActivity(67)],
+      next_cursor: null,
+    });
+    mocks.getPostEngagementStates.mockReturnValueOnce(hydration.promise);
+
+    await store.loadFollowing();
+    const oldCopy = store.following.items[0];
+    const replacement = unknownFeedPost(67);
+    store.following.items = [replacement];
+    hydration.resolve(readyEngagementResponse([67]));
+    await settle();
+
+    expect(oldCopy.likeStatus).toBe('unknown');
+    expect(replacement).toMatchObject({
+      likeCount: 10,
+      liked: true,
+      likeStatus: 'ready',
+      repostCount: 3,
+      reposted: true,
+      repostStatus: 'ready',
+      bookmarked: true,
+      bookmarkStatus: 'ready',
+    });
+  });
+
+  it('drops an engagement response after switching viewers', async () => {
+    const hydration = deferred<PostEngagementStatesResponse>();
+    const store = useHomeTimelineStore();
+    mocks.getFollowingTimeline.mockResolvedValue({
+      items: [followingActivity(65)],
+      next_cursor: null,
+    });
+    mocks.getPostEngagementStates.mockReturnValueOnce(hydration.promise);
+
+    await store.loadFollowing();
+    store.setViewer(8);
+    const viewerBCopy = unknownFeedPost(65);
+    store.following.items = [viewerBCopy];
+    hydration.resolve(readyEngagementResponse([65]));
+    await settle();
+
+    expect(viewerBCopy).toMatchObject({
+      likeStatus: 'unknown',
+      repostStatus: 'unknown',
+      bookmarkStatus: 'unknown',
+    });
+  });
+
+  it('does not apply a response after the post is deleted during hydration', async () => {
+    const hydration = deferred<PostEngagementStatesResponse>();
+    const store = useHomeTimelineStore();
+    const deletedIDs = new Set<number>();
+    mocks.feedStore!.isPostDeleted.mockImplementation((id: number) => deletedIDs.has(id));
+    mocks.getFollowingTimeline.mockResolvedValue({
+      items: [followingActivity(66)],
+      next_cursor: null,
+    });
+    mocks.getPostEngagementStates.mockReturnValueOnce(hydration.promise);
+
+    await store.loadFollowing();
+    const post = store.following.items[0];
+    deletedIDs.add(66);
+    hydration.resolve(readyEngagementResponse([66]));
+    await settle();
+
+    expect(post).toMatchObject({
+      likeStatus: 'unknown',
+      repostStatus: 'unknown',
+      bookmarkStatus: 'unknown',
+    });
+  });
+
+  it.each([
+    [20, 20],
+    [50, 20],
+    [500, 20],
+    [2_000, 20],
+    [2_000, 50],
+  ])('indexes each Home list once for N=%i and K=%i', async (referenceCount, batchSize) => {
+    const hydration = deferred<PostEngagementStatesResponse>();
+    const store = useHomeTimelineStore();
+    const postIDs = Array.from({ length: batchSize }, (_, index) => 20_000 + index);
+    mocks.feedStore!.recentlyPublishedPosts = Array.from(
+      { length: referenceCount - batchSize },
+      (_, index) => feedPostFixture(index + 1, 7),
+    );
+    mocks.getPostRecommendations.mockResolvedValue(recommendationPage(
+      postIDs.map(id => recommendation(id)),
+      true,
+    ));
+    mocks.getPostEngagementStates.mockReturnValueOnce(hydration.promise);
+
+    await store.loadForYou();
+    const observeForEach = <T,>(values: T[]) => {
+      let calls = 0;
+      const observed = [...values];
+      Object.defineProperty(observed, 'forEach', {
+        configurable: true,
+        value(callback: (value: T, index: number, array: T[]) => void, thisArg?: unknown) {
+          calls += 1;
+          return Array.prototype.forEach.call(this, callback, thisArg);
+        },
+      });
+      return { observed, calls: () => calls };
+    };
+    const recent = observeForEach(mocks.feedStore!.recentlyPublishedPosts);
+    const following = observeForEach(store.following.items);
+    const forYou = observeForEach(store.forYou.items);
+    mocks.feedStore!.recentlyPublishedPosts = recent.observed;
+    store.following.items = following.observed;
+    store.forYou.items = forYou.observed;
+
+    hydration.resolve({ items: [] });
+    await settle();
+
+    expect(recent.calls()).toBe(1);
+    expect(following.calls()).toBe(1);
+    expect(forYou.calls()).toBe(1);
+  });
 });
 
 const feedPostFixture = (id: number, authorID: number): FeedPost => ({
@@ -1921,4 +2236,20 @@ const feedPostFixture = (id: number, authorID: number): FeedPost => ({
   repostStatus: 'ready',
   bookmarked: false,
   bookmarkStatus: 'ready',
+});
+
+const unknownFeedPost = (id: number): FeedPost => ({
+  ...feedPostFixture(id, 7),
+  likeStatus: 'unknown',
+  repostStatus: 'unknown',
+  bookmarkStatus: 'unknown',
+});
+
+const readyEngagementResponse = (postIDs: number[]): PostEngagementStatesResponse => ({
+  items: postIDs.map(post_id => ({
+    post_id,
+    like: { status: 'ready', likes: 10, liked: true },
+    repost: { status: 'ready', reposts: 3, reposted: true },
+    bookmark: { status: 'ready', bookmarked: true },
+  })),
 });

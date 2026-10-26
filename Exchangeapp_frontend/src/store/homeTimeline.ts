@@ -51,7 +51,6 @@ import { getGuestRecommendationSessionID } from '../utils/guestRecommendationSes
 import {
   createEngagementMutationCoordinator,
   type EngagementMutationResult,
-  type EngagementMutationRevision,
 } from './engagementMutationCoordinator';
 import {
   releaseEngagementMutationLease,
@@ -253,6 +252,22 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     });
   };
 
+  const collectHomePostsForIDs = (postIDs: readonly number[]) => {
+    const wanted = new Set(postIDs.filter(postID => !feedStore.isPostDeleted(postID)));
+    const postsByID = new Map<number, FeedPost[]>();
+    const collect = (post: FeedPost) => {
+      if (!wanted.has(post.id)) return;
+      const matches = postsByID.get(post.id);
+      if (matches) matches.push(post);
+      else postsByID.set(post.id, [post]);
+    };
+
+    feedStore.recentlyPublishedPosts.forEach(collect);
+    following.items.forEach(collect);
+    forYou.items.forEach(item => collect(item.post));
+    return postsByID;
+  };
+
   const isMutedFeedPost = (post: FeedPost) => (
     mutedAuthorIDs.has(post.author.id)
     || (post.repostContext !== undefined && mutedAuthorIDs.has(post.repostContext.actor.id))
@@ -411,194 +426,112 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
     return applied;
   };
 
-  const markUnavailableLocal = (
-    postIds: number[],
-    revisions: Map<number, EngagementMutationRevision>,
-  ) => {
-    postIds.forEach((postId) => {
-      const revision = revisions.get(postId);
-      if (
-        !revision
-        || !engagementMutations.isRevisionCurrent('like', postId, revision)
-      ) {
-        return;
-      }
-      forEachHomePost(postId, (post) => {
-        if (post.likeStatus === 'unknown') {
-          setFeedPostLikeUnavailable(post);
-        }
-      });
-    });
-  };
-
-  const hydrateLikeStates = async (
-    uniqueIDs: number[],
-    isCurrent: () => boolean,
-    responsePromise: ReturnType<typeof loadPostEngagementIndex>,
-  ) => {
-    const revisions = new Map(uniqueIDs.map((id) => [
-      id,
-      engagementMutations.captureRevision('like', id),
-    ]));
-    try {
-      const states = await responsePromise;
-      if (!isCurrent()) return;
-
-      uniqueIDs.forEach((postId) => {
-        const revision = revisions.get(postId);
-        if (
-          !revision
-          || !engagementMutations.isRevisionCurrent('like', postId, revision)
-          || !findPost(postId)
-        ) {
-          return;
-        }
-        const like = states.get(postId)?.like;
-        if (like?.status === 'ready') {
-          applyLikeStateUpdate({
-            postId,
-            likes: like.likes,
-            liked: like.liked,
-            status: 'ready',
-          }, revision.version);
-        } else {
-          applyLikeStateUpdate({
-            postId,
-            likes: 0,
-            liked: false,
-            status: 'unavailable',
-          }, revision.version);
-        }
-      });
-    } catch {
-      if (isCurrent()) {
-        markUnavailableLocal(uniqueIDs, revisions);
-      }
-    }
-  };
-
-  const markRepostUnavailableLocal = (
-    postIds: number[],
-    revisions: Map<number, EngagementMutationRevision>,
-  ) => {
-    postIds.forEach((postId) => {
-      const revision = revisions.get(postId);
-      if (
-        !revision
-        || !engagementMutations.isRevisionCurrent('repost', postId, revision)
-      ) {
-        return;
-      }
-      forEachHomePost(postId, (post) => {
-        if (post.repostStatus === 'unknown') {
-          setFeedPostRepostUnavailable(post);
-        }
-      });
-    });
-  };
-
-  const hydrateRepostStates = async (
-    uniqueIDs: number[],
-    isCurrent: () => boolean,
-    responsePromise: ReturnType<typeof loadPostEngagementIndex>,
-  ) => {
-    const revisions = new Map(uniqueIDs.map((id) => [
-      id,
-      engagementMutations.captureRevision('repost', id),
-    ]));
-    try {
-      const states = await responsePromise;
-      if (!isCurrent()) return;
-
-      uniqueIDs.forEach((postId) => {
-        const revision = revisions.get(postId);
-        if (
-          !revision
-          || !engagementMutations.isRevisionCurrent('repost', postId, revision)
-          || !findPost(postId)
-        ) {
-          return;
-        }
-        const repost = states.get(postId)?.repost;
-        if (repost?.status === 'ready') {
-          applyRepostStateUpdate({
-            postId,
-            reposts: repost.reposts,
-            reposted: repost.reposted,
-            status: 'ready',
-          }, revision.version);
-        } else {
-          applyRepostStateUpdate({
-            postId,
-            reposts: 0,
-            reposted: false,
-            status: 'unavailable',
-          }, revision.version);
-        }
-      });
-    } catch {
-      if (isCurrent()) {
-        markRepostUnavailableLocal(uniqueIDs, revisions);
-      }
-    }
-  };
-
-  const markBookmarkUnavailableLocal = (
-    postIds: number[],
-    revisions: Map<number, EngagementMutationRevision>,
-  ) => {
-    postIds.forEach((postId) => {
-      const revision = revisions.get(postId);
-      if (
-        !revision
-        || !engagementMutations.isRevisionCurrent('bookmark', postId, revision)
-      ) return;
-      forEachHomePost(postId, (post) => {
-        if (post.bookmarkStatus === 'unknown') setFeedPostBookmarkUnavailable(post);
-      });
-    });
-  };
-
-  const hydrateBookmarkStates = async (
-    uniqueIDs: number[],
-    isCurrent: () => boolean,
-    responsePromise: ReturnType<typeof loadPostEngagementIndex>,
-  ) => {
-    const revisions = new Map(uniqueIDs.map((id) => [
-      id,
-      engagementMutations.captureRevision('bookmark', id),
-    ]));
-    try {
-      const states = await responsePromise;
-      if (!isCurrent()) return;
-      uniqueIDs.forEach((postId) => {
-        const revision = revisions.get(postId);
-        if (
-          !revision
-          || !engagementMutations.isRevisionCurrent('bookmark', postId, revision)
-          || !findPost(postId)
-        ) return;
-        const bookmark = states.get(postId)?.bookmark;
-        applyBookmarkStateUpdateLocal({
-          postId,
-          bookmarked: bookmark?.status === 'ready' ? bookmark.bookmarked : false,
-          status: bookmark?.status === 'ready' ? 'ready' : 'unavailable',
-        }, revision.version);
-      });
-    } catch {
-      if (isCurrent()) {
-        markBookmarkUnavailableLocal(uniqueIDs, revisions);
-      }
-    }
-  };
-
   const hydrateEngagementStates = (postIds: number[], isCurrent: () => boolean) => {
     const uniqueIDs = Array.from(new Set(postIds));
     if (uniqueIDs.length === 0) return;
+
+    const revisions = {
+      like: new Map(uniqueIDs.map(id => [id, engagementMutations.captureRevision('like', id)])),
+      repost: new Map(uniqueIDs.map(id => [id, engagementMutations.captureRevision('repost', id)])),
+      bookmark: new Map(uniqueIDs.map(id => [id, engagementMutations.captureRevision('bookmark', id)])),
+    };
     const responsePromise = loadPostEngagementIndex(uniqueIDs);
-    void hydrateLikeStates(uniqueIDs, isCurrent, responsePromise);
-    void hydrateRepostStates(uniqueIDs, isCurrent, responsePromise);
-    void hydrateBookmarkStates(uniqueIDs, isCurrent, responsePromise);
+    void (async () => {
+      let states: Awaited<typeof responsePromise>;
+      try {
+        states = await responsePromise;
+      } catch {
+        if (!isCurrent()) return;
+        const postsByID = collectHomePostsForIDs(uniqueIDs);
+        uniqueIDs.forEach((postId) => {
+          const posts = postsByID.get(postId);
+          if (!posts) return;
+
+          const likeRevision = revisions.like.get(postId);
+          if (likeRevision && engagementMutations.isRevisionCurrent('like', postId, likeRevision)) {
+            posts.forEach((post) => {
+              if (post.likeStatus === 'unknown') setFeedPostLikeUnavailable(post);
+            });
+          }
+
+          const repostRevision = revisions.repost.get(postId);
+          if (repostRevision && engagementMutations.isRevisionCurrent('repost', postId, repostRevision)) {
+            posts.forEach((post) => {
+              if (post.repostStatus === 'unknown') setFeedPostRepostUnavailable(post);
+            });
+          }
+
+          const bookmarkRevision = revisions.bookmark.get(postId);
+          if (bookmarkRevision && engagementMutations.isRevisionCurrent('bookmark', postId, bookmarkRevision)) {
+            posts.forEach((post) => {
+              if (post.bookmarkStatus === 'unknown') setFeedPostBookmarkUnavailable(post);
+            });
+          }
+        });
+        return;
+      }
+
+      if (!isCurrent()) return;
+      const postsByID = collectHomePostsForIDs(uniqueIDs);
+
+      uniqueIDs.forEach((postId) => {
+        const revision = revisions.like.get(postId);
+        const posts = postsByID.get(postId);
+        if (
+          !revision
+          || !posts?.length
+          || !engagementMutations.isRevisionCurrent('like', postId, revision)
+        ) return;
+
+        const like = states.get(postId)?.like;
+        const update: FeedLikeStateUpdate = like?.status === 'ready'
+          ? { postId, likes: like.likes, liked: like.liked, status: 'ready' }
+          : { postId, likes: 0, liked: false, status: 'unavailable' };
+        let applied = false;
+        posts.forEach(post => {
+          applied = applyFeedLikeStateUpdate(post, update) || applied;
+        });
+        if (applied) syncHomeLikeState(update);
+      });
+
+      uniqueIDs.forEach((postId) => {
+        const revision = revisions.repost.get(postId);
+        const posts = postsByID.get(postId);
+        if (
+          !revision
+          || !posts?.length
+          || !engagementMutations.isRevisionCurrent('repost', postId, revision)
+        ) return;
+
+        const repost = states.get(postId)?.repost;
+        const update: FeedRepostStateUpdate = repost?.status === 'ready'
+          ? { postId, reposts: repost.reposts, reposted: repost.reposted, status: 'ready' }
+          : { postId, reposts: 0, reposted: false, status: 'unavailable' };
+        let applied = false;
+        posts.forEach(post => {
+          applied = applyFeedRepostStateUpdate(post, update) || applied;
+        });
+        if (applied) syncHomeRepostState(update);
+      });
+
+      uniqueIDs.forEach((postId) => {
+        const revision = revisions.bookmark.get(postId);
+        const posts = postsByID.get(postId);
+        if (
+          !revision
+          || !posts?.length
+          || !engagementMutations.isRevisionCurrent('bookmark', postId, revision)
+        ) return;
+
+        const bookmark = states.get(postId)?.bookmark;
+        const update: FeedBookmarkStateUpdate = {
+          postId,
+          bookmarked: bookmark?.status === 'ready' ? bookmark.bookmarked : false,
+          status: bookmark?.status === 'ready' ? 'ready' : 'unavailable',
+        };
+        posts.forEach(post => applyFeedBookmarkStateUpdate(post, update));
+      });
+    })();
   };
 
   const appendFollowingPosts = (activities: TimelineItem[]) => {
