@@ -194,7 +194,13 @@ export const registerHomeTimelineSync = (sync: HomeTimelineSync) => {
 };
 
 export const registerProfileSessionSync = (sync: ProfileSessionSync) => {
+  const previous = profileSessionSync;
   profileSessionSync = sync;
+  return () => {
+    if (profileSessionSync === sync) {
+      profileSessionSync = previous;
+    }
+  };
 };
 
 export const registerSearchSessionSync = (sync: SearchSessionSync) => {

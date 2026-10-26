@@ -5,6 +5,7 @@ import type {
   FeedRepostStateUpdate,
 } from '../types/Feed';
 import type { UserFollowState } from '../services/userService';
+import type { ProfileSessionSync } from './sessionSync';
 import {
   registerHomeTimelineSync,
   registerConnectionsSessionSync,
@@ -83,6 +84,20 @@ const followState: UserFollowState = {
   follower_count: 3,
   following_count: 4,
 };
+
+const createProfileSync = (): ProfileSessionSync => ({
+  applyLikeStateUpdateLocal: vi.fn().mockReturnValue(true),
+  applyExternalLikeStateLocal: vi.fn().mockReturnValue(false),
+  applyRepostStateUpdateLocal: vi.fn().mockReturnValue(true),
+  applyExternalRepostStateLocal: vi.fn().mockReturnValue(false),
+  applyBookmarkStateUpdateLocal: vi.fn().mockReturnValue(false),
+  applyExternalBookmarkStateLocal: vi.fn().mockReturnValue(false),
+  applyReplyCountUpdateEverywhereLocal: vi.fn().mockReturnValue(false),
+  applyQuoteCountUpdateEverywhereLocal: vi.fn().mockReturnValue(false),
+  applyExternalFollowStateLocal: vi.fn().mockReturnValue(false),
+  removePostEverywhereLocal: vi.fn(),
+  replaceAuthorIdentityEverywhereLocal: vi.fn(),
+});
 
 const registerSinks = () => {
   const home = {
@@ -700,5 +715,125 @@ describe('sessionSync external mutation sinks', () => {
     expect(first.applyExternalFollowStateLocal).toHaveBeenCalledOnce();
     expect(second.applyExternalFollowStateLocal).toHaveBeenCalledTimes(2);
     unregisterSecond();
+  });
+
+  it('restores the previous Profile Sync registration when a temporary sink is disposed', () => {
+    const previous = createProfileSync();
+    const restorePrevious = registerProfileSessionSync(previous);
+    const temporary = createProfileSync();
+    const disposeTemporary = registerProfileSessionSync(temporary);
+
+    try {
+      syncHomeLikeState(likeUpdate);
+      syncHomeRepostState(repostUpdate);
+      expect(temporary.applyLikeStateUpdateLocal).toHaveBeenCalledExactlyOnceWith(likeUpdate);
+      expect(temporary.applyRepostStateUpdateLocal).toHaveBeenCalledExactlyOnceWith(repostUpdate);
+      expect(previous.applyLikeStateUpdateLocal).not.toHaveBeenCalled();
+      expect(previous.applyRepostStateUpdateLocal).not.toHaveBeenCalled();
+
+      disposeTemporary();
+      syncHomeLikeState(likeUpdate);
+      syncHomeRepostState(repostUpdate);
+
+      expect(temporary.applyLikeStateUpdateLocal).toHaveBeenCalledOnce();
+      expect(temporary.applyRepostStateUpdateLocal).toHaveBeenCalledOnce();
+      expect(previous.applyLikeStateUpdateLocal).toHaveBeenCalledExactlyOnceWith(likeUpdate);
+      expect(previous.applyRepostStateUpdateLocal).toHaveBeenCalledExactlyOnceWith(repostUpdate);
+    } finally {
+      disposeTemporary();
+      restorePrevious();
+    }
+  });
+
+  it('restores nested Profile Sync registrations in stack order', () => {
+    const initial = createProfileSync();
+    const restoreInitial = registerProfileSessionSync(initial);
+    const syncA = createProfileSync();
+    const disposeA = registerProfileSessionSync(syncA);
+    const syncB = createProfileSync();
+    const disposeB = registerProfileSessionSync(syncB);
+
+    try {
+      syncHomeLikeState(likeUpdate);
+      expect(syncB.applyLikeStateUpdateLocal).toHaveBeenCalledOnce();
+      expect(syncA.applyLikeStateUpdateLocal).not.toHaveBeenCalled();
+
+      disposeB();
+      syncHomeLikeState(likeUpdate);
+      expect(syncA.applyLikeStateUpdateLocal).toHaveBeenCalledOnce();
+
+      disposeA();
+      syncHomeLikeState(likeUpdate);
+      expect(initial.applyLikeStateUpdateLocal).toHaveBeenCalledOnce();
+    } finally {
+      disposeB();
+      disposeA();
+      restoreInitial();
+    }
+  });
+
+  it('does not let a stale disposer replace a newer Profile Sync registration', () => {
+    const initial = createProfileSync();
+    const restoreInitial = registerProfileSessionSync(initial);
+    const syncA = createProfileSync();
+    const disposeA = registerProfileSessionSync(syncA);
+    const syncB = createProfileSync();
+    const disposeB = registerProfileSessionSync(syncB);
+    const syncC = createProfileSync();
+    const disposeC = registerProfileSessionSync(syncC);
+
+    try {
+      disposeB();
+      disposeA();
+      syncHomeLikeState(likeUpdate);
+      expect(syncC.applyLikeStateUpdateLocal).toHaveBeenCalledOnce();
+      expect(syncB.applyLikeStateUpdateLocal).not.toHaveBeenCalled();
+      expect(syncA.applyLikeStateUpdateLocal).not.toHaveBeenCalled();
+
+      disposeC();
+      syncHomeLikeState(likeUpdate);
+      expect(syncB.applyLikeStateUpdateLocal).toHaveBeenCalledOnce();
+
+      disposeB();
+      syncHomeLikeState(likeUpdate);
+      expect(syncA.applyLikeStateUpdateLocal).toHaveBeenCalledOnce();
+
+      disposeA();
+      syncHomeLikeState(likeUpdate);
+      expect(initial.applyLikeStateUpdateLocal).toHaveBeenCalledOnce();
+    } finally {
+      disposeC();
+      disposeB();
+      disposeA();
+      restoreInitial();
+    }
+  });
+
+  it('makes repeated Profile Sync disposal harmless to a later registration', () => {
+    const initial = createProfileSync();
+    const restoreInitial = registerProfileSessionSync(initial);
+    const temporary = createProfileSync();
+    const disposeTemporary = registerProfileSessionSync(temporary);
+    let disposeLater: (() => void) | null = null;
+
+    try {
+      disposeTemporary();
+      disposeTemporary();
+
+      const later = createProfileSync();
+      disposeLater = registerProfileSessionSync(later);
+      disposeTemporary();
+      syncHomeLikeState(likeUpdate);
+      expect(later.applyLikeStateUpdateLocal).toHaveBeenCalledExactlyOnceWith(likeUpdate);
+      expect(initial.applyLikeStateUpdateLocal).not.toHaveBeenCalled();
+
+      disposeLater();
+      syncHomeLikeState(likeUpdate);
+      expect(initial.applyLikeStateUpdateLocal).toHaveBeenCalledOnce();
+    } finally {
+      disposeLater?.();
+      disposeTemporary();
+      restoreInitial();
+    }
   });
 });

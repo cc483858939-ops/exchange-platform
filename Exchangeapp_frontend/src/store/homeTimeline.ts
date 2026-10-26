@@ -487,11 +487,12 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         const update: FeedLikeStateUpdate = like?.status === 'ready'
           ? { postId, likes: like.likes, liked: like.liked, status: 'ready' }
           : { postId, likes: 0, liked: false, status: 'unavailable' };
-        let applied = false;
+        let matchedHomeCopy = false;
         posts.forEach(post => {
-          applied = applyFeedLikeStateUpdate(post, update) || applied;
+          matchedHomeCopy = applyFeedLikeStateUpdate(post, update) || matchedHomeCopy;
         });
-        if (applied) syncHomeLikeState(update);
+        // The update helper reports a PostID match, not a field diff. Broadcast once per matched ID and Kind.
+        if (matchedHomeCopy) syncHomeLikeState(update);
       });
 
       uniqueIDs.forEach((postId) => {
@@ -507,11 +508,12 @@ export const useHomeTimelineStore = defineStore('homeTimeline', () => {
         const update: FeedRepostStateUpdate = repost?.status === 'ready'
           ? { postId, reposts: repost.reposts, reposted: repost.reposted, status: 'ready' }
           : { postId, reposts: 0, reposted: false, status: 'unavailable' };
-        let applied = false;
+        let matchedHomeCopy = false;
         posts.forEach(post => {
-          applied = applyFeedRepostStateUpdate(post, update) || applied;
+          matchedHomeCopy = applyFeedRepostStateUpdate(post, update) || matchedHomeCopy;
         });
-        if (applied) syncHomeRepostState(update);
+        // Preserve the same one-broadcast-per-matched-ID semantics when values are already equal.
+        if (matchedHomeCopy) syncHomeRepostState(update);
       });
 
       uniqueIDs.forEach((postId) => {

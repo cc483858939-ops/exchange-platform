@@ -188,6 +188,7 @@ const createSessionStorage = (): Storage => {
 };
 
 let testSessionStorage: Storage;
+let temporaryProfileLikeSyncCalls = 0;
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
@@ -1911,10 +1912,14 @@ describe('home timeline session store', () => {
     mocks.feedStore!.recentlyPublishedPosts = [recentCopy];
     store.following.items = [followingCopy];
 
-    const likeSync = vi.fn((_update: FeedLikeStateUpdate) => true);
+    temporaryProfileLikeSyncCalls = 0;
+    const likeSync = vi.fn((_update: FeedLikeStateUpdate) => {
+      temporaryProfileLikeSyncCalls += 1;
+      return true;
+    });
     const repostSync = vi.fn((_update: FeedRepostStateUpdate) => true);
     const timelineStale = vi.fn(() => true);
-    registerProfileSessionSync({
+    const disposeProfileSync = registerProfileSessionSync({
       applyLikeStateUpdateLocal: likeSync,
       applyExternalLikeStateLocal: vi.fn(() => false),
       applyRepostStateUpdateLocal: repostSync,
@@ -1927,40 +1932,117 @@ describe('home timeline session store', () => {
       replaceAuthorIdentityEverywhereLocal: vi.fn(),
     });
 
-    const postIDs = Array.from({ length: 20 }, (_, index) => index + 1);
-    mocks.getPostRecommendations.mockResolvedValue(recommendationPage(
-      [...postIDs, postIDs[0]].map(id => recommendation(id)),
-      true,
-    ));
-    mocks.getPostEngagementStates.mockResolvedValue(readyEngagementResponse(postIDs));
-    const bookmarkVersion = captureBookmarkStateSyncVersion(1);
+    try {
+      const postIDs = Array.from({ length: 20 }, (_, index) => index + 1);
+      mocks.getPostRecommendations.mockResolvedValue(recommendationPage(
+        [...postIDs, postIDs[0]].map(id => recommendation(id)),
+        true,
+      ));
+      mocks.getPostEngagementStates.mockResolvedValue(readyEngagementResponse(postIDs));
+      const bookmarkVersion = captureBookmarkStateSyncVersion(1);
 
-    await store.loadForYou();
+      await store.loadForYou();
+      await settle();
+
+      expect(mocks.getPostEngagementStates).toHaveBeenCalledTimes(1);
+      expect(mocks.getPostEngagementStates).toHaveBeenCalledWith(postIDs);
+      expect(store.forYou.items.map(item => item.post.id)).toEqual(postIDs);
+      expect(mocks.feedStore!.recentlyPublishedPosts).toEqual([recentCopy]);
+      expect(store.following.items).toEqual([followingCopy]);
+      for (const copy of [recentCopy, followingCopy, store.forYou.items[0].post]) {
+        expect(copy).toMatchObject({
+          likeCount: 10,
+          liked: true,
+          likeStatus: 'ready',
+          repostCount: 3,
+          reposted: true,
+          repostStatus: 'ready',
+          bookmarked: true,
+          bookmarkStatus: 'ready',
+        });
+      }
+      expect(likeSync).toHaveBeenCalledTimes(postIDs.length);
+      expect(likeSync.mock.calls.filter(([update]) => update.postId === 1)).toHaveLength(1);
+      expect(repostSync).toHaveBeenCalledTimes(postIDs.length);
+      expect(repostSync.mock.calls.filter(([update]) => update.postId === 1)).toHaveLength(1);
+      expect(timelineStale).not.toHaveBeenCalled();
+      expect(captureBookmarkStateSyncVersion(1)).toBe(bookmarkVersion);
+      expect(temporaryProfileLikeSyncCalls).toBe(postIDs.length);
+    } finally {
+      disposeProfileSync();
+    }
+  });
+
+  it('does not send a later batch to the previous test’s disposed Profile Sync mock', async () => {
+    const disposedMockCalls = temporaryProfileLikeSyncCalls;
+    const store = useHomeTimelineStore();
+    mocks.getFollowingTimeline.mockResolvedValue({
+      items: [followingActivity(69)],
+      next_cursor: null,
+    });
+    mocks.getPostEngagementStates.mockResolvedValue(readyEngagementResponse([69]));
+
+    await store.loadFollowing();
     await settle();
 
-    expect(mocks.getPostEngagementStates).toHaveBeenCalledTimes(1);
-    expect(mocks.getPostEngagementStates).toHaveBeenCalledWith(postIDs);
-    expect(store.forYou.items.map(item => item.post.id)).toEqual(postIDs);
-    expect(mocks.feedStore!.recentlyPublishedPosts).toEqual([recentCopy]);
-    expect(store.following.items).toEqual([followingCopy]);
-    for (const copy of [recentCopy, followingCopy, store.forYou.items[0].post]) {
-      expect(copy).toMatchObject({
+    expect(store.following.items[0]).toMatchObject({ likeStatus: 'ready', repostStatus: 'ready' });
+    expect(temporaryProfileLikeSyncCalls).toBe(disposedMockCalls);
+  });
+
+  it('broadcasts matching Like and Repost updates even when their values are unchanged', async () => {
+    const post = feedPostFixture(70, 7);
+    post.likeCount = 10;
+    post.liked = true;
+    post.likeStatus = 'unknown';
+    post.repostCount = 3;
+    post.reposted = true;
+    post.repostStatus = 'ready';
+    post.bookmarked = true;
+    post.bookmarkStatus = 'ready';
+    mocks.feedStore!.recentlyPublishedPosts = [post];
+    mocks.getPostEngagementStates.mockResolvedValue(readyEngagementResponse([70]));
+
+    const likeSync = vi.fn((_update: FeedLikeStateUpdate) => true);
+    const repostSync = vi.fn((_update: FeedRepostStateUpdate) => true);
+    const disposeProfileSync = registerProfileSessionSync({
+      applyLikeStateUpdateLocal: likeSync,
+      applyExternalLikeStateLocal: vi.fn(() => false),
+      applyRepostStateUpdateLocal: repostSync,
+      applyExternalRepostStateLocal: vi.fn(() => false),
+      applyReplyCountUpdateEverywhereLocal: vi.fn(() => false),
+      applyQuoteCountUpdateEverywhereLocal: vi.fn(() => false),
+      applyExternalFollowStateLocal: vi.fn(() => false),
+      removePostEverywhereLocal: vi.fn(),
+      replaceAuthorIdentityEverywhereLocal: vi.fn(),
+    });
+
+    try {
+      useHomeTimelineStore();
+      await settle();
+
+      expect(post).toMatchObject({
         likeCount: 10,
         liked: true,
         likeStatus: 'ready',
         repostCount: 3,
         reposted: true,
         repostStatus: 'ready',
-        bookmarked: true,
-        bookmarkStatus: 'ready',
       });
+      expect(likeSync).toHaveBeenCalledExactlyOnceWith({
+        postId: 70,
+        likes: 10,
+        liked: true,
+        status: 'ready',
+      });
+      expect(repostSync).toHaveBeenCalledExactlyOnceWith({
+        postId: 70,
+        reposts: 3,
+        reposted: true,
+        status: 'ready',
+      });
+    } finally {
+      disposeProfileSync();
     }
-    expect(likeSync).toHaveBeenCalledTimes(postIDs.length);
-    expect(likeSync.mock.calls.filter(([update]) => update.postId === 1)).toHaveLength(1);
-    expect(repostSync).toHaveBeenCalledTimes(postIDs.length);
-    expect(repostSync.mock.calls.filter(([update]) => update.postId === 1)).toHaveLength(1);
-    expect(timelineStale).not.toHaveBeenCalled();
-    expect(captureBookmarkStateSyncVersion(1)).toBe(bookmarkVersion);
   });
 
   it('keeps per-kind unavailable and missing-ID states independent', async () => {
