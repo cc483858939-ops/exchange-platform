@@ -110,6 +110,8 @@ services:
     <<: *service-defaults
     command:
       - redis-server
+      - --save
+      - ""
       - --appendonly
       - "yes"
       - --appendfsync
