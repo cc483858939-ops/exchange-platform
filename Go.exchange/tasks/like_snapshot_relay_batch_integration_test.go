@@ -359,3 +359,17 @@ func runLegacyLikeSnapshotRelayBatch(ctx context.Context, store *likes.Store, pu
 	}
 	return firstErr
 }
+
+func runLikeSnapshotRelayBatch(ctx context.Context, store *likes.Store, publisher eventing.Publisher) error {
+	if _, err := store.ReapExpired(ctx, config.LikeSnapshotBatchSize()); err != nil {
+		return fmt.Errorf("reap expired claims: %w", err)
+	}
+	claims, err := store.ClaimDirty(ctx, config.LikeSnapshotBatchSize(), config.LikeClaimLease())
+	if err != nil {
+		return fmt.Errorf("claim dirty posts: %w", err)
+	}
+	if len(claims) == 0 {
+		return nil
+	}
+	return processLikeSnapshotClaims(ctx, store, publisher, claims)
+}

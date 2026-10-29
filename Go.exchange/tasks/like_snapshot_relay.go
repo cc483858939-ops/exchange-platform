@@ -30,36 +30,84 @@ func startLikeSnapshotRelay(ctx context.Context, wg *sync.WaitGroup) {
 		likeSnapshotRelayRunning.Store(true)
 		defer likeSnapshotRelayRunning.Store(false)
 		store := likes.NewStore(global.RedisDB)
-		interval := config.LikeSnapshotPollInterval()
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			if err := runLikeSnapshotRelayBatch(ctx, store, publisher); err != nil && ctx.Err() == nil {
+		runLikeSnapshotRelayLoop(ctx, config.LikeSnapshotPollInterval(), func(ctx context.Context) error {
+			return runLikeSnapshotRelayRound(ctx, store, publisher)
+		}, func(err error) {
+			if err != nil && ctx.Err() == nil {
 				PipelineFailure(PipelineLikeSnapshotRelay, "relay_failed", 0)
 				log.Printf("[LikeSnapshotRelay] batch: %v", err)
 			} else if ctx.Err() == nil {
 				PipelineIdle(PipelineLikeSnapshotRelay, 0)
 			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
+		})
 	}()
 }
 
-func runLikeSnapshotRelayBatch(ctx context.Context, store *likes.Store, publisher eventing.Publisher) error {
-	if _, err := store.ReapExpired(ctx, config.LikeSnapshotBatchSize()); err != nil {
-		return fmt.Errorf("reap expired claims: %w", err)
+// One synchronous dispatcher: slow rounds cannot overlap or spawn a backlog of jobs.
+func runLikeSnapshotRelayLoop(ctx context.Context, interval time.Duration, run func(context.Context) error, observe func(error)) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for ctx.Err() == nil {
+		observe(run(ctx))
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
-	claims, err := store.ClaimDirty(ctx, config.LikeSnapshotBatchSize(), config.LikeClaimLease())
-	if err != nil {
-		return fmt.Errorf("claim dirty posts: %w", err)
+}
+
+func runLikeSnapshotRelayRound(ctx context.Context, store *likes.Store, publisher eventing.Publisher) (roundErr error) {
+	roundCtx, cancel := context.WithTimeout(ctx, config.LikeSnapshotRoundTimeout())
+	defer cancel()
+	batch, budget := config.LikeSnapshotBatchSize(), config.LikeSnapshotRoundSize()
+	claims := make([]likes.SnapshotClaim, 0, budget)
+	processed := 0
+	// Release only unfinished claims, with a bounded context independent of a
+	// canceled round. Token checks protect any newer owner after lease expiry.
+	defer func() {
+		if processed == len(claims) {
+			return
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), min(time.Second, config.LikeSnapshotRoundTimeout()))
+		defer cleanupCancel()
+		for start := processed; start < len(claims); start += batch {
+			end := min(start+batch, len(claims))
+			roundErr = errors.Join(roundErr, resolveLikeSnapshotClaims(cleanupCtx, store, claims[start:end], true))
+		}
+	}()
+	// Finish all bounded claims before the first ACK: re-dirtied Posts cannot
+	// be repeatedly reclaimed within this round, even if publishing is fast.
+	for attempt := 0; attempt < (budget+batch-1)/batch; attempt++ {
+		if err := roundCtx.Err(); err != nil {
+			return err
+		}
+		if _, err := store.ReapExpired(roundCtx, batch); err != nil {
+			return fmt.Errorf("reap round claims: %w", err)
+		}
+		next, err := store.ClaimDirty(roundCtx, min(batch, budget-len(claims)), config.LikeClaimLease())
+		if err != nil {
+			return fmt.Errorf("claim round: %w", err)
+		}
+		claims = append(claims, next...)
+		if len(next) == 0 || len(claims) == budget {
+			break
+		}
 	}
-	if len(claims) == 0 {
-		return nil
+	for processed < len(claims) {
+		if err := roundCtx.Err(); err != nil {
+			return err
+		}
+		end := min(processed+batch, len(claims))
+		if err := processLikeSnapshotClaims(roundCtx, store, publisher, claims[processed:end]); err != nil {
+			return err
+		}
+		processed = end
 	}
+	return nil
+}
+
+func processLikeSnapshotClaims(ctx context.Context, store *likes.Store, publisher eventing.Publisher, claims []likes.SnapshotClaim) error {
 	reads, err := store.LoadSnapshots(ctx, claims)
 	if err != nil {
 		return errors.Join(fmt.Errorf("load snapshots: %w", err), resolveLikeSnapshotClaims(ctx, store, claims, true))

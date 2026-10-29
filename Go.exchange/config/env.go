@@ -208,7 +208,29 @@ func LikeSnapshotPollInterval() time.Duration {
 }
 
 const MaxLikeSnapshotBatchSize = 100
+const MaxLikeSnapshotRoundSize = 1000
 const MaxLikeBehaviorBatchSize = 500
+
+// Keep the conservative default; larger rounds are an explicit deployment choice.
+func LikeSnapshotRoundSize() int {
+	n := envInt("LIKE_SNAPSHOT_ROUND_SIZE", LikeSnapshotBatchSize())
+	if n < 1 {
+		return LikeSnapshotBatchSize()
+	}
+	return min(n, MaxLikeSnapshotRoundSize)
+}
+
+func LikeSnapshotRoundTimeout() time.Duration {
+	d := envDuration("LIKE_SNAPSHOT_ROUND_TIMEOUT", 5*time.Second)
+	if d <= 0 {
+		d = 5 * time.Second
+	}
+	lease := LikeClaimLease()
+	if lease <= 0 {
+		lease = 30 * time.Second
+	}
+	return min(d, 5*time.Second, lease/2)
+}
 
 func LikeSnapshotBatchSize() int {
 	batch := envInt("LIKE_SNAPSHOT_BATCH_SIZE", MaxLikeSnapshotBatchSize)
